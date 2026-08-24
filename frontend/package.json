@@ -1,0 +1,8 @@
+{
+  "name": "teafair-frontend",
+  "private": true,
+  "workspaces": [
+    "core",
+    "mobile"
+  ]
+}
