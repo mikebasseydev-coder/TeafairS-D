@@ -12,7 +12,8 @@ export function AuthScreen() {
       <Text>Auth</Text>
       <Text>{JSON.stringify(state)}</Text>
       <InputField label="Email" value={email} onChangeText={setEmail} />
-      <Button label="Continue" onPress={() => {}} />
+      {/* Sign-in submission isn't implemented yet. */}
+      <Button label="Continue" onPress={() => {}} disabled />
     </View>
   );
 }
