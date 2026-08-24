@@ -1,16 +1,18 @@
-import { supabase } from './supabaseClient';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { unwrapSupabaseResult } from './unwrapSupabaseResult';
 
 export interface Profile {
   id: string;
   username: string | null;
 }
 
-export async function fetchProfiles(): Promise<Profile[]> {
-  const { data, error } = await supabase.from('profiles').select('id, username');
+const DEFAULT_PROFILES_LIMIT = 50;
 
-  if (error) {
-    throw error;
-  }
+export async function fetchProfiles(
+  client: SupabaseClient,
+  limit: number = DEFAULT_PROFILES_LIMIT
+): Promise<Profile[]> {
+  const result = await client.from('profiles').select('id, username').limit(limit);
 
-  return data ?? [];
+  return unwrapSupabaseResult<Profile[]>(result) ?? [];
 }
