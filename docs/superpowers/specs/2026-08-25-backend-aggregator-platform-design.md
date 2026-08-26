@@ -1,6 +1,6 @@
 # Backend + Aggregator Platform Design
 
-Status: draft, pending review
+Status: approved (with mandated modifications: strict CHECK constraints on inventory movement targeting, materialized view for current inventory balance — both applied below)
 Owner: Michael Bassey
 Date: 2026-08-25
 
@@ -102,7 +102,18 @@ CREATE TABLE inventory_movements (
     qty_delta INT NOT NULL,           -- positive for Received/Physical_Count-up, negative for Sold/Returned-out
     reference_order_id UUID REFERENCES orders(order_id),  -- set when movement_type = 'Sold'
     occurred_at TIMESTAMPTZ DEFAULT NOW(),
-    recorded_by_profile_id UUID REFERENCES profiles(profile_id)
+    recorded_by_profile_id UUID REFERENCES profiles(profile_id),
+
+    -- Mandated: strict targeting — exactly the FK matching pool_type may be set,
+    -- the other two must be NULL. Closes the gap partial unique indexes alone
+    -- don't cover (a row could otherwise be uniquely valid but mistargeted,
+    -- e.g. pool_type = 'Van_Stock' with supervisor_id also populated).
+    CONSTRAINT chk_movement_pool_targeting CHECK (
+        (pool_type = 'Van_Stock'      AND rep_id IS NOT NULL        AND supervisor_id IS NULL AND pickup_point_id IS NULL)
+        OR (pool_type = 'Pickup_Point'   AND pickup_point_id IS NOT NULL AND rep_id IS NULL        AND supervisor_id IS NULL)
+        OR (pool_type = 'Supervisor_Hub' AND supervisor_id IS NOT NULL  AND rep_id IS NULL        AND pickup_point_id IS NULL)
+        OR (pool_type = 'Main_Warehouse' AND supervisor_id IS NULL      AND rep_id IS NULL        AND pickup_point_id IS NULL)
+    )
 );
 
 -- Partial unique indexes per pool_type, replacing the single combined UNIQUE
@@ -119,8 +130,36 @@ CREATE UNIQUE INDEX uniq_movement_supervisor_hub
 ```
 
 Current balance for any pool = `SUM(qty_delta)` filtered to that pool's identity
-columns — exposed as a view (`current_inventory_balance`) rather than a stored
-column, so it's always derived from the ledger.
+columns. Mandated: exposed as a **materialized view**, not a live view, so
+balance reads don't re-scan the full movement history on every query:
+
+```sql
+CREATE MATERIALIZED VIEW current_inventory_balance AS
+SELECT pool_type, supervisor_id, pickup_point_id, rep_id, product_id,
+       SUM(qty_delta) AS qty_on_hand
+FROM inventory_movements
+GROUP BY pool_type, supervisor_id, pickup_point_id, rep_id, product_id;
+
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY requires a unique index; COALESCE
+-- collapses the pool-specific NULLs to a sentinel so the index is well-defined
+-- across all four pool types.
+CREATE UNIQUE INDEX uniq_current_inventory_balance ON current_inventory_balance (
+    pool_type,
+    COALESCE(supervisor_id, '00000000-0000-0000-0000-000000000000'),
+    COALESCE(pickup_point_id, '00000000-0000-0000-0000-000000000000'),
+    COALESCE(rep_id, '00000000-0000-0000-0000-000000000000'),
+    product_id
+);
+```
+
+Refreshed (`REFRESH MATERIALIZED VIEW CONCURRENTLY current_inventory_balance`) on
+the same cadence as `aggregated_sales` — end-of-day, alongside
+`run_sales_aggregator`, not on every movement insert (that would recreate the
+compute bottleneck it's meant to avoid). `aggregated_sales` itself already
+follows the same "don't recompute on read" philosophy via its
+function-populated cache table, so it's left as pasted rather than converted to
+a materialized view — the two mechanisms (materialized view vs. function +
+cache table) serve the same goal for their respective tables.
 
 ### 4.3 Outlet visits
 
