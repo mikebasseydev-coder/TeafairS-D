@@ -4,5 +4,11 @@
   "workspaces": [
     "core",
     "mobile"
-  ]
+  ],
+  "scripts": {
+    "postinstall": "patch-package"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.0"
+  }
 }

@@ -1,15 +1,21 @@
-import { useAuthStore, createAuthApiClient } from './auth';
 import { useCatalogStore, createCatalogApiClient } from './catalog';
 import { useOrdersStore, createOrdersApiClient } from './orders';
 import { useGamificationStore, createGamificationApiClient } from './gamification';
 import { useAggregatorStore, createAggregatorApiClient } from './aggregator';
+import { useProductsStore, createProductsApiClient } from './products';
+import { useBrandsStore, createBrandsApiClient } from './brands';
+import { useTerritoriesStore, createTerritoriesApiClient } from './territories';
+import { useAlertsStore, createAlertsApiClient } from './alerts';
 
 const features = [
-  { name: 'auth', useStore: useAuthStore, createApiClient: createAuthApiClient },
   { name: 'catalog', useStore: useCatalogStore, createApiClient: createCatalogApiClient },
   { name: 'orders', useStore: useOrdersStore, createApiClient: createOrdersApiClient },
   { name: 'gamification', useStore: useGamificationStore, createApiClient: createGamificationApiClient },
   { name: 'aggregator', useStore: useAggregatorStore, createApiClient: createAggregatorApiClient },
+  { name: 'products', useStore: useProductsStore, createApiClient: createProductsApiClient },
+  { name: 'brands', useStore: useBrandsStore, createApiClient: createBrandsApiClient },
+  { name: 'territories', useStore: useTerritoriesStore, createApiClient: createTerritoriesApiClient },
+  { name: 'alerts', useStore: useAlertsStore, createApiClient: createAlertsApiClient },
 ];
 
 describe.each(features)('$name feature module', ({ useStore, createApiClient }) => {

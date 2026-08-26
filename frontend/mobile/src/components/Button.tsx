@@ -15,7 +15,9 @@ export function Button({ label, onPress, disabled }: ButtonProps) {
         disabled ? 'bg-gray-300' : 'bg-blue-600'
       }`}
     >
-      <Text className="text-base font-semibold text-white">{label}</Text>
+      <Text className={`text-base font-semibold ${disabled ? 'text-gray-500' : 'text-white'}`}>
+        {label}
+      </Text>
     </Pressable>
   );
 }

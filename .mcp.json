@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "docker": {
+      "command": "docker",
+      "args": ["mcp", "gateway", "run"]
+    },
+    "prisma": {
+      "command": "npx",
+      "args": ["-y", "prisma@6.19.3", "mcp"]
+    }
+  }
+}
