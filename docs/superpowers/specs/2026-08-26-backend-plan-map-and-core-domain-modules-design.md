@@ -13,12 +13,20 @@ Two related pieces of follow-up work on top of the already-approved backend desi
 1. Make the 1886-line backend implementation plan navigable by frontend-feature domain,
    without disturbing its execution-critical task sequencing.
 2. Replace the placeholder `core` feature modules that have real backend schema
-   (`products`, `catalog`, `orders`, `territories`, `aggregator`) with real Supabase-backed
-   logic, following the pattern `auth` and `src/lib/profiles.ts` already establish.
+   (`brands`, `products`, `catalog`, `orders`, `territories`, `aggregator`) with real
+   Supabase-backed logic, following the pattern `auth` and `src/lib/profiles.ts` already
+   establish.
 
-Out of scope: `brands`, `alerts`, `gamification` stay structural placeholders — no table in
-any spec defines them yet, and inventing schema for them wasn't approved as part of this
-round (see §5).
+Revised from the original round: Teafair's product catalogue, brand roster, and territory
+coverage are all expected to keep growing, so this round also (a) gives `brands` real
+schema — a growing multi-brand catalogue can't be modeled with `products` alone — and
+(b) adds offset-based pagination to every list-fetch function, so a fixed `limit` doesn't
+silently cap what a growing catalogue/territory list can return. See §2.1 and §3 pagination
+note.
+
+Out of scope: `alerts`, `gamification` stay structural placeholders — no table in any spec
+defines them yet, and inventing schema for them wasn't approved as part of this round (see
+§5).
 
 ## 2. Part A — `backend-foundation.md` domain map
 
@@ -41,6 +49,7 @@ Leave every Task's content, order, and internal steps untouched. Add:
    `## Global Constraints` (before `## Finalized feature/module list`). One `###`
    subheading per frontend feature module that has real schema:
    - `### Auth (profiles)`
+   - `### Brands (brands)` — new, see §2.1
    - `### Products & Catalog (products)`
    - `### Orders (orders, order_lines)`
    - `### Territories (supervisors, sales_reps, routes, pickup_points, customers)`
@@ -66,7 +75,35 @@ Leave every Task's content, order, and internal steps untouched. Add:
      add `####` labels in the surrounding prose (not inside the `js` code block) grouping
      "reference/territory data," "products," "orders," "inventory," "profiles."
 
-No content is deleted, rewritten, or reordered — this is additive navigation only.
+No content beyond the new sections above is deleted, rewritten, or reordered.
+
+### 2.1 New: Task 12 — `brands` table
+
+The one substantive schema addition in this round. Appended as a new task *after* Task 11
+— it's a new leaf migration (a table nothing else yet depends on), not a change to any
+existing task, so it doesn't disturb the sequential dependency chain described above.
+
+```sql
+CREATE TABLE brands (
+    brand_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    brand_name VARCHAR(150) NOT NULL UNIQUE,
+    is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE products ADD COLUMN brand_id UUID REFERENCES brands(brand_id);
+CREATE INDEX idx_products_brand_id ON products(brand_id);
+```
+
+`brand_id` is nullable on `products` — existing/seed products aren't forced to have a brand
+assigned immediately, matching how every other optional FK in this schema (e.g.
+`orders.customer_id`) is modeled. Follows the same verification-script-first format as
+Tasks 1–11 (a `verify-task12.mjs` proving the FK and index exist) when this becomes an
+actual plan edit — full step-by-step is written during Part A implementation, not here.
+
+No RLS is added on `brands` — it's reference data every authenticated role (and the public
+catalogue) can read; same treatment as `products` itself, which also has no RLS policy in
+this plan.
 
 ## 3. Part B — Core domain feature modules
 
@@ -76,14 +113,38 @@ module-level singleton), unwraps results through the existing
 `store.ts` in each feature directory — replacing, not supplementing, the current
 `create<Feature>ApiClient(baseUrl)` stub and empty Zustand store. Each module gets its own
 `api.test.ts` and `store.test.ts` (mirroring `auth`'s), and is removed from the shared
-placeholder loop in `features.test.ts` (which keeps only `brands`, `alerts`,
-`gamification`).
+placeholder loop in `features.test.ts` (which keeps only `alerts`, `gamification`).
 
 None of these functions call `setXStore` internally — same convention as `auth`: `core`
 exposes the fetch/mutate function and the store's setter, and the calling app (`mobile`,
 later `web`) decides when to wire one to the other.
 
-### 3.1 `products`
+**Pagination convention:** every list-fetch function below takes `limit = 100` *and*
+`offset = 0`, implemented via Supabase's `.range(offset, offset + limit - 1)`. A flat
+`limit` with no way to page past it would silently truncate results once the catalogue,
+brand roster, or territory list grows past 100 rows — offset pagination is the minimum
+needed to keep working as those grow, without building out full keyset/cursor pagination
+that nothing has asked for yet.
+
+### 3.1 `brands`
+
+```ts
+export interface Brand {
+  brandId: string;
+  brandName: string;
+  isActive: boolean;
+}
+
+fetchBrands(client: SupabaseClient, limit = 100, offset = 0): Promise<Brand[]>
+```
+
+Queries `brands`, selecting `brand_id, brand_name, is_active`. No mutation function in this
+round (creating/editing brands is an HQ-admin operation, presumably via the future `web`
+target — not needed by `mobile` or the public catalogue yet).
+
+Store: `{ brands: Brand[]; setBrands(brands: Brand[]): void; clear(): void }`.
+
+### 3.2 `products`
 
 ```ts
 export interface Product {
@@ -91,20 +152,21 @@ export interface Product {
   skuCode: string;
   productName: string;
   category: string | null;
+  brandId: string | null;
   basePrice: number;
   wholesalePrice: number;
 }
 
-fetchProducts(client: SupabaseClient, limit = 100): Promise<Product[]>
+fetchProducts(client: SupabaseClient, limit = 100, offset = 0): Promise<Product[]>
 ```
 
-Queries `products`, selecting `product_id, sku_code, product_name, category, base_price,
-wholesale_price`. This is the authenticated/internal view (includes wholesale price) —
-distinct from `catalog` below.
+Queries `products`, selecting `product_id, sku_code, product_name, category, brand_id,
+base_price, wholesale_price`. This is the authenticated/internal view (includes wholesale
+price) — distinct from `catalog` below.
 
 Store: `{ products: Product[]; setProducts(products: Product[]): void; clear(): void }`.
 
-### 3.2 `catalog`
+### 3.3 `catalog`
 
 ```ts
 export interface CatalogItem {
@@ -112,21 +174,23 @@ export interface CatalogItem {
   skuCode: string;
   productName: string;
   category: string | null;
+  brandId: string | null;
   basePrice: number;
 }
 
-fetchCatalog(client: SupabaseClient, limit = 100): Promise<CatalogItem[]>
+fetchCatalog(client: SupabaseClient, limit = 100, offset = 0): Promise<CatalogItem[]>
 ```
 
 Same `products` table, but the selected columns omit `wholesale_price` (business-sensitive,
 not for public/customer eyes) — matches the backend spec's "catalogue browsing itself stays
-public/unauthenticated." `fetchCatalog` is meant to be called with an anon/unauthenticated
+public/unauthenticated." `brandId` is included so a public storefront can filter/group by
+brand as the roster grows. `fetchCatalog` is meant to be called with an anon/unauthenticated
 client; nothing in `core` enforces that distinction, same as `auth` doesn't enforce which
 client callers pass.
 
 Store: `{ items: CatalogItem[]; setItems(items: CatalogItem[]): void; clear(): void }`.
 
-### 3.3 `territories`
+### 3.4 `territories`
 
 ```ts
 export interface Territory {
@@ -137,7 +201,7 @@ export interface Territory {
   assignedRepId: string | null;
 }
 
-fetchTerritories(client: SupabaseClient, limit = 100): Promise<Territory[]>
+fetchTerritories(client: SupabaseClient, limit = 100, offset = 0): Promise<Territory[]>
 ```
 
 Queries `routes` (the table backing "territory" in every spec — `territory_zone` is a
@@ -147,7 +211,7 @@ see once RLS ships; no client-side filtering is added here.
 
 Store: `{ territories: Territory[]; setTerritories(territories: Territory[]): void; clear(): void }`.
 
-### 3.4 `orders`
+### 3.5 `orders`
 
 ```ts
 export interface OrderLine {
@@ -171,7 +235,7 @@ export interface Order {
   orderDate: string;
 }
 
-fetchOrders(client: SupabaseClient, limit = 100): Promise<Order[]>
+fetchOrders(client: SupabaseClient, limit = 100, offset = 0): Promise<Order[]>
 
 createOrder(
   client: SupabaseClient,
@@ -195,7 +259,7 @@ generated `total_line_amount` column is server-computed per line, not passed in)
 
 Store: `{ orders: Order[]; setOrders(orders: Order[]): void; addOrder(order: Order): void; clear(): void }`.
 
-### 3.5 `aggregator`
+### 3.6 `aggregator`
 
 ```ts
 export interface AggregatedSales {
@@ -213,7 +277,9 @@ export interface AggregatedSales {
 
 fetchAggregatedSales(
   client: SupabaseClient,
-  filters?: { summaryDate?: string }
+  filters?: { summaryDate?: string },
+  limit = 100,
+  offset = 0
 ): Promise<AggregatedSales[]>
 
 runSalesAggregator(client: SupabaseClient, targetDate: string): Promise<void>
@@ -232,7 +298,8 @@ Store: `{ aggregatedSales: AggregatedSales[]; setAggregatedSales(sales: Aggregat
 
 ## 4. Testing
 
-Each of the 5 modules gets:
+Each of the 6 modules (`brands`, `products`, `catalog`, `orders`, `territories`,
+`aggregator`) gets:
 - `api.test.ts` — mocks `SupabaseClient.from(...).select(...)`/`.insert(...)`/`.rpc(...)`
   chains the same way `auth/api.test.ts` mocks `client.auth.*`, asserting both the
   success path (correct table/columns queried, result shape) and the thrown-error path
@@ -240,25 +307,32 @@ Each of the 5 modules gets:
 - `store.test.ts` — asserts initial state, each setter, and `clear()`, mirroring
   `auth/store.test.ts`.
 
-`features.test.ts`'s shared `describe.each` loop drops `products`, `catalog`, `orders`,
-`territories`, `aggregator` and keeps only `brands`, `alerts`, `gamification`.
+`features.test.ts`'s shared `describe.each` loop drops all 6 and keeps only `alerts`,
+`gamification`.
 
 ## 5. Explicitly out of scope
 
-- `brands`, `alerts`, `gamification` — no backend schema exists anywhere in the specs;
-  left as placeholders. Designing schema for these is a separate future round.
-- Any change to `backend/`, `supabase/`, or the actual Postgres schema — this round is
-  documentation navigation (Part A) and `core` application code (Part B) only; no
-  migrations are written or altered.
-- RLS/CHECK constraints on `routes` (territories) — not defined in the existing backend
-  plan; `fetchTerritories` is written against the table as currently specified.
+- `alerts`, `gamification` — no backend schema exists anywhere in the specs; left as
+  placeholders. Designing schema for these is a separate future round.
+- Any change to `backend/`, `supabase/`, or an actual running Postgres database — Part A
+  and Task 12 (§2.1) only change plan/spec *documents*; no migration is generated or
+  applied against any database as part of this round. Task 12 becomes a real migration
+  only when Part A's plan edit is later executed via `subagent-driven-development`/
+  `executing-plans`, same as Tasks 1–11 already are.
+- RLS/CHECK constraints on `routes` (territories) or `brands` — not defined in the existing
+  backend plan; `fetchTerritories`/`fetchBrands` are written against the tables as
+  currently specified (open reference data, no row-level restriction).
 - Route Profitability fields (commission/fuel cost) — still flagged not-yet-modeled in the
   backend spec §4.5; not touched here.
 
 ## 6. Open follow-ups
 
-- Whether `routes` needs its own RLS policies (currently unspecified — `fetchTerritories`
-  will return whatever the underlying table's default access allows until that's decided).
+- Whether `routes`/`brands` need their own RLS policies (currently unspecified —
+  `fetchTerritories`/`fetchBrands` will return whatever the underlying table's default
+  access allows until that's decided).
+- Whether `brands` needs its own admin-facing create/update functions in `core` once `web`
+  (HQ admin surface) exists — deferred; this round only adds the read path every consumer
+  needs first.
 - Whether `createOrder`'s two-sequential-insert approach (orders row, then order_lines)
   needs to become a single RPC for atomicity — flagged here, not solved; the mobile
   offline-sync layer (a separate future plan per the backend plan's "Frontend (future
