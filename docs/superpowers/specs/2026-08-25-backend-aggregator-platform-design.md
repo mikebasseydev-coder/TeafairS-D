@@ -66,12 +66,20 @@ its own Supabase-Auth link independently, a single table centralizes it so a JWT
 resolves to a role in one place:
 
 ```sql
-CREATE TYPE user_role_enum AS ENUM ('rep', 'supervisor', 'customer', 'admin');
+CREATE TYPE user_role_enum AS ENUM ('rep', 'supervisor', 'pickup_agent', 'customer', 'admin');
 
 CREATE TABLE profiles (
     profile_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     auth_user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     role user_role_enum NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Scopes a pickup_agent profile to the one pickup_point it operates, for RLS.
+CREATE TABLE pickup_point_operators (
+    operator_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    profile_id UUID UNIQUE NOT NULL REFERENCES profiles(profile_id),
+    pickup_point_id UUID NOT NULL REFERENCES pickup_points(pickup_point_id),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
@@ -80,6 +88,12 @@ CREATE TABLE profiles (
 `supabase_auth_id` column with `profile_id UUID UNIQUE REFERENCES profiles(profile_id)`.
 RLS policies and app-side RBAC resolve `auth.uid()` → `profiles.role` once, instead
 of checking three tables inconsistently.
+
+`customer` profiles authenticate via Supabase Auth **phone + OTP**, not
+email/password — catalogue browsing (`products`) itself stays public/unauthenticated;
+a phone-OTP session is only required to place an order or view/confirm its
+pickup status. `rep`/`supervisor`/`admin`/`pickup_agent` use standard email/password
+auth, same as the existing `auth` module.
 
 ### 4.2 Inventory — movement ledger, not balance snapshot
 
