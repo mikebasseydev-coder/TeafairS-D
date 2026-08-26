@@ -28,6 +28,31 @@ Revised twice from the original round:
   recalls, inventory deficits, top-territory recognition, and daily sales digests;
   gamification covering a scored/ranked index per sales rep, supervisor, and customer,
   plus an achievement/badge catalog (§2.2, §2.3).
+- Testing plans now include a Faker-generated bulk dataset (§2.4, Task 15) so Task 9's
+  performance indexes and Tasks 7–8's RLS policies get exercised at realistic scale during
+  local Docker testing, not just against Task 10's ~20-row curated demo seed.
+
+### 1.1 Environment readiness (verified this round)
+
+Checked before writing Task 15, since it adds a new dependency:
+
+- Docker 29.6.2, Node v22.23.1, npm/npx 10.9.8 — all installed and working on this machine.
+- `prisma@6.19.3` and `@prisma/client@6.19.3` (the plan's pinned version) both resolve on
+  the npm registry — installable, not a stale pin.
+- Confirmed the risk the plan's Global Constraints already flags is still current:
+  unpinned `npx prisma`/`"latest"` resolves to `8.0.0-rc.11` today — a different,
+  incompatible CLI generation. The exact-pin requirement stays necessary.
+- Nothing is actually *installed* yet — `backend/` isn't scaffolded (only
+  `backend/CLAUDE.md` exists; confirms its own "Not yet scaffolded" status). Dependency
+  versions are verified *available*, not yet *installed*; that happens at Task 1.
+- Repo root already has `prisma.config.ts` and `.mcp.json` (declaring `docker` and `prisma`
+  MCP servers) — pre-existing, not added by this round. The `prisma` MCP server's tools
+  aren't currently loaded in this session; unrelated to Task 15 and not something this
+  spec resolves.
+- No "Faker MCP" server exists in the Docker MCP catalog (searched; nothing wraps
+  `@faker-js/faker` or generates fake relational data as an MCP tool). Task 15 uses
+  `@faker-js/faker` as a plain `backend` npm dev dependency instead — the local
+  Docker/Prisma testing loop doesn't need an MCP layer to run a seed script.
 
 ## 2. Part A — `backend-foundation.md` domain map
 
@@ -257,6 +282,47 @@ RLS on `gamification_scores`/`actor_achievements`: `hq_admin` sees all; `supervi
 their own row plus their team's rep rows; `sales_rep`/`customer` see only their own row —
 same shape as `aggregated_sales`' policy set in Task 8. `achievements` (the small catalog
 table) is public-read, like `products`/`brands`.
+
+### 2.4 New: Task 15 — Faker-generated bulk test dataset
+
+Appended after Task 14. Purpose: Task 10's seed script is ~20 hand-written rows, chosen for
+demo readability (recognizable names like "Amaka Obi", "Teafair Black Tea 250g") — good for
+manual/dev testing, too small to prove anything about scale. Nothing today actually
+exercises Task 9's performance indexes or proves Tasks 7–8's RLS policies hold up once a
+table has hundreds of rows instead of two or three. Task 15 closes that gap without
+touching Task 10's curated seed — it's a separate, additive script.
+
+**Files:**
+- Modify: `backend/package.json` — add `@faker-js/faker` as a devDependency.
+- Create: `backend/prisma/seed-bulk.mjs` — run *in addition to* Task 10's `seed.mjs`, never
+  a replacement for it.
+- Create: `backend/scripts/verify-task15.mjs`.
+
+**What it generates** (via `@faker-js/faker`, on top of whatever Task 10 already seeded):
+- ~8 additional `brands` (`faker.company.name()`) and ~150 additional `products`
+  distributed across them — enough to push past the `limit = 100` default in every Part B
+  `fetch*` function, so offset pagination is actually exercised, not just theoretically
+  correct.
+- ~200 `customers` distributed across the existing `routes`/territories.
+- ~500 `orders` (with `order_lines`) split across both sale-flow types (§6 of the backend
+  spec), owned by a realistic spread of the seeded `sales_reps` — enough rows per rep for
+  Task 7's `sales_rep_isolation` policy to be tested against a real "does this rep see only
+  their ~15-30 orders out of 500" scenario, not "does this rep see only their 1 order out
+  of 2."
+- ~300 `inventory_movements` across all four pool types, including a mix of `best_before_date`
+  values (some already past, some near, some far) so Task 13's `stock_expiry` alert
+  generation has real near-expiry rows to find — this is the one place Task 15 and Task 13
+  depend on each other (Task 15 needs `best_before_date` to exist, which Task 13 adds).
+
+**Verification** (`verify-task15.mjs`): row-count thresholds (not exact counts — Faker
+output varies by run) confirming bulk volume landed, plus one `EXPLAIN` spot-check on an
+RLS-filtered `orders` query for a seeded rep, asserting the plan uses an index scan on
+`idx_orders_rep_id` rather than a sequential scan — this is the concrete proof Task 9's
+indexes are doing their job, which nothing in Tasks 1–14 currently establishes.
+
+Task ordering note: Task 15 must run after Task 13 (needs the `best_before_date` column)
+and after Task 9 (needs the indexes it's verifying to already exist) — placing it last, at
+position 15, satisfies both.
 
 ## 3. Part B — Core domain feature modules
 
@@ -537,6 +603,11 @@ relies on RLS to scope to the caller.
 Store: `{ scores: GamificationScore[]; achievements: Achievement[]; actorAchievements: ActorAchievement[]; setScores(scores): void; setAchievements(achievements): void; setActorAchievements(actorAchievements): void; clear(): void }`.
 
 ## 4. Testing
+
+This section covers `core` unit tests (Part B). Schema-level/bulk-volume testing (RLS at
+scale, index effectiveness) is Task 15 (§2.4), part of Part A — different layer, different
+purpose: §4 proves each `core` function calls Supabase correctly; Task 15 proves the
+database itself behaves correctly once it has real volume in it.
 
 Each of the 8 modules (`brands`, `products`, `catalog`, `orders`, `territories`,
 `aggregator`, `alerts`, `gamification`) gets:
