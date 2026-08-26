@@ -159,10 +159,19 @@ CREATE POLICY customer_own_orders_only ON orders AS PERMISSIVE FOR ALL USING (
 );
 ```
 
-Equivalent policies (supervisor/rep/pickup_agent isolated by their matching
-association, `hq_admin` unrestricted, no `customer` policy needed) apply to
-`inventory_movements` and other territory-scoped tables — not fully
-enumerated here, tracked in §8.
+Equivalent policies also apply to `inventory_movements` (supervisor sees their
+own `Supervisor_Hub` pool plus their team's `Van_Stock`; `sales_rep` sees only
+their own `Van_Stock`; `pickup_agent` sees only their own `Pickup_Point`; no
+`customer` policy needed), `outlet_visits` (`sales_rep` own visits,
+`supervisor` their team's, `hq_admin` unrestricted), and `aggregated_sales`
+(`FOR SELECT` only — writes happen exclusively through `run_sales_aggregator`,
+which runs as the function owner and bypasses RLS regardless of these
+policies). Full policy SQL: `docs/superpowers/plans/2026-08-25-backend-foundation.md` Task 8.
+
+`run_sales_aggregator` (§4.4) additionally checks the caller's `profiles.role`
+inside the function body (`hq_admin`/`supervisor` only, `RAISE EXCEPTION`
+otherwise) — `GRANT EXECUTE` alone can't express a role-conditional check, so
+the guard has to live in the function.
 
 `customer` profiles authenticate via Supabase Auth **phone + OTP**, not
 email/password — catalogue browsing (`products`) itself stays public/unauthenticated;
@@ -306,5 +315,4 @@ Both flows share the same `orders`/`order_lines` tables, distinguished by `sale_
 ## 8. Open follow-ups
 
 - Route Profitability's commission/fuel-cost data model (§4.5)
-- RLS policies for `inventory_movements` and other territory-scoped tables beyond `orders` — pattern established in §4.1, not fully enumerated per table yet
 - Whether `web` uses Next.js App Router or Pages Router — implementation detail, not architecture
