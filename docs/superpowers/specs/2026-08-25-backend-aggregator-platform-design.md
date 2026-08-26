@@ -61,39 +61,114 @@ are adopted as pasted.
 
 ### 4.1 RBAC — centralized `profiles` table
 
-Rather than each entity table (`customers`, `sales_reps`, `supervisors`) carrying
-its own Supabase-Auth link independently, a single table centralizes it so a JWT
-resolves to a role in one place:
+A single table centralizes the Supabase-Auth link, role, and the pointer to
+whichever business entity that user is — one direction only (profile →
+entity), so no reverse FK can drift out of sync with it:
 
 ```sql
-CREATE TYPE user_role_enum AS ENUM ('rep', 'supervisor', 'pickup_agent', 'customer', 'admin');
+CREATE TYPE user_role_enum AS ENUM ('hq_admin', 'supervisor', 'sales_rep', 'pickup_agent', 'customer');
 
 CREATE TABLE profiles (
-    profile_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    auth_user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    profile_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email VARCHAR(100),   -- nullable: customer profiles authenticate by phone, not email
     role user_role_enum NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+    associated_supervisor_id UUID REFERENCES supervisors(supervisor_id) ON DELETE SET NULL,
+    associated_rep_id UUID REFERENCES sales_reps(rep_id) ON DELETE SET NULL,
+    associated_pickup_point_id UUID REFERENCES pickup_points(pickup_point_id) ON DELETE SET NULL,
+    associated_customer_id UUID REFERENCES customers(customer_id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
 
--- Scopes a pickup_agent profile to the one pickup_point it operates, for RLS.
-CREATE TABLE pickup_point_operators (
-    operator_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    profile_id UUID UNIQUE NOT NULL REFERENCES profiles(profile_id),
-    pickup_point_id UUID NOT NULL REFERENCES pickup_points(pickup_point_id),
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    -- Exactly the association matching role may be set, the other three must
+    -- be NULL — same pool-targeting pattern as inventory_movements' CHECK.
+    CONSTRAINT chk_profile_role_targeting CHECK (
+        (role = 'hq_admin'     AND associated_supervisor_id IS NULL     AND associated_rep_id IS NULL     AND associated_pickup_point_id IS NULL AND associated_customer_id IS NULL)
+        OR (role = 'supervisor'   AND associated_supervisor_id IS NOT NULL AND associated_rep_id IS NULL     AND associated_pickup_point_id IS NULL AND associated_customer_id IS NULL)
+        OR (role = 'sales_rep'    AND associated_rep_id IS NOT NULL     AND associated_supervisor_id IS NULL  AND associated_pickup_point_id IS NULL AND associated_customer_id IS NULL)
+        OR (role = 'pickup_agent' AND associated_pickup_point_id IS NOT NULL AND associated_supervisor_id IS NULL AND associated_rep_id IS NULL     AND associated_customer_id IS NULL)
+        OR (role = 'customer'     AND associated_customer_id IS NOT NULL AND associated_supervisor_id IS NULL  AND associated_rep_id IS NULL     AND associated_pickup_point_id IS NULL)
+    )
 );
 ```
 
-`sales_reps`, `supervisors`, and `customers` each replace any direct
-`supabase_auth_id` column with `profile_id UUID UNIQUE REFERENCES profiles(profile_id)`.
-RLS policies and app-side RBAC resolve `auth.uid()` → `profiles.role` once, instead
-of checking three tables inconsistently.
+`profile_id` **is** `auth.users.id` — no separate generated UUID, since a
+profile is always exactly 1:1 with an auth user. This replaces the earlier
+`pickup_point_operators` join table and the `profile_id` columns on
+`sales_reps`/`supervisors`/`customers`: the pointer lives only on `profiles`,
+so an RLS policy resolves `auth.uid()` to a scope in one row lookup instead of
+a join.
+
+**Auto-provisioning.** A `profiles` row is created automatically when a user
+signs up, from metadata passed at signup — an admin invites a rep/supervisor/
+pickup agent with `role`/`rep_id`/`supervisor_id`/`pickup_point_id` set in
+`raw_user_meta_data`; a customer's `customer_id` is attached the same way, or
+linked on their first order if new:
+
+```sql
+CREATE OR REPLACE FUNCTION handle_new_user_signup()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.profiles (profile_id, email, role, associated_supervisor_id, associated_rep_id, associated_pickup_point_id, associated_customer_id)
+    VALUES (
+        NEW.id,
+        NEW.email,
+        COALESCE((NEW.raw_user_meta_data->>'role')::user_role_enum, 'customer'::user_role_enum),
+        (NEW.raw_user_meta_data->>'supervisor_id')::UUID,
+        (NEW.raw_user_meta_data->>'rep_id')::UUID,
+        (NEW.raw_user_meta_data->>'pickup_point_id')::UUID,
+        (NEW.raw_user_meta_data->>'customer_id')::UUID
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE OR REPLACE TRIGGER trg_on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW EXECUTE FUNCTION handle_new_user_signup();
+```
+
+`SECURITY DEFINER` functions must pin `search_path` explicitly (`SET
+search_path = public` above) — without it, the function is vulnerable to
+search-path hijacking. Every `SECURITY DEFINER` function in this schema
+follows this rule, including `run_sales_aggregator` (§4.4).
+
+**Row-level security**, enabled on every operational table (`orders`,
+`inventory_movements`, etc.) and resolved through `profiles` in one lookup:
+
+```sql
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_movements ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY hq_global_access ON orders AS PERMISSIVE FOR ALL USING (
+    EXISTS (SELECT 1 FROM profiles WHERE profile_id = auth.uid() AND role = 'hq_admin')
+);
+
+CREATE POLICY supervisor_territory_isolation ON orders AS PERMISSIVE FOR ALL USING (
+    EXISTS (SELECT 1 FROM profiles WHERE profile_id = auth.uid() AND role = 'supervisor' AND associated_supervisor_id = orders.supervisor_id)
+);
+
+CREATE POLICY sales_rep_isolation ON orders AS PERMISSIVE FOR ALL USING (
+    EXISTS (SELECT 1 FROM profiles WHERE profile_id = auth.uid() AND role = 'sales_rep' AND associated_rep_id = orders.rep_id)
+);
+
+CREATE POLICY pickup_agent_isolation ON orders AS PERMISSIVE FOR ALL USING (
+    EXISTS (SELECT 1 FROM profiles WHERE profile_id = auth.uid() AND role = 'pickup_agent' AND associated_pickup_point_id = orders.pickup_point_id)
+);
+
+CREATE POLICY customer_own_orders_only ON orders AS PERMISSIVE FOR ALL USING (
+    EXISTS (SELECT 1 FROM profiles WHERE profile_id = auth.uid() AND role = 'customer' AND associated_customer_id = orders.customer_id)
+);
+```
+
+Equivalent policies (supervisor/rep/pickup_agent isolated by their matching
+association, `hq_admin` unrestricted, no `customer` policy needed) apply to
+`inventory_movements` and other territory-scoped tables — not fully
+enumerated here, tracked in §8.
 
 `customer` profiles authenticate via Supabase Auth **phone + OTP**, not
 email/password — catalogue browsing (`products`) itself stays public/unauthenticated;
 a phone-OTP session is only required to place an order or view/confirm its
-pickup status. `rep`/`supervisor`/`admin`/`pickup_agent` use standard email/password
-auth, same as the existing `auth` module.
+pickup status. `hq_admin`/`supervisor`/`sales_rep`/`pickup_agent` use standard
+email/password auth, same as the existing `auth` module.
 
 ### 4.2 Inventory — movement ledger, not balance snapshot
 
@@ -231,5 +306,5 @@ Both flows share the same `orders`/`order_lines` tables, distinguished by `sale_
 ## 8. Open follow-ups
 
 - Route Profitability's commission/fuel-cost data model (§4.5)
-- RLS policy design per role (`rep`/`supervisor`/`customer`/`admin`) — not detailed here, follows from §4.1
+- RLS policies for `inventory_movements` and other territory-scoped tables beyond `orders` — pattern established in §4.1, not fully enumerated per table yet
 - Whether `web` uses Next.js App Router or Pages Router — implementation detail, not architecture

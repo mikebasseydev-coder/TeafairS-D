@@ -5,7 +5,7 @@ Owner: Michael Bassey
 Date: 2026-08-25
 
 Companion to `2026-08-25-backend-aggregator-platform-design.md` (data model,
-RBAC roles, `profiles`/`pickup_point_operators`). This doc covers the frontend
+RBAC roles, `profiles`). This doc covers the frontend
 surfaces, their offline-first caching behavior, and shared UI components for
 the Route-to-Market (RTM) omni-channel application.
 
@@ -13,9 +13,9 @@ the Route-to-Market (RTM) omni-channel application.
 
 | Surface | Target | Role | Auth |
 |---|---|---|---|
-| HQ Executive Command Console | `windows` (`react-native-windows`) | `admin` | email/password |
+| HQ Executive Command Console | `windows` (`react-native-windows`) | `hq_admin` | email/password |
 | Regional Supervisor Hub | `windows` + `web` | `supervisor` | email/password |
-| Field Execution Interface | `mobile` | `rep` | email/password |
+| Field Execution Interface | `mobile` | `sales_rep` | email/password |
 | Pick-Up Point Micro-Portal | `mobile` (light) / `web` | `pickup_agent` | email/password |
 | Customer Catalogue & Ordering | `web` (public) | `customer` | phone + OTP, order-scoped |
 
@@ -24,7 +24,7 @@ consumes the same `ui` package as `mobile`/`web`. Local SQLite access on
 Windows goes through an RN-compatible SQLite binding (e.g. `op-sqlite` or
 WatermelonDB), not Entity Framework Core.
 
-## 2. HQ Executive Command Console (`windows`, `admin`)
+## 2. HQ Executive Command Console (`windows`, `hq_admin`)
 
 **Analytics Matrix View**
 - Cross-tab tables and a revenue-distribution view split by `sale_type`
@@ -59,7 +59,7 @@ WatermelonDB), not Entity Framework Core.
   the corresponding `inventory_movements` rows (`Transfer` type, `Supervisor_Hub`
   → `Van_Stock`) rather than one call per line item.
 
-## 4. Field Execution Interface (`mobile`, `rep`)
+## 4. Field Execution Interface (`mobile`, `sales_rep`)
 
 **Active Day-Route Map & Visit Module**
 - Sequential retailer list ordered by GPS, with visit-status badges
@@ -74,16 +74,20 @@ WatermelonDB), not Entity Framework Core.
 - Basket math runs against a locally cached `wholesale_price` schedule.
   Confirming a sale writes an `orders`/`order_lines` row and an
   `inventory_movements` row (`Sold`, `Van_Stock`, negative `qty_delta`)
-  locally first, fully functional while offline.
+  locally first, fully functional while offline. When connectivity returns,
+  queued confirmed sales are batched into a single array payload and sent to
+  the `place_confirmed_order` RPC — one round trip for the whole backlog,
+  not one call per queued sale.
 
 ## 5. Pick-Up Point Micro-Portal (`mobile` light / `web`, `pickup_agent`)
 
 **Package Verification & Delivery Terminal**
 - Order-ID/account lookup, item checklist for verification before handover.
-- Scoped via `pickup_point_operators` (`profile_id` → `pickup_point_id`):
-  the realtime/query filter restricts to `orders` where
-  `order_status = 'Ready_For_Pickup'` and `pickup_point_id` matches the
-  operator's assigned point.
+- Scoped via `profiles.associated_pickup_point_id`: the realtime/query filter
+  restricts to `orders` where `order_status = 'Ready_For_Pickup'` and
+  `pickup_point_id` matches the authenticated agent's associated pickup point
+  — enforced by the `pickup_agent_isolation`-style RLS policy, not just
+  client-side filtering.
 - Marking a package collected calls an RPC that sets `order_status =
   'Collected'` and writes the corresponding `inventory_movements` row —
   this is also the "feedback loop" that confirms pickup back to HQ/the customer.
@@ -105,19 +109,22 @@ social-media-driven traffic.
 
 ## 7. Role-Based Access Control (RBAC)
 
-Five roles (`profiles.role`, see backend spec §4.1):
+Five roles (`profiles.role`, see backend spec §4.1), enforced by Postgres RLS
+policies keyed off `profiles`'s `associated_*_id` columns — not just
+client-side filtering:
 
-- **`admin`** (HQ, windows/web) — global scope: all territories, config,
+- **`hq_admin`** (HQ, windows/web) — global scope: all territories, config,
   master items, combined financial summaries.
 - **`supervisor`** (windows/web) — boundary-locked to matching
   `supervisor_id`: inventory, delivery lines, assigned reps, local online-sales queue.
-- **`rep`** (mobile) — sandboxed to their own `rep_id`: van stock, day-route
-  customer list.
-- **`pickup_agent`** (mobile light/web) — sandboxed to their assigned
-  `pickup_point_id` via `pickup_point_operators`: `Ready_For_Pickup` orders
-  only, checkout capability only.
-- **`customer`** (public web + phone-OTP) — sandboxed to their own orders;
-  no visibility into any other customer, route, or inventory data.
+- **`sales_rep`** (mobile) — sandboxed to their own `rep_id`: van stock,
+  day-route customer list.
+- **`pickup_agent`** (mobile light/web) — sandboxed to their
+  `associated_pickup_point_id`: `Ready_For_Pickup` orders only, checkout
+  capability only.
+- **`customer`** (public web + phone-OTP) — sandboxed to their own
+  `associated_customer_id`'s orders; no visibility into any other customer,
+  route, or inventory data.
 
 ## 8. Persistent reactive caching (windows + mobile)
 
@@ -126,12 +133,13 @@ always-online by nature):
 
 1. **Reads** come from a local database engine — SQLite (via an RN-compatible
    binding) on `windows`, Room/SQLite on `mobile` (Android). The UI never
-   reads live network calls directly.
+   polls Supabase directly for reads it can serve from local cache.
 2. **Writes** land in the local cache instantly with a `synced: false` flag.
 3. A persistent background queue worker replicates pending writes to
    Supabase sequentially, batching offline-accumulated entries into a single
-   push rather than one request per row, to limit both connection use and
-   Supabase compute cost.
+   push rather than one request per row — e.g. queued POS sales all go
+   through one `place_confirmed_order` call (§4), not one RPC per sale — to
+   limit both connection use and Supabase compute cost.
 
 This layer is a real architectural addition beyond what the backend spec
 assumed (direct-to-Supabase via the injectable client, no local persistence)
@@ -155,8 +163,9 @@ calls directly for reads.
 
 ## 10. Open follow-ups
 
-- RLS policy definitions per role (referenced, not detailed, in backend
-  spec §8) now also need to account for `pickup_agent` and `customer`.
+- RLS policies exist for `orders` (backend spec §4.1, all five roles); still
+  need the equivalent policies written for `inventory_movements` and other
+  territory-scoped tables (backend spec §8).
 - Exact RN SQLite binding choice for `windows`/`mobile` local cache
   (`op-sqlite` vs. WatermelonDB vs. other) — implementation detail, not
   architecture.
