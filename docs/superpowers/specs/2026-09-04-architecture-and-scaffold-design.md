@@ -231,6 +231,17 @@ Deno. Drains `notifications_outbox` in batches, sends via the SMS gateway
 Invoked by a `pg_cron` job (`select net.http_post(...)` or `supabase functions`
 schedule) every minute. This is the **only** Edge Function at launch.
 
+### `functions/sync-*` (post-launch connectors)
+
+`sync-firs` (Phase 1), `sync-quickbooks` (Phase 1.5), `sync-payroll` (Phase 2).
+Each: Deno, scheduled via `run_integration_connectors()`, drains
+`integration_outbox` for its `target`, resolves ids through
+`integration_entity_map`, calls the external API with OAuth creds from Vault,
+writes `external_id` + `status` back, raises `alerts` on failure. One function
+per target (isolation, independent deploy) — see arch §14.7. The
+integration-framework *tables* and the RPC enqueue hooks ship at launch (platform
+spec §5.15); only the functions are phased.
+
 ### Seeds
 
 `seeds/seed.sql` creates: one of every role (auth user + profile), 2 zones, 3
@@ -316,19 +327,46 @@ navigator are re-created fresh, not copied.
 
 ## 13. Build sequence
 
+**Android-first. The full Windows workstation is deferred to a fast-follow — but
+a Windows toolchain *spike* happens during scaffolding.**
+
+### Phase 0 — scaffold (both apps created, only mobile grown)
+
 1. Monorepo skeleton + tooling (§4, §10) — `pnpm install` green, CI green.
-2. `supabase/` local stack + declarative schema for **roles & access** only +
-   seeds + type gen (§8).
+2. `supabase/` local stack + declarative schema for **roles & access** +
+   the integration-framework tables (`integration_outbox`, `integration_entity_map`,
+   `integration_config`, `fx_rates`) + seeds + type gen (§8).
 3. `shared-types`, `shared-config`, `shared-schemas`, `shared-supabase`.
 4. `apps/mobile-android`: Expo scaffold, client + session, auth + MFA, one
-   dashboard screen. Smoke on a device.
-5. `apps/desktop-windows`: `rnw` scaffold, same client + auth, one dashboard.
-   Smoke on Windows. **(Do this early — it's the riskiest target.)**
-6. `shared-sync` + wire the mobile field cache/queue against the seeded data.
-7. `shared-ui`, `shared-hooks` fleshed out; navigation shells for both apps.
-8. Then the platform-spec implementation plans, feature by feature, each adding
-   its `supabase/schemas` slice + `shared-*` surface + screens in both apps as
-   applicable.
+   dashboard. Smoke on a device.
+5. **`apps/desktop-windows` spike** — `rnw` scaffold, same client + auth + one
+   dashboard renders on Windows. **Then park it** — keep it in `typecheck`/CI,
+   add no features. *Non-negotiable: this proves `rnw` fits the pinned RN version
+   before months of Android are built on the assumption.*
+6. `shared-sync` + the mobile field cache/queue against seeded data.
+7. `shared-ui`, `shared-hooks`; the mobile navigation shell (field + HQ tabs).
+
+### Phase 1 — Android field product (the launch product)
+
+8. Feature-by-feature **on Android only**, per the platform-spec implementation
+   plans: roles/access → RTM core (inventory, orders, transfers, verification) →
+   invoice financing → onboarding/guarantors → notifications → analytics. Each
+   adds its `supabase/schemas` slice + `shared-*` surface + Android screens.
+9. HQ-mobile screens (`REGIONAL_MANAGER` + `COMPLIANCE_OFFICER`: approvals /
+   triage / dashboards) built alongside — small, reuse the RPCs.
+10. `sync-firs` connector (regulatory; gated on FIRS onboarding).
+11. Android app ships.
+
+### Phase 1.5
+
+12. `sync-quickbooks` connector · fintech provider payment APIs.
+
+### Phase 2
+
+13. Un-park `apps/desktop-windows` — the full HQ workstation (master-data CRUD,
+    users, finance, audit browser, full dashboards) against the now-mature
+    `packages/shared-*`. Mostly screen-building.
+14. `reporting` schema for BI tools · `sync-payroll` · automated FX pull.
 
 ## 14. Open questions
 
@@ -345,3 +383,9 @@ navigator are re-created fresh, not copied.
    revisit if the agent cache grows past a few thousand rows.
 6. **Windows distribution** — MSIX sideload / intranet share / Microsoft Store
    for Business? Affects the signing cert and `build-windows.sh`.
+7. **Connector Edge Functions** — one function per target, or one dispatcher
+   function switching on `integration_outbox.target`? (Lean toward one per target
+   for isolation and independent deploy.)
+8. **`reporting` schema** — a Supabase read-replica connection, a restricted role
+   on the primary, or a nightly export to a warehouse (BigQuery)? Cost + the BI
+   tool in use decide this.

@@ -154,9 +154,16 @@ SMS (and later push) through an external gateway. Invoked once per minute by
 `pg_cron`, so cost is fixed regardless of message volume.
 
 Everything else that a naive design would make an Edge Function is either an RPC
-(pure DB logic) or a `pg_cron` SQL job (scheduled pure-SQL work). A second Edge
-Function appears only if/when fintech-provider payment APIs are integrated — and
-it will call the same RPCs.
+(pure DB logic) or a `pg_cron` SQL job (scheduled pure-SQL work).
+
+**Post-launch Edge Functions** are all **outbound connectors** built on the
+integration framework (§5.15): each is scheduled, drains `integration_outbox`,
+maps rows to an external system's entities, calls its API (OAuth creds in Vault),
+writes the external id + status back, and raises `alerts` on failure. Planned
+connectors: `sync-firs` (e-invoicing — Phase 1), `sync-quickbooks` (accounting —
+Phase 1.5), `sync-payroll` (Phase 2). The fintech-provider payment API, if
+integrated, is the same pattern. **BI/analytics is not a connector** — it is a
+read-only `reporting` schema / Postgres connection (§11).
 
 ### 3.4 Scheduled jobs (`pg_cron`, pure SQL unless noted)
 
@@ -174,6 +181,7 @@ it will call the same RPCs.
 | `expire_pending_verifications()` | hourly | offline bundles never reconciled → `NEEDS_REVIEW`; `NEEDS_REVIEW` items past their SLA → escalate to `ADMIN`, alert |
 | `downgrade_stale_photos()` | nightly | verification/delivery photos older than `photo_retention_days` on non-disputed records → thumbnail, purge full-res |
 | `drain_notifications_outbox()` | every 1 min | invoke the `notify` Edge Function |
+| `run_integration_connectors()` | per `integration_config` schedule (post-launch) | invoke each enabled connector Edge Function to drain `integration_outbox` for its `target` |
 
 ### 3.5 Realtime
 
@@ -691,6 +699,39 @@ URLs minted by RPCs / policies scoped to the requesting role's zone. A retention
 job downgrades photos to thumbnails after `photo_retention_days` unless the
 parent record is disputed.
 
+### 5.15 Integrations & reporting currency
+
+**All internal money is NGN, single currency** — no per-row currency column, the
+transactional schema is unchanged. USD is **reporting-only**, derived at report /
+sync time.
+
+**`fx_rates`** — `quote_currency` (`USD`), `rate` (NGN per 1 USD),
+`effective_date`, `source` (`CBN|MARKET`), `recorded_by`, `recorded_at`.
+`UNIQUE(quote_currency, effective_date, source)`. Set by `set_fx_rate`
+(`ADMIN`) at launch; an automated pull is a fast-follow. Dashboards/reports with
+an NGN/USD toggle multiply cache-table figures by the rate for the period
+(`integration_config` picks the source and period-end vs period-average).
+
+**`integration_outbox`** — INSERT-only, enqueued by every financial RPC alongside
+its ledger write (same pattern as `notifications_outbox`). `target` (`FIRS|
+QUICKBOOKS|PAYROLL|…`), `entity_type` (`INVOICE|PAYMENT|CUSTOMER|VENDOR|ITEM|
+JOURNAL|…`), `local_id`, `op` (`CREATE|UPDATE|VOID`), `payload` (jsonb snapshot),
+`status` (`PENDING|SENT|FAILED|SKIPPED`), `attempts`, `external_id?`, `error?`,
+`created_at`, `sent_at?`.
+
+**`integration_entity_map`** — `target`, `entity_type`, `local_id`,
+`external_id`, `synced_at`. `UNIQUE(target, entity_type, local_id)` — prevents
+double-create.
+
+**`integration_config`** — per `target`: enabled, endpoint/company id, schedule,
+account/field mapping (jsonb), FX source + convention. `ADMIN`-editable.
+Credentials (OAuth tokens, API keys) live in **Supabase Vault**, never a table.
+
+Each connector is a scheduled Edge Function (§3.3) draining `integration_outbox`
+for its `target`. On regulated targets (FIRS) the returned reference is stored
+back on the source row — `orders` / `invoice_financings` gain `firs_irn?`,
+`firs_status?`, `firs_qr_path?` (§11).
+
 ---
 
 ## 6. Integrity model (how wrong entries are stopped)
@@ -863,7 +904,12 @@ internally. Grouped by area.
 - `acknowledge_alert(p_alert_id)` / `resolve_alert(p_alert_id, p_note)` — role-appropriate to the alert's scope.
 - `upsert_product(...)`, `upsert_warehouse(...)`, `upsert_market_zone(...)`,
   `assign_zone_manager(...)`, `invite_staff(p_email, p_role, p_zone_or_warehouse)`,
-  `upsert_verification_config(...)` — `ADMIN`/`SUPER_ADMIN`.
+  `upsert_verification_config(...)`, `upsert_integration_config(...)` —
+  `ADMIN`/`SUPER_ADMIN`.
+- `set_fx_rate(p_quote_currency, p_rate, p_effective_date, p_source)` — `ADMIN`
+  (USD reporting rate; §5.15).
+- `retry_integration_item(p_outbox_id)` — `ADMIN`; re-queues a `FAILED`
+  `integration_outbox` row.
 
 ---
 
@@ -959,8 +1005,10 @@ A mobile subset of the desktop screens (§8.2): dashboards + approval/triage.
 ### 8.2 `apps/desktop-windows`
 
 Shared shell: left nav, global search, **notification centre** (`notifications`,
-polled — unread count + `ACTION_REQUIRED` badge), alert centre, user menu.
-Every dashboard reads **only cache tables** and polls on an interval.
+polled — unread count + `ACTION_REQUIRED` badge), alert centre, an **NGN/USD
+display toggle** (multiplies cache-table figures by the period `fx_rates` value —
+display only, §5.15), user menu. Every dashboard reads **only cache tables** and
+polls on an interval.
 
 #### REGIONAL_MANAGER (scoped to assigned zones)
 | Screen | Purpose | Data source |
@@ -996,6 +1044,7 @@ Every dashboard reads **only cache tables** and polls on an interval.
 | Finance actions | verify fintech funding, verify payments/remittances, process fintech fee (success/default), post adjustment/bonus | `verify_fintech_funding`, `verify_payment`, `verify_remittance`, `process_fintech_fee`, `post_fintech_adjustment` |
 | Adjustments | post stock adjustments, view reversal log | `post_adjustment`, `inventory_movements` |
 | Alert & verification config | fraud-rule thresholds, reorder points, per-zone `verification_config` (tier thresholds, SMS-on-new-outlet flag, retention days) | config tables |
+| Integrations & FX | connector enable/config + account mapping, `integration_outbox` status + retry, NGN/USD rate entry + history | `upsert_integration_config`, `retry_integration_item`, `set_fx_rate`, `integration_outbox`, `fx_rates` |
 | System | audit-log browser, scheduled-job status, cache-refresh freshness | `audit_logs`, `cron.job_run_details` |
 
 #### SUPER_ADMIN
@@ -1041,6 +1090,8 @@ No write actions for `AUDITOR` beyond exporting.
 | `alerts` | scoped to zone/warehouse/agent + HQ | RPC (ack/resolve) |
 | `audit_logs` | `ADMIN`, `SUPER_ADMIN`, `AUDITOR`, `COMPLIANCE_OFFICER` | trigger only |
 | `daily_sales_rollup`, `zone_health`, `fintech_program_health` | HQ; zone rows visible to that zone's manager | job only |
+| `fx_rates`, `integration_config`, `integration_entity_map` | HQ | RPC (`ADMIN`) / connector |
+| `integration_outbox` | HQ (status view) | RPC insert (financial RPCs) + `ADMIN` retry; connector updates |
 | `notifications_outbox` | none (service role only) | RPC insert; `notify` updates |
 
 ---
@@ -1057,6 +1108,15 @@ No write actions for `AUDITOR` beyond exporting.
   `post_adjustment` and `post_fintech_adjustment` until specified).
 - **Push notifications (FCM).** Launch has the in-app `notifications` inbox
   (polled) + SMS escalation only; push is a fast-follow (§11).
+- **External-system connectors** (FIRS e-invoicing, QuickBooks Online, payroll).
+  The integration **framework** (`integration_outbox` + `integration_entity_map`
+  + `integration_config` + enqueue hooks in the financial RPCs) **is** in the
+  launch schema — retrofitting an outbox later is painful — but the connector
+  Edge Functions are phased fast-follows (§11).
+- **BI / analytics** — a read-only `reporting` schema for external BI tools
+  (§11).
+- **Automated FX-rate pull.** Launch: `ADMIN` enters the NGN/USD reporting rate
+  via `set_fx_rate`.
 - **Route optimisation** internals, promotions/price lists, gamification.
 - **Prisma / Docker** local schema tooling — replaced by the Supabase CLI local
   stack.
@@ -1077,6 +1137,21 @@ No write actions for `AUDITOR` beyond exporting.
 4. **Push notifications** — `device_tokens` + `register_device_token` (both in
    the launch schema), `notify`'s push channel, background delivery for
    `ACTION_REQUIRED` notification types. In-app inbox + SMS already cover launch.
+5. **FIRS e-invoicing connector** (Phase 1 — regulatory) — `sync-firs` Edge
+   Function draining `integration_outbox` for `target = FIRS`; stores
+   `firs_irn` / `firs_status` / `firs_qr_path` back on `orders` /
+   `invoice_financings`. Gated on FIRS taxpayer onboarding + API credentials.
+6. **QuickBooks Online connector** (Phase 1.5) — `sync-quickbooks` Edge
+   Function; OAuth in Vault; `integration_config` holds the chart-of-accounts
+   mapping (revenue / fintech-fee expense / AR / deposits) an accountant defines.
+   Pushes NGN with the FX rate; QBO multi-currency shows USD.
+7. **BI / analytics** (Phase 2) — a read-only `reporting` schema (curated views
+   over the cache + ledger tables) for Metabase / Power BI / Looker via a
+   restricted Postgres role. No connector; no push.
+8. **Payroll connector** (Phase 2) — staff hours / commission out to a payroll
+   system (PAYE / pension / NHF).
+9. **Automated FX pull** — a small Edge Function fetching the CBN (and optionally
+   market) NGN/USD rate on a schedule into `fx_rates`.
 
 ---
 
@@ -1094,15 +1169,21 @@ under the new layout — ideas and patterns carry over, code does not:
 - The three superseded specs stay in the repo for history with a superseded
   banner; `2026-08-25-backend-foundation.md` is marked obsolete.
 
-Follow-on documents (not this spec):
+Companion + follow-on documents:
 
-- **Architecture / repo-scaffold spec** — the `apps/`+`packages/` structure,
-  pnpm, build pipeline for APK/MSIX, the shared Supabase client, session storage,
-  generated types.
-- **CLAUDE.md rewrites** — root `CLAUDE.md`, new `apps/CLAUDE.md` and
-  `supabase/CLAUDE.md`, delete `backend/CLAUDE.md`.
-- **Implementation plans** — one per subsystem (RTM core + verification → invoice
-  financing → onboarding/guarantors), each via the writing-plans skill.
+- **Architecture / repo-scaffold spec** — `2026-09-04-architecture-and-scaffold-design.md`
+  (written): framework choice, `packages/` layout, build pipeline, local dev,
+  `frontend/` migration.
+- **CLAUDE.md rewrites** — done (root, `apps/`, `supabase/`; `backend/` removed;
+  `frontend/` marked legacy). Feature docs in `docs/features/`.
+- **Implementation plans** — not yet written. Sequence:
+  1. monorepo scaffold + Windows spike (arch spec §12–13)
+  2. roles/access → RTM core + verification → invoice financing →
+     onboarding/guarantors → notifications → analytics — **Android only**
+  3. Phase 1: FIRS connector · Phase 1.5: QuickBooks connector
+  4. Phase 2: full `apps/desktop-windows` HQ workstation · BI reporting schema ·
+     payroll
+  Each via the writing-plans skill.
 
 ---
 
@@ -1131,3 +1212,15 @@ Follow-on documents (not this spec):
 9. **Staff onboarding** — do `WAREHOUSE_MANAGER`/`FIELD_AGENT` accounts get
    created by `ADMIN` invite only, or can a `REGIONAL_MANAGER` create field staff
    in their zones?
+10. **FIRS obligation & onboarding** — is TEFAIR in scope for mandatory FIRS
+    e-invoicing at launch volume, and is taxpayer/API onboarding started? Sets
+    whether `sync-firs` is a hard Phase-1 gate.
+11. **QuickBooks chart of accounts** — who (accountant) owns the
+    `integration_config` mapping (revenue / fintech-fee expense / AR / deposits),
+    and is the QBO company NGN-home or USD-home?
+12. **FX source** — CBN official vs market rate for USD reporting, and
+    period-end vs period-average for report totals.
+13. **What enqueues to `integration_outbox`** — confirm the set of financial
+    events that sync (orders, payments, remittances, funding, fees, daily
+    journal) and whether outlets/products/fintech-agents sync as
+    customers/items/vendors.

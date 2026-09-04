@@ -24,6 +24,7 @@ spec still governs anything that spans features.
 | [alerts-and-fraud](alerts-and-fraud.md) | §5.10, §6.2 | `alerts`, the fraud rules, nightly scans |
 | [notifications](notifications.md) | §5.12 | polled in-app inbox, SMS escalation, push fast-follow |
 | [client-cache-and-offline](client-cache-and-offline.md) | §3.8 | mobile persistent cache + write queue, delta sync, offline fraud controls |
+| [integrations-and-reporting-currency](integrations-and-reporting-currency.md) | §5.15, §11 | NGN internal / USD reporting FX, outbound integration framework, FIRS + QuickBooks connectors (phased) |
 | [analytics-and-dashboards](analytics-and-dashboards.md) | §5.11, §8 | cache tables, per-role dashboards |
 | [audit-and-reconciliation](audit-and-reconciliation.md) | §5.10, §6.1 | `audit_logs` trigger, nightly reconciliation, HQ see-through |
 

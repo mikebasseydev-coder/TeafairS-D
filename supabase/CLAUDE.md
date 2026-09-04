@@ -59,11 +59,21 @@ supabase/
   lockout. MFA is native `auth.mfa_factors` — no MFA columns in app tables.
 
 ### Edge Functions
-- Exactly one: `notify`, invoked once per minute by `pg_cron` to drain
-  `notifications_outbox` (SMS; push later). A second appears only if fintech
-  provider payment APIs are integrated — behind the same RPCs.
+- Exactly one at launch: `notify`, invoked once per minute by `pg_cron` to drain
+  `notifications_outbox` (SMS; push later).
 - Anything that is pure DB logic is an **RPC**, not an Edge Function. Anything
   scheduled and pure-SQL is a `pg_cron` job, not an Edge Function.
+- Post-launch, every Edge Function is an **outbound connector** on the
+  integration framework: `sync-firs` (Phase 1), `sync-quickbooks` (Phase 1.5),
+  `sync-payroll` (Phase 2). Each drains `integration_outbox` for its `target`,
+  creds in Vault. The framework tables (`integration_outbox`,
+  `integration_entity_map`, `integration_config`, `fx_rates`) and the RPC
+  enqueue hooks are in the **launch schema**; only the functions are phased.
+
+### Currency
+- Internal money is **NGN, single currency** — no per-row currency column. USD is
+  reporting-only, derived from `fx_rates` at report/sync time (`set_fx_rate`,
+  `ADMIN`).
 
 ### Money flow (invoice financing)
 - Fintech pays TEFAIR **100%** upfront (verified by finance). TEFAIR's cost is a
