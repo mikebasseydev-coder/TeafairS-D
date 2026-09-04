@@ -173,6 +173,8 @@ One channel: a `FINTECH_AGENT` subscribes to `postgres_changes` on
 `invoice_financings` filtered to `fintech_agent_id = <their id>`, so newly
 offered deals and status changes appear without polling. Every other screen
 refetches on focus. HQ dashboards poll their cache tables on an interval.
+**In-app notifications are polled, not realtime** (§5.12) — no per-user
+subscription.
 
 ### 3.6 Extensions
 
@@ -533,9 +535,31 @@ company-wide and per-dimension rollups coexist.
 
 ### 5.12 Notifications
 
-**`notifications_outbox`** — INSERT-only by RPCs. `channel` (`sms|push`),
-`recipient`, `template`, `params` (jsonb), `status` (`PENDING|SENT|FAILED`),
-`attempts`, `sent_at?`, `created_at`. Drained every minute by `notify`.
+**`notifications`** — the in-app inbox. One row per user-facing event, written by
+the RPC that does the underlying work and by the alert batch jobs.
+`recipient_id` (FK profile), `category` (`ACTION_REQUIRED|FYI`), `type` (text —
+`ORDER_REJECTED`, `TRANSFER_AWAITING_VERIFICATION`, `TRANSFER_DISPUTED`,
+`FINANCING_OFFER`, `FUNDING_VERIFIED`, `REPAYMENT_MILESTONE`, `FEE_DUE`,
+`FEE_PAID`, `REVIEW_FLAGGED`, `COUNT_REVIEWED`, `LOW_STOCK`,
+`CONSIGNMENT_NEAR_LIMIT`, `DEPOT_CHECKIN_DUE`, `ENTITY_VERIFIED`, `ALERT`, …),
+`title`, `body`, `deep_link` (jsonb `{screen, record_id}`), `reference_type`,
+`reference_id`, `read_at?`, `created_at`. RLS: `recipient_id = (select
+auth.uid())`. Marked read via `mark_notifications_read` / `mark_all_notifications_read`.
+
+**Delivery = polling, not realtime.** Each app fetches unread on foreground and
+on a slow interval (~60–120 s) while active. A notification centre in the shared
+shell shows the unread count and badges `ACTION_REQUIRED` separately; tapping
+deep-links to the target screen + record. No per-user subscription.
+
+**`notifications_outbox`** — external fan-out for the subset of notifications
+that must reach a user who is not looking at the app. INSERT-only by RPCs,
+alongside the `notifications` row. `notification_id?` (FK), `channel`
+(`sms|push`), `recipient`, `template`, `params` (jsonb), `status`
+(`PENDING|SENT|FAILED`), `attempts`, `sent_at?`, `created_at`. Drained every
+minute by `notify`. SMS at launch; push is a fast-follow (§11).
+
+**`device_tokens`** (push fast-follow) — `profile_id` (FK), `platform`
+(`android`), `token`, `last_seen_at`. Registered via `register_device_token`.
 
 ### 5.13 Verification & location (§6.3)
 
@@ -745,16 +769,23 @@ internally. Grouped by area.
 - `resolve_financing_dispute(p_invoice_financing_id, p_resolution, p_new_status)` — `REGIONAL_MANAGER`/`ADMIN`.
 - `post_fintech_adjustment(p_fintech_agent_id, p_invoice_financing_id, p_kind, p_amount, p_reason, p_method, p_reference)` — `ADMIN`; `CORRECTION`/`BONUS`/`REFUND` only.
 
-### Alerts & master data
+### Notifications, alerts & master data
+- `mark_notifications_read(p_notification_ids uuid[])` / `mark_all_notifications_read()` — any authenticated user, own rows only (sets `read_at`).
+- `register_device_token(p_platform, p_token)` — any authenticated user (push fast-follow).
 - `acknowledge_alert(p_alert_id)` / `resolve_alert(p_alert_id, p_note)` — role-appropriate to the alert's scope.
 - `upsert_product(...)`, `upsert_warehouse(...)`, `upsert_market_zone(...)`,
-  `assign_zone_manager(...)`, `invite_staff(p_email, p_role, p_zone_or_warehouse)` — `ADMIN`/`SUPER_ADMIN`.
+  `assign_zone_manager(...)`, `invite_staff(p_email, p_role, p_zone_or_warehouse)`,
+  `upsert_verification_config(...)` — `ADMIN`/`SUPER_ADMIN`.
 
 ---
 
 ## 8. Screens & dashboards by role
 
 ### 8.1 `apps/mobile-android`
+
+Shared shell: bottom-tab bar + a header **notification centre** (bell with unread
+count, `ACTION_REQUIRED` badged separately) reading `notifications` — polled on
+foreground and every ~60–120 s while active; tap deep-links to the item.
 
 #### FIELD_AGENT
 | Screen | Purpose | Data source |
@@ -822,7 +853,8 @@ Everything the FIELD_AGENT has, plus:
 
 ### 8.2 `apps/desktop-windows`
 
-Shared shell: left nav, global search, alert/notification centre, user menu.
+Shared shell: left nav, global search, **notification centre** (`notifications`,
+polled — unread count + `ACTION_REQUIRED` badge), alert centre, user menu.
 Every dashboard reads **only cache tables** and polls on an interval.
 
 #### REGIONAL_MANAGER (scoped to assigned zones)
@@ -899,6 +931,8 @@ No write actions for `AUDITOR` beyond exporting.
 | `fintech_agents`, `fintech_agent_stats` | own + registering agent + zone manager + HQ | RPC |
 | `invoice_financings`, `invoice_financing_events` | fintech (own) + sales agent (own) + zone manager + HQ | RPC |
 | `fintech_adjustments` | fintech (own) + HQ | RPC (`ADMIN`) |
+| `notifications` | `recipient_id = (select auth.uid())` | RPC (`mark_*_read` — own rows; inserts by other RPCs / jobs) |
+| `device_tokens` | own | RPC (`register_device_token`) |
 | `alerts` | scoped to zone/warehouse/agent + HQ | RPC (ack/resolve) |
 | `audit_logs` | `ADMIN`, `SUPER_ADMIN`, `AUDITOR`, `COMPLIANCE_OFFICER` | trigger only |
 | `daily_sales_rollup`, `zone_health`, `fintech_program_health` | HQ; zone rows visible to that zone's manager | job only |
@@ -916,8 +950,9 @@ No write actions for `AUDITOR` beyond exporting.
   `customer_credit_profile` counters.
 - **Returns / refunds** as a first-class flow (handled ad hoc via
   `post_adjustment` and `post_fintech_adjustment` until specified).
-- **Route optimisation** internals, promotions/price lists, push notifications
-  (SMS only at launch), gamification.
+- **Push notifications (FCM).** Launch has the in-app `notifications` inbox
+  (polled) + SMS escalation only; push is a fast-follow (§11).
+- **Route optimisation** internals, promotions/price lists, gamification.
 - **Prisma / Docker** local schema tooling — replaced by the Supabase CLI local
   stack.
 
@@ -934,6 +969,9 @@ No write actions for `AUDITOR` beyond exporting.
    `record_fintech_funding` / `verify_fintech_funding` / `process_fintech_fee`.
 3. **Price lists** — zone- and custody-type-scoped pricing, read by the pricing
    helper the order RPC already uses.
+4. **Push notifications** — `device_tokens` + `register_device_token` (both in
+   the launch schema), `notify`'s push channel, background delivery for
+   `ACTION_REQUIRED` notification types. In-app inbox + SMS already cover launch.
 
 ---
 
