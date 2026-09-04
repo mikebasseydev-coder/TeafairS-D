@@ -17,11 +17,16 @@ no dedicated server, no container orchestration, no DevOps. The entire backend i
 Supabase: Postgres, Auth (with MFA), Storage, one Edge Function, and `pg_cron`.
 Two client apps talk to it directly:
 
-- **`apps/mobile-android`** — React Native, the field app (sales agents, depot
-  reps, warehouse managers, fintech agents)
-- **`apps/desktop-windows`** — React Native Windows, the HQ app (admins, regional
-  managers, auditors). This replaces the previously-planned Next.js web platform.
-  There is no web target.
+- **`apps/mobile-android`** — Expo / React Native. The field app (sales agents,
+  depot reps, warehouse managers, fintech agents) **plus HQ-on-the-go** for
+  `REGIONAL_MANAGER` and `COMPLIANCE_OFFICER` — a mobile subset: dashboards +
+  approval/triage queues, no master-data CRUD. 6 roles total.
+- **`apps/desktop-windows`** — bare React Native + `react-native-windows`. The
+  full HQ workstation (all 5 HQ roles). Replaces the previously-planned Next.js
+  web platform. There is no web target.
+
+Architecture and scaffold detail (framework choice, `packages/` layout, build
+pipeline, local dev): `docs/superpowers/specs/2026-09-04-architecture-and-scaffold-design.md`.
 
 The flagship business capability is the Route-to-Market omni-channel sales and
 inventory platform, plus an **invoice-financing feature** ("Micro / Invoice
@@ -202,9 +207,11 @@ SQL helper against a warehouse's stored `latitude`/`longitude` + `radius_km`.
 
 ### 3.8 Client cache & offline
 
-Field agents work on 2G in market stalls. `apps/mobile-android` keeps a
-**persistent client cache** + a **write queue**; `apps/desktop-windows` is
-online-only (HQ has connectivity).
+Field agents work on 2G in market stalls. The **field roles** in
+`apps/mobile-android` keep a **persistent client cache** + a **write queue**. HQ
+roles on mobile (`REGIONAL_MANAGER`, `COMPLIANCE_OFFICER`) and all of
+`apps/desktop-windows` are **online-only** — approving against stale state makes
+no sense.
 
 **What is cached** — only data the agent could already read online (RLS still
 applies at fetch time), scoped to their zone/warehouse:
@@ -281,8 +288,8 @@ New config: `verification_config.max_offline_age_hours` (default 48).
 |---|---|---|---|
 | `SUPER_ADMIN` | HQ | desktop-windows | global; destructive/config actions |
 | `ADMIN` | HQ | desktop-windows | global; master data, users, finance, fintech program |
-| `REGIONAL_MANAGER` | HQ | desktop-windows | assigned zones (`zone_managers`) |
-| `COMPLIANCE_OFFICER` | HQ | desktop-windows | global; verification-review + fraud-alert triage only. **Unassigned at launch** — `REGIONAL_MANAGER` covers the work until volume justifies staffing it |
+| `REGIONAL_MANAGER` | HQ | desktop-windows **+ mobile-android** | assigned zones (`zone_managers`) |
+| `COMPLIANCE_OFFICER` | HQ | desktop-windows **+ mobile-android** | global; verification-review + fraud-alert triage only. **Unassigned at launch** — `REGIONAL_MANAGER` covers the work until volume justifies staffing it |
 | `AUDITOR` | HQ | desktop-windows | global **read-only** + reconciliation/compliance tools |
 | `WAREHOUSE_MANAGER` | field | mobile-android | one warehouse (`profiles.warehouse_id`) |
 | `INFORMAL_REP` | field | mobile-android | one consignment depot in an area market (see below) |
@@ -931,6 +938,23 @@ Everything the FIELD_AGENT has, plus:
 | Fees detail | fees received from TEFAIR over time, per-deal breakdown (success vs default basis), adjustments | `fintech_agent_stats`, `fintech_adjustments` |
 | Outlets (read-only) | credit status of outlets I finance for | `customer_credit_profile` (RLS, limited columns) |
 | Profile | business info, provider account, change PIN, MFA, sign out | Auth |
+
+#### REGIONAL_MANAGER / COMPLIANCE_OFFICER (HQ-on-the-go — online only)
+
+A mobile subset of the desktop screens (§8.2): dashboards + approval/triage.
+**No** master-data CRUD, user management, bulk reports, or the audit-log browser.
+
+| Screen | Purpose | Data source |
+|---|---|---|
+| Login / MFA | auth | Supabase Auth |
+| **Dashboard** | RM: mobile "Regional Health" (zone cards). CO: mobile "Review Queue" | `zone_health`, `fintech_program_health` / `*_verifications`, `alerts` |
+| Verification queue | pending outlets, guarantors, fintech agents; `NEEDS_REVIEW` deliveries/transfers → approve / reject | `verify_outlet`, `verify_guarantor`, `verify_fintech_agent`, `resolve_verification_review` |
+| Disputes | transfer & financing disputes → resolve | `resolve_transfer_dispute`, `resolve_financing_dispute` |
+| Financing | region deals, funding-verification queue (CO/RM as delegated) | `invoice_financings`, `verify_fintech_funding` |
+| Stock count review | accept / reject | `review_stock_count` |
+| Alerts | region / fraud alerts → acknowledge / resolve | `acknowledge_alert`, `resolve_alert` |
+| Location updates | approve depot/outlet moves | `approve_location_update` |
+| Profile | — | Auth |
 
 ### 8.2 `apps/desktop-windows`
 
