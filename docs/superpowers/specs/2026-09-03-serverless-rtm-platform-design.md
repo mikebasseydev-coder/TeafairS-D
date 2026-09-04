@@ -163,7 +163,7 @@ it will call the same RPCs.
 | `reconcile_stock_balances()` | nightly | recompute balances from ledger, alert on any drift |
 | `reconcile_financials()` | nightly | ledger vs `outlet_balances` / `consignment_balances` / `customer_credit_profile`, alert on drift |
 | `run_fraud_scans()` | nightly | the fraud rules in §6 → alerts |
-| `expire_pending_verifications()` | hourly | offline-captured verification bundles never reconciled → `NEEDS_REVIEW` |
+| `expire_pending_verifications()` | hourly | offline bundles never reconciled → `NEEDS_REVIEW`; `NEEDS_REVIEW` items past their SLA → escalate to `ADMIN`, alert |
 | `downgrade_stale_photos()` | nightly | verification/delivery photos older than `photo_retention_days` on non-disputed records → thumbnail, purge full-res |
 | `drain_notifications_outbox()` | every 1 min | invoke the `notify` Edge Function |
 
@@ -204,6 +204,7 @@ SQL helper against a warehouse's stored `latitude`/`longitude` + `radius_km`.
 | `SUPER_ADMIN` | HQ | desktop-windows | global; destructive/config actions |
 | `ADMIN` | HQ | desktop-windows | global; master data, users, finance, fintech program |
 | `REGIONAL_MANAGER` | HQ | desktop-windows | assigned zones (`zone_managers`) |
+| `COMPLIANCE_OFFICER` | HQ | desktop-windows | global; verification-review + fraud-alert triage only. **Unassigned at launch** — `REGIONAL_MANAGER` covers the work until volume justifies staffing it |
 | `AUDITOR` | HQ | desktop-windows | global **read-only** + reconciliation/compliance tools |
 | `WAREHOUSE_MANAGER` | field | mobile-android | one warehouse (`profiles.warehouse_id`) |
 | `INFORMAL_REP` | field | mobile-android | one consignment depot in an area market (see below) |
@@ -256,7 +257,7 @@ timestamps `TIMESTAMPTZ`. All PKs `uuid DEFAULT gen_random_uuid()` except
 
 | Enum | Values |
 |---|---|
-| `user_role` | SUPER_ADMIN, ADMIN, REGIONAL_MANAGER, AUDITOR, WAREHOUSE_MANAGER, INFORMAL_REP, FIELD_AGENT, FINTECH_AGENT |
+| `user_role` | SUPER_ADMIN, ADMIN, REGIONAL_MANAGER, COMPLIANCE_OFFICER, AUDITOR, WAREHOUSE_MANAGER, INFORMAL_REP, FIELD_AGENT, FINTECH_AGENT |
 | `user_status` | PENDING_VERIFICATION, ACTIVE, SUSPENDED, LOCKED |
 | `entity_status` | PENDING_VERIFICATION, ACTIVE, SUSPENDED |
 | `zone_tier` | INTER_STATE, LAGOS_INTRA_CITY, OTHER_INTRA_STATE |
@@ -568,6 +569,11 @@ location is flagged.
 `capture_samples` (jsonb — the multi-sample GPS median), `status`
 (`PENDING|APPROVED|REJECTED`), `reviewed_by?`, `reviewed_at?`.
 
+**`verification_reviews`** — INSERT-only. `kind` (`TRANSFER|DELIVERY`),
+`verification_id`, `agent_id` (FK), `decision` (`CLEARED|CONFIRMED_ISSUE`),
+`note`, `reviewed_by` (FK), `reviewed_at`. The trailing-window input to an
+agent's computed anomaly score.
+
 ### 5.14 Storage buckets
 
 All private. `transfer_photos`, `count_photos`, `delivery_photos`, `signatures`,
@@ -660,6 +666,28 @@ rule) — this replaces any fictional "tower registry".
 on-site; `REGIONAL_MANAGER` approves; the location's `latitude`/`longitude` and
 its `location_cell_observations` warm-up reset.
 
+**Review is assurance, never a gate.** By the time a `NEEDS_REVIEW` row exists the
+stock has already moved and the order is `DELIVERED`. The item:
+- carries an SLA clock; unreviewed past SLA → `expire_pending_verifications`
+  escalates it to `ADMIN` and alerts;
+- **never blocks** the transaction or the agent's next action;
+- its resolution feeds the agent's **anomaly score** — a rolling count of
+  `CONFIRMED_ISSUE` reviews + open fraud alerts over a trailing window, *computed*
+  by the tier selector, not a stored counter — which raises the *tier* of that
+  agent's *future* transactions (T1 → T2 → T3).
+
+So an unworked backlog degrades to "trusted more than ideal for a window," not
+"operations halt". At launch the queue is worked by `REGIONAL_MANAGER`;
+`COMPLIANCE_OFFICER` is staffed when volume justifies it. Keep tier thresholds
+conservative so only genuinely anomalous transactions generate a review item.
+
+**Platform.** Verification and depot heartbeat are **`apps/mobile-android`
+only, by design** — HQ (`desktop-windows`) users are never at a depot or outlet.
+`depot_checkins` / `delivery_verifications` are never written from Windows;
+`location_cell_observations` covers only `WAREHOUSE` / `OUTLET`. Coarse IP-geo on
+HQ login (impossible-travel detection) is an auth-session-security concern,
+deferred to the auth-hardening follow-on — not this spec.
+
 ---
 
 ## 7. RPC surface (the entire write API)
@@ -703,6 +731,7 @@ internally. Grouped by area.
 - `receive_stock(p_warehouse_id, p_lines jsonb, p_reference, p_photo_path, p_waybill_photo_path, p_idempotency_key)` — `WAREHOUSE_MANAGER`; `RECEIVED` movements (inbound supply, not a transfer); records a T0/T1 verification (pre-registered depot + photo).
 - `depot_checkin(p_warehouse_id, p_signal_bundle jsonb)` — any staff assigned to the warehouse; passive on login, weekly photo prompt; inserts `depot_checkins`, upserts `location_cell_observations`.
 - `request_location_update(p_location_type, p_location_id, p_new_lat, p_new_lng, p_new_address, p_capture_samples jsonb)` — `WAREHOUSE_MANAGER`/`FIELD_AGENT`; `approve_location_update(p_request_id, p_decision)` — `REGIONAL_MANAGER`/`ADMIN`; on approve, updates the location and resets its cell warm-up.
+- `resolve_verification_review(p_kind, p_verification_id, p_decision, p_note)` — `REGIONAL_MANAGER`/`COMPLIANCE_OFFICER`/`ADMIN`; `p_kind` = `TRANSFER|DELIVERY`; `p_decision` = `CLEARED|CONFIRMED_ISSUE`; sets `review_status`; on `CONFIRMED_ISSUE` writes a `verification_reviews` row (the trailing-window input to the agent's anomaly score) and opens an alert.
 
 ### Financing
 - `create_invoice_financing(p_order_id, p_fintech_agent_id, p_fee_rate, p_idempotency_key)` — `FIELD_AGENT`; order belongs to caller, is `CONFIRMED`+, channel `FINTECH_FINANCED`, has an `ACTIVE` guarantor, not already financed; fintech `ACTIVE`, indemnity accepted, same zone; `fee_rate` in `(0, 10]`; `invoice_total` = order total; status `PENDING`; `customer_ledger` `FINANCED`; queues fintech notification + realtime.
@@ -809,6 +838,15 @@ Every dashboard reads **only cache tables** and polls on an interval.
 | Alerts | region alerts, acknowledge / resolve | `acknowledge_alert`, `resolve_alert` |
 | Reports | sales by zone/agent/product, debt aging, consignment exposure, financing performance, agent productivity | cache tables + read views |
 
+#### COMPLIANCE_OFFICER (unassigned at launch — `REGIONAL_MANAGER` covers this)
+| Screen | Purpose | Data source |
+|---|---|---|
+| **Dashboard — "Review Queue"** | `NEEDS_REVIEW` deliveries & transfers with SLA clocks; fraud alerts (cell drift, depot silent, GPS-spoof, collusion, self-dealing) grouped by agent/pair | `delivery_verifications`, `transfer_verifications`, `alerts` |
+| Review item | signal bundle (photo, GPS, cell, signature), history for the agent/pair → `CLEARED` / `CONFIRMED_ISSUE` | `resolve_verification_review` |
+| Agent risk | anomaly-flag score per agent, tier history, recent flags | `profiles` + verification history |
+| Alert triage | acknowledge / resolve / escalate fraud alerts | `acknowledge_alert`, `resolve_alert` |
+| Read-only | orders, transfers, financing deals, ledgers (no writes beyond review actions) | business tables |
+
 #### ADMIN (global — all of the above unscoped, plus)
 | Screen | Purpose | Data source |
 |---|---|---|
@@ -842,6 +880,9 @@ No write actions for `AUDITOR` beyond exporting.
 
 ## 9. RLS policy inventory (summary)
 
+"HQ" below = `SUPER_ADMIN`, `ADMIN`, `REGIONAL_MANAGER` (zone-scoped),
+`COMPLIANCE_OFFICER` (global read), `AUDITOR` (global read).
+
 | Table | SELECT scope | Writes |
 |---|---|---|
 | `profiles` | self; HQ all; zone manager sees zone staff | self-`UPDATE` (display fields, trigger-guarded); rest RPC |
@@ -851,7 +892,7 @@ No write actions for `AUDITOR` beyond exporting.
 | `orders`, `order_items` | agent's own + warehouse's + zone manager + HQ | RPC |
 | `inventory_movements`, `stock_balances`, `consignment_balances`, `stock_counts` | warehouse + zone manager + HQ | RPC (movements INSERT-only, no update/delete) |
 | `inventory_transfers`, `transfer_items`, `transfer_verifications`, `transfer_disputes` | source/dest warehouse + zone managers + HQ | RPC |
-| `delivery_verifications`, `depot_checkins`, `location_update_requests` | agent's own + warehouse + zone manager + HQ | RPC (verifications INSERT-only) |
+| `delivery_verifications`, `depot_checkins`, `location_update_requests`, `verification_reviews` | agent's own + warehouse + zone manager + HQ | RPC (verifications INSERT-only; review sets `review_status` via `resolve_verification_review` — `REGIONAL_MANAGER`/`COMPLIANCE_OFFICER`/`ADMIN`) |
 | `verification_config` | all authenticated (read) | RPC (`ADMIN`) |
 | `location_cell_observations` | zone manager + HQ | job/RPC upsert only |
 | `payments`, `remittances` | zone-scoped + HQ | RPC (INSERT-only) |
@@ -859,7 +900,7 @@ No write actions for `AUDITOR` beyond exporting.
 | `invoice_financings`, `invoice_financing_events` | fintech (own) + sales agent (own) + zone manager + HQ | RPC |
 | `fintech_adjustments` | fintech (own) + HQ | RPC (`ADMIN`) |
 | `alerts` | scoped to zone/warehouse/agent + HQ | RPC (ack/resolve) |
-| `audit_logs` | `ADMIN`, `SUPER_ADMIN`, `AUDITOR` | trigger only |
+| `audit_logs` | `ADMIN`, `SUPER_ADMIN`, `AUDITOR`, `COMPLIANCE_OFFICER` | trigger only |
 | `daily_sales_rollup`, `zone_health`, `fintech_program_health` | HQ; zone rows visible to that zone's manager | job only |
 | `notifications_outbox` | none (service role only) | RPC insert; `notify` updates |
 
@@ -939,14 +980,11 @@ Follow-on documents (not this spec):
    secure display at verification time?
 6. **Transfer GPS tolerance** — confirm `radius_km` per warehouse is the right
    knob, and the same-zone vs cross-zone tightening factor.
-7. **Verification review capacity** — who works the `NEEDS_REVIEW` /
-   cell-drift / depot-silent backlog day to day, `REGIONAL_MANAGER` or a
-   dedicated ops role? Sets how aggressive the tier thresholds should be.
-8. **Cell-ID capture on Windows** — `depot_checkins` cell capture is
-   Android-only; on `desktop-windows` the heartbeat is login + GPS/IP only.
-   Acceptable?
-9. **Auditor exports** — any regulatory format required (CBN reporting?), or is
+7. **Verification review SLA** — how many days before a `NEEDS_REVIEW` item
+   auto-escalates to `ADMIN`? (Decided: `REGIONAL_MANAGER` works the queue,
+   `COMPLIANCE_OFFICER` staffed later, review never blocks — §6.3.)
+8. **Auditor exports** — any regulatory format required (CBN reporting?), or is
    CSV sufficient?
-10. **Staff onboarding** — do `WAREHOUSE_MANAGER`/`FIELD_AGENT` accounts get
-    created by `ADMIN` invite only, or can a `REGIONAL_MANAGER` create field staff
-    in their zones?
+9. **Staff onboarding** — do `WAREHOUSE_MANAGER`/`FIELD_AGENT` accounts get
+   created by `ADMIN` invite only, or can a `REGIONAL_MANAGER` create field staff
+   in their zones?
