@@ -24,9 +24,13 @@ Two client apps talk to it directly:
   There is no web target.
 
 The flagship business capability is the Route-to-Market omni-channel sales and
-inventory platform, plus a **receivables-factoring feature** ("Micro / Invoice
-Discount") that sells credit invoices to Fintech agents (OPay, PalmPay,
-Moniepoint, …) at a discount to accelerate cash flow and offload default risk.
+inventory platform, plus an **invoice-financing feature** ("Micro / Invoice
+Discount"): a Fintech agent (OPay, PalmPay, Moniepoint, …) pays TEFAIR an invoice
+in full and immediately, then collects from the customer over time. TEFAIR never
+carries the principal — the customer's debt is to the Fintech, the Fintech is
+indemnified at signup and the customer names a guarantor — and TEFAIR's cost is a
+capped fee: the negotiated rate (≤ 10%) on successful repayment, or a flat 10%
+compensation if the Fintech declares default.
 
 ### The cost objective, made concrete
 
@@ -67,11 +71,14 @@ Minimising Supabase spend drives the whole design:
    provisional balances. Mistakes are corrected by reversal rows, never edits.
    The ledger reconciles to the cache every night (drift alert = 0). Every
    sensitive change is in `audit_logs`.
-5. **The factoring loop closes without HQ touching the database.** A field agent
-   registers an outlet and a fintech agent, HQ verifies both, the agent places an
-   order, factors it, the fintech funds it (recorded and finance-verified), the
-   fintech records collections, the invoice reaches `COLLECTED`, and
-   `fintech_agent_stats` + `customer_credit_profile` reflect it.
+5. **The financing loop closes without HQ touching the database.** A field agent
+   registers an outlet and a fintech agent (who accepts the indemnity), HQ
+   verifies both, the agent places an order and creates a financing deal, the
+   fintech pays TEFAIR in full (recorded and finance-verified), the fintech
+   records customer repayments until complete (or declares default), TEFAIR pays
+   the fee — negotiated ≤ 10% on success, flat 10% compensation on default — and
+   `fintech_agent_stats` + `customer_credit_profile` reflect it — every step an
+   RPC with a screen, no manual SQL.
 6. **Both apps ship.** Signed `Teafair.apk` and `Teafair.msix`, built from
    `apps/`, sharing `packages/shared-*`, talking only to Supabase.
 7. **RLS performance holds.** `EXPLAIN` on every hot list/dashboard query shows
@@ -151,18 +158,19 @@ it will call the same RPCs.
 | `refresh_zone_health()` | every 20 min | populate `zone_health` |
 | `refresh_fintech_stats()` | every 30 min | populate `fintech_agent_stats`, `fintech_program_health` |
 | `expire_stale_transfers()` | hourly | `PENDING` past `expires_at` → `EXPIRED`, release reservation |
-| `flag_overdue_invoices()` | nightly | past `collection_deadline` and not `COLLECTED` → alert; auto-`DEFAULTED` after grace |
+| `flag_financing_fees_due()` | nightly | `REPAID` or `DEFAULTED` invoices with no `fee_paid_at` → surface in the ADMIN fee queue (negotiated fee / flat-10% compensation) |
+| `flag_stale_financing()` | nightly | `COLLECTING` past `expected_repayment_date` → alert; the Fintech decides whether to `declare_default` |
 | `reconcile_stock_balances()` | nightly | recompute balances from ledger, alert on any drift |
-| `reconcile_financials()` | nightly | ledger vs `outlet_balances` / `customer_credit_profile`, alert on drift |
-| `run_fraud_scans()` | nightly | the five factoring fraud rules → alerts |
+| `reconcile_financials()` | nightly | ledger vs `outlet_balances` / `consignment_balances` / `customer_credit_profile`, alert on drift |
+| `run_fraud_scans()` | nightly | the six financing fraud rules → alerts |
 | `drain_notifications_outbox()` | every 1 min | invoke the `notify` Edge Function |
 
 ### 3.5 Realtime
 
 One channel: a `FINTECH_AGENT` subscribes to `postgres_changes` on
-`invoice_discounts` filtered to `fintech_agent_id = <their id>`, so newly offered
-invoices and status changes appear without polling. Every other screen refetches
-on focus. HQ dashboards poll their cache tables on an interval.
+`invoice_financings` filtered to `fintech_agent_id = <their id>`, so newly
+offered deals and status changes appear without polling. Every other screen
+refetches on focus. HQ dashboards poll their cache tables on an interval.
 
 ### 3.6 Extensions
 
@@ -196,13 +204,23 @@ SQL helper against a warehouse's stored `latitude`/`longitude` + `radius_km`.
 | `REGIONAL_MANAGER` | HQ | desktop-windows | assigned zones (`zone_managers`) |
 | `AUDITOR` | HQ | desktop-windows | global **read-only** + reconciliation/compliance tools |
 | `WAREHOUSE_MANAGER` | field | mobile-android | one warehouse (`profiles.warehouse_id`) |
-| `INFORMAL_REP` | field | mobile-android | one zone; runs a depot (field-agent duties + depot stock) |
+| `INFORMAL_REP` | field | mobile-android | one consignment depot in an area market (see below) |
 | `FIELD_AGENT` | field | mobile-android | one zone (`profiles.market_zone_id`) |
-| `FINTECH_AGENT` | external | mobile-android | own invoices, own stats, outlets in `operation_zone_id` (read) |
+| `FINTECH_AGENT` | external | mobile-android | own financing deals, own stats, outlets in `operation_zone_id` (read) |
 
 No `CUSTOMER` role at launch. Outlets (shop owners) are data records created by
 field agents; they do not authenticate. View-only customer login is a planned
 fast-follow (§11).
+
+**`INFORMAL_REP` is a consignment sub-distributor** — the pivotal field role.
+They run a depot (a `warehouse` of `type = INFORMAL_REP_DEPOT`,
+`custody_type = CONSIGNMENT`) inside one area market, holding TEFAIR-owned stock
+on consignment. Stock on their premises stays TEFAIR's asset until sold; as it
+sells through orders sourced from their depot they accrue **cash owed to TEFAIR**
+against a `debt_limit`, tracked in `consignment_balances` (§5.4) and remitted via
+`record_remittance` (§7). Field agents in that market draw stock from the rep's
+depot. Their app duties are field-agent duties **plus** depot custody (receive,
+count, verify inbound transfers, remit).
 
 **RLS helper functions** (private schema, `SECURITY DEFINER STABLE`, `EXECUTE`
 revoked from `anon`): `auth_uid()`, `current_role()`, `current_zone()`,
@@ -243,11 +261,11 @@ timestamps `TIMESTAMPTZ`. All PKs `uuid DEFAULT gen_random_uuid()` except
 | `warehouse_type` | CENTRAL_DEPOT, INFORMAL_REP_DEPOT, MICRO_FULFILLMENT, DARK_STORE |
 | `custody_type` | CONSIGNMENT, OUTRIGHT, HYBRID, TEMPORARY |
 | `movement_type` | RECEIVED, SOLD, RESERVED, UNRESERVED, TRANSFER_OUT, TRANSFER_IN, RETURNED, DAMAGED, COUNT_ADJUSTMENT, REVERSAL |
-| `payment_channel` | DIRECT_CASH, CASH_AGENT, FINTECH_FACTORED |
+| `payment_channel` | DIRECT_CASH, CASH_AGENT, FINTECH_FINANCED |
 | `alert_severity` | INFO, WARNING, CRITICAL, EMERGENCY |
 | `fintech_provider` | OPAY, PALMPAY, MONIEPOINT, PAYSTACK, FLUTTERWAVE, KUDA, CARBON, PAGA, FIRST_BANK_MOBILE, OTHER |
 | `fintech_status` | PENDING_VERIFICATION, ACTIVE, SUSPENDED, DEACTIVATED, UNDER_REVIEW |
-| `discount_event_type` | FUNDED, COLLECTION, DEFAULT_DECLARED, SETTLED, DISPUTED, CANCELLED |
+| `financing_event_type` | FUNDED, FUNDING_VERIFIED, CUSTOMER_REPAYMENT, REPAYMENT_COMPLETE, FEE_PAID, DEFAULT_DECLARED, DISPUTED, CANCELLED |
 
 ### 5.2 Workflow statuses (`text` + `CHECK` — evolve without `ALTER TYPE`)
 
@@ -255,10 +273,9 @@ timestamps `TIMESTAMPTZ`. All PKs `uuid DEFAULT gen_random_uuid()` except
 |---|---|
 | `orders.status` | PENDING, CONFIRMED, DISPATCHED, DELIVERED, CANCELLED |
 | `inventory_transfers.status` | PENDING, IN_TRANSIT, DELIVERED, RECONCILED, DISPUTED, CANCELLED, EXPIRED |
-| `invoice_discounts.status` | PENDING, FUNDED, COLLECTING, COLLECTED, SETTLED, DEFAULTED, DISPUTED, CANCELLED |
+| `invoice_financings.status` | PENDING, FUNDED, COLLECTING, REPAID, FEE_PAID, DEFAULTED, DISPUTED, CANCELLED |
 | `stock_counts.status` | PENDING_REVIEW, ACCEPTED, REJECTED |
 | `transfer_disputes.status` | OPEN, RESOLVED |
-| `settlements.status` | PENDING, PROCESSING, COMPLETED, FAILED, REVERSED |
 | `alerts.status` | OPEN, ACKNOWLEDGED, RESOLVED |
 
 ### 5.3 Identity & geography
@@ -305,14 +322,25 @@ is the only reader the client trusts for price** — clients never send prices.
 Available = `on_hand - reserved`. `reconcile_stock_balances()` recomputes from the
 ledger nightly and alerts on any mismatch.
 
+**`consignment_balances`** — RPC-maintained cache for `INFORMAL_REP_DEPOT` /
+`CONSIGNMENT` warehouses. `warehouse_id` (PK), `stock_value_held` (TEFAIR-owned
+stock currently at the depot, at cost), `cash_owed` (accrued as stock sells
+through the depot, minus remittances), `remitted_to_date`, `debt_limit` (copied
+from `warehouses` for the drift check), `updated_at`. Maintained by `place_order`
+(accrues `cash_owed` when a depot is the source), `record_remittance` (reduces
+it), and `receive_stock`/transfer RPCs (adjust `stock_value_held`).
+`reconcile_financials()` recomputes from the ledger + `payments` +
+`remittances` nightly.
+
 ### 5.5 Orders
 
 **`orders`** — `order_number` (unique, `ORD-YYYYMMDD-NNNN`), `outlet_id` (FK),
 `agent_id` (FK profile), `market_zone_id` (FK), `source_warehouse_id` (FK),
-`status`, `payment_channel`, `subtotal`, `discount` (default 0), `tax`
-(default 0), `total` **GENERATED** `subtotal - discount + tax`, `amount_paid`
-(default 0), `notes`, `idempotency_key` (unique), `created_by`, `confirmed_by`,
-`confirmed_at`.
+`guarantor_id` (FK `outlet_guarantors`, nullable — **required by the RPC for any
+non-`DIRECT_CASH` channel**), `status`, `payment_channel`, `subtotal`, `discount`
+(default 0), `tax` (default 0), `total` **GENERATED** `subtotal - discount + tax`,
+`amount_paid` (default 0), `notes`, `idempotency_key` (unique), `created_by`,
+`confirmed_by`, `confirmed_at`.
 
 **`order_items`** — `order_id` (FK, cascade), `product_id` (FK), `quantity`
 (`CHECK > 0`), `unit_price` (set by RPC from `products`), `line_total`
@@ -320,7 +348,10 @@ ledger nightly and alerts on any mismatch.
 
 Two-stage: an order created by a field agent is `PENDING` and only holds a
 provisional stock reservation. `confirm_order` (warehouse manager / HQ) commits
-it.
+it. Any order where stock leaves on credit (`payment_channel` is `CASH_AGENT` or
+`FINTECH_FINANCED`) **must name an `ACTIVE` guarantor on the outlet** — the
+customer is liable for stock collected and the guarantor backs that liability
+(§5.8).
 
 ### 5.6 Transfers
 
@@ -350,28 +381,72 @@ Replaces the ~20 `sender_*`/`receiver_*` columns in the earlier draft.
 `reviewed_at?`, `note?`. `ACCEPTED` → `review_stock_count` posts a
 `COUNT_ADJUSTMENT` movement.
 
-### 5.8 Payments & customer debt
+### 5.8 Payments, customer debt & guarantors
+
+**The customer is liable for stock collected.** Any credit collection
+(`CASH_AGENT` or `FINTECH_FINANCED` channel) requires a named, `ACTIVE`
+guarantor on the outlet — captured in-app so the debt holder (TEFAIR or the
+Fintech) has recourse evidence.
+
+**`outlet_guarantors`** — `outlet_id` (FK), `full_name`, `phone`, `address`,
+`relationship`, `id_document_path` (Storage), `photo_path` (Storage), `status`
+(`entity_status`), `verified_by?`, `verified_at?`, `created_by`. An outlet may
+have several; at least one must be `ACTIVE` before a credit order is allowed.
 
 **`payments`** — INSERT-only. `outlet_id` (FK), `order_id?` (FK), `amount`
 (`CHECK > 0`), `channel` (`payment_channel`), `method`, `reference`, `received_by`
 (FK profile), `verified_by?`, `verified_at?`, `occurred_at`, `idempotency_key`
 (unique).
 
+**`remittances`** — INSERT-only. `INFORMAL_REP` depot cash paid to TEFAIR.
+`warehouse_id` (FK), `amount` (`CHECK > 0`), `method`, `reference`,
+`recorded_by` (FK), `verified_by?`, `verified_at?`, `occurred_at`,
+`idempotency_key` (unique).
+
 **`outlet_balances`** — RPC-maintained cache. `outlet_id` (PK), `total_invoiced`,
 `total_paid`, `balance` **GENERATED** `total_invoiced - total_paid`,
-`open_invoice_count`, `updated_at`.
+`open_invoice_count`, `updated_at`. **A `FINTECH_FINANCED` order does not raise
+`outlet_balances`** — once the Fintech's payment is verified the customer's debt
+is to the Fintech, not TEFAIR (§5.9). If an order was placed on normal credit and
+financed later, `verify_fintech_funding` records a `payments` row that clears the
+TEFAIR balance for that order.
 
 **`customer_ledger`** — INSERT-only. `outlet_id` (FK), `entry_type`
-(`INVOICE|PAYMENT|DEFAULT|ADJUSTMENT`), `amount` (signed), `reference_type`,
-`reference_id`, `description`, `recorded_by`, `occurred_at`.
+(`INVOICE|PAYMENT|DEFAULT|ADJUSTMENT|FINANCED`), `amount` (signed),
+`reference_type`, `reference_id`, `description`, `recorded_by`, `occurred_at`.
 
-### 5.9 Receivables factoring
+### 5.9 Invoice financing ("Micro / Invoice Discount")
 
-Money flow (corrected from the earlier draft): the fintech agent pays TEFAIR
-**90% of the invoice upfront**; the fintech then collects **100% from the
-customer** over the term and keeps the 10% by construction. **TEFAIR never pays
-the fintech.** `settlements` rows exist only for exceptions (refund, promotional
-bonus, correction).
+**Model — TEFAIR's exposure is capped at 10% and it never loses principal.**
+TEFAIR is the merchant; the Fintech agent is the financier.
+
+1. A field agent issues an invoice to a customer for **₦X** = Σ(SKU
+   `unit_price` × qty) for a `CONFIRMED` order. The customer is liable and has a
+   named guarantor (§5.8).
+2. The Fintech agent pays TEFAIR **₦X in full**, immediately. On
+   `verify_fintech_funding` (finance confirms the money landed) TEFAIR has its
+   cash and never loses it.
+3. The customer repays **the Fintech** ₦X on any schedule (proximity
+   cash-collection — many Fintech agents are market traders near the customer).
+   This is a Fintech↔customer debt; TEFAIR only records repayment events.
+4. **On successful repayment** — TEFAIR pays the Fintech a **financing fee** of
+   the negotiated `fee_rate` % of ₦X (field-agent negotiated, **capped at 10%**),
+   paid whenever repayment completes.
+5. **On default** — the Fintech declares bad debt (`DEFAULTED`). TEFAIR pays the
+   Fintech a flat **10% of ₦X** as default compensation ("cost of money" — TEFAIR
+   pays for the float whether or not the downstream customer paid). The Fintech
+   still absorbs the remaining ~90% loss and pursues the customer + guarantor.
+6. Either way TEFAIR's payout to the Fintech is recorded on the invoice with a
+   `fee_basis` of `SUCCESS` or `DEFAULT`; the invoice ends `FEE_PAID`.
+
+**Indemnity.** A Fintech agent cannot be verified until they accept TEFAIR's
+indemnity agreement in-app (e-signature). The indemnity + guarantor are what keep
+TEFAIR's loss to the capped fee — it never carries the principal.
+
+**Self-dealing note.** Many shop owners are themselves Fintech agents. Outlets
+aren't users and Fintech agents are, so there's no data collision, but a Fintech
+financing invoices for an outlet it is connected to is a fraud vector — see the
+collusion / phone-match rules in §6.
 
 **`fintech_agents`** — `profile_id` (FK, unique — the agent's login),
 `provider`, `provider_account_id`, `full_name`, `phone` (unique), `email?`,
@@ -379,34 +454,39 @@ bonus, correction).
 `registered_by` (FK), `status` (`fintech_status`), `verified_by?`,
 `verified_at?`, `secret_pin_hash`, `pin_changed_at`, `pin_attempts`,
 `pin_locked_until`, `funding_capacity?` (soft cap), `invite_code?` (nullable,
-consumed on link). `UNIQUE(provider, provider_account_id)`. No stored running
-totals.
+consumed on link), `indemnity_version?`, `indemnity_accepted_at?`,
+`indemnity_document_path?` (signed copy in Storage). `UNIQUE(provider,
+provider_account_id)`. No stored running totals.
 
 **`fintech_agent_stats`** — cache. `fintech_agent_id` (PK),
-`total_discounted_volume`, `total_earnings`, `outstanding_collections`,
-`total_transactions`, `defaulted_count`, `default_rate`, `avg_collection_days`,
-`last_txn_at`, `updated_at`.
+`total_financed_volume`, `total_fees_earned`, `outstanding_customer_debt`
+(the Fintech's own exposure on `COLLECTING` deals — informational, not TEFAIR's),
+`active_deals`, `completed_deals`, `defaulted_deals`, `default_rate`,
+`avg_repayment_days`, `last_deal_at`, `updated_at`.
 
-**`invoice_discounts`** — `invoice_number` (unique, `INV-YYYYMMDD-NNNN`),
-`order_id` (FK, **unique** — one discount per order), `outlet_id` (FK),
+**`invoice_financings`** — `invoice_number` (unique, `INV-YYYYMMDD-NNNN`),
+`order_id` (FK, **unique** — one financing per order), `outlet_id` (FK),
 `sales_agent_id` (FK), `fintech_agent_id` (FK), `market_zone_id` (FK),
-`discount_rate` (`CHECK BETWEEN 5 AND 25`), `invoice_total`, `discount_amount`
-**GENERATED** `invoice_total * discount_rate / 100`, `fintech_payment_amount`
-**GENERATED** `invoice_total - discount_amount`, `customer_payment_amount`
-(= `invoice_total`), `invoice_date`, `due_date`, `collection_deadline`
-(`invoice_date + 45`), `status`, `funded_at?`, `funding_reference?`,
-`funding_verified_by?`, `funding_verified_at?`, `collected_at?`, `defaulted_at?`,
-`default_handled_by?`, `default_resolution?`, `created_by`.
+`guarantor_id` (FK `outlet_guarantors`), `invoice_total` (₦X),
+`fintech_funding_amount` (= `invoice_total`; stored to guard partial funding),
+`fee_rate` (`CHECK fee_rate > 0 AND fee_rate <= 10` — the negotiated success
+rate), `success_fee_amount` **GENERATED** `invoice_total * fee_rate / 100`,
+`default_fee_amount` **GENERATED** `invoice_total * 0.10`, `status`,
+`invoice_date`, `expected_repayment_date` (`invoice_date + 45`, soft),
+`funded_at?`, `funding_reference?`, `funding_verified_by?`,
+`funding_verified_at?`, `repayment_completed_at?`, `defaulted_at?`,
+`default_note?`, `fee_basis?` (`SUCCESS|DEFAULT`), `fee_paid_amount?`,
+`fee_paid_at?`, `fee_reference?`, `fee_paid_by?`, `created_by`.
 
-**`invoice_discount_events`** — INSERT-only. `invoice_discount_id` (FK),
-`event_type` (`discount_event_type`), `amount?`, `reference?`, `actor_id` (FK),
-`pin_verified` (bool), `note?`, `occurred_at`, `idempotency_key` (unique). This is
-the audit trail; parent `status` is derived by the RPC that writes the event.
+**`invoice_financing_events`** — INSERT-only. `invoice_financing_id` (FK),
+`event_type` (`financing_event_type`), `amount?`, `reference?`, `actor_id` (FK),
+`pin_verified` (bool), `note?`, `occurred_at`, `idempotency_key` (unique). The
+audit trail; parent `status` is derived by the RPC that writes the event.
 
-**`settlements`** — `settlement_reference` (unique), `fintech_agent_id` (FK),
-`invoice_discount_id` (FK), `settlement_type` (`EARNINGS|REFUND|BONUS`), `amount`,
-`status`, `method?`, `reference?`, `processed_by`, `processed_at?`. Exceptions
-only.
+**`fintech_adjustments`** — rare manual corrections/bonuses only.
+`fintech_agent_id` (FK), `invoice_financing_id?` (FK), `kind`
+(`CORRECTION|BONUS|REFUND`), `amount` (signed), `reason`, `method?`,
+`reference?`, `processed_by`, `processed_at`.
 
 **`customer_credit_profile`** — cache. `outlet_id` (PK), `credit_limit`,
 `outstanding_balance`, `open_invoices`, `completed_invoices`,
@@ -429,17 +509,17 @@ on sensitive tables. `table_name`, `record_id`, `action`, `actor_id`, `diff`
 ### 5.11 Aggregation caches
 
 **`daily_sales_rollup`** — `summary_date`, `market_zone_id?`, `warehouse_id?`,
-`agent_id?`, `order_count`, `gross_revenue`, `cash_collected`, `factored_volume`,
+`agent_id?`, `order_count`, `gross_revenue`, `cash_collected`, `financed_volume`,
 `computed_at`. Unique grouping key with `COALESCE(dim, '00000000-…')` so
 company-wide and per-dimension rollups coexist.
 
 **`zone_health`** — `market_zone_id` (PK), `warehouse_count`, `outlet_count`,
 `active_agents`, `stock_value`, `outlet_debt`, `debt_utilization_pct`,
-`open_alerts`, `computed_at`.
+`consignment_owed`, `open_alerts`, `computed_at`.
 
 **`fintech_program_health`** — one row per zone plus a global row.
-`active_agents`, `total_factored_volume`, `total_earnings`,
-`outstanding_collections`, `default_rate`, `avg_collection_days`,
+`active_agents`, `total_financed_volume`, `total_fees_paid`, `fees_due`,
+`fintech_outstanding_debt`, `default_rate`, `avg_repayment_days`,
 `disputes_open`, `computed_at`.
 
 ### 5.12 Notifications
@@ -450,9 +530,10 @@ company-wide and per-dimension rollups coexist.
 
 ### 5.13 Storage buckets
 
-All private. `transfer_photos`, `count_photos`, `signatures`, `product_images`.
-Access via signed URLs minted by RPCs / policies scoped to the requesting role's
-zone.
+All private. `transfer_photos`, `count_photos`, `signatures`, `product_images`,
+`guarantor_documents` (ID + photo), `financing_docs` (signed indemnity, deal
+acknowledgements). Access via signed URLs minted by RPCs / policies scoped to the
+requesting role's zone.
 
 ---
 
@@ -473,21 +554,24 @@ Six layers, all near-zero incremental cost:
    `PENDING` orders hold provisional reservations; a second party confirms.
    Transfers need sender dispatch + receiver receipt; mismatch → `DISPUTED`.
 5. **Immutable history** — `inventory_movements`, `transfer_verifications`,
-   `payments`, `customer_ledger`, `invoice_discount_events`, `audit_logs` have no
-   UPDATE/DELETE policy. Corrections are compensating rows (`REVERSAL`,
-   `ADJUSTMENT`) with a reason and an approver.
-6. **Batch anomaly detection** — nightly `run_fraud_scans()` plus ledger/cache
+   `payments`, `remittances`, `customer_ledger`, `invoice_financing_events`,
+   `audit_logs` have no UPDATE/DELETE policy. Corrections are compensating rows
+   (`REVERSAL`, `ADJUSTMENT`) with a reason and an approver.
+6. **Guarantor gate** — no credit stock (`CASH_AGENT` / `FINTECH_FINANCED`)
+   leaves without a named `ACTIVE` guarantor on the outlet.
+7. **Batch anomaly detection** — nightly `run_fraud_scans()` plus ledger/cache
    reconciliation jobs raise `alerts`; nothing runs per-write.
 
-### Factoring fraud rules (nightly, → `alerts`)
+### Financing fraud rules (nightly, → `alerts`)
 
 | Rule | Trigger |
 |---|---|
 | Default rate | fintech agent's rolling default rate > 5% |
-| Volume cap | fintech agent > 10 new invoice discounts in a day |
-| Payment pattern | collection events clustered unnaturally (e.g. full amount day-1 repeatedly, or all round numbers) |
-| Zone match | invoice's outlet / fintech / agent not all in one zone (also blocked at RPC time; the scan catches drift) |
+| Volume cap | fintech agent > 10 new financing deals in a day |
+| Repayment pattern | repayment events clustered unnaturally (full amount day-1 repeatedly, all round numbers) |
+| Zone match | deal's outlet / fintech / agent not all in one zone (also blocked at RPC time; the scan catches drift) |
 | Collusion | same (fintech agent, outlet) pair above a frequency threshold in a window |
+| Self-dealing | fintech agent's phone / name matches an outlet contact or guarantor on a deal they financed |
 
 ---
 
@@ -498,21 +582,25 @@ internally. Grouped by area.
 
 ### Onboarding
 - `register_outlet(p_business_name, p_contact_name, p_phone, p_address, p_lat, p_lng, p_credit_limit, p_idempotency_key)` — `FIELD_AGENT`/`INFORMAL_REP`; zone from caller; status `PENDING_VERIFICATION`.
-- `verify_outlet(p_outlet_id)` — `ADMIN`/`REGIONAL_MANAGER` (of the zone).
+- `register_guarantor(p_outlet_id, p_full_name, p_phone, p_address, p_relationship, p_id_document_path, p_photo_path, p_idempotency_key)` — `FIELD_AGENT`/`INFORMAL_REP`; status `PENDING_VERIFICATION`.
+- `verify_outlet(p_outlet_id)` / `verify_guarantor(p_guarantor_id)` — `ADMIN`/`REGIONAL_MANAGER` (of the zone).
 - `register_fintech_agent(p_provider, p_provider_account_id, p_full_name, p_phone, p_email, p_business_name, p_business_address, p_idempotency_key)` — `FIELD_AGENT`/`INFORMAL_REP`; creates a `fintech_agents` row (no `profile_id` yet), status `PENDING_VERIFICATION`, returns a one-time `invite_code`.
 - `link_fintech_agent(p_invite_code)` — caller is a freshly phone-OTP-signed-up user; binds `fintech_agents.profile_id = auth.uid()`, sets `profiles.role = FINTECH_AGENT`.
-- `verify_fintech_agent(p_fintech_agent_id)` — `ADMIN`/`REGIONAL_MANAGER`; status `ACTIVE`; generates the 6-digit transaction PIN, stores the bcrypt hash, queues an SMS.
+- `accept_fintech_indemnity(p_indemnity_version, p_signature_path)` — `FINTECH_AGENT` (own, not yet verified); records `indemnity_accepted_at` + stored signed copy. **Required before verification.**
+- `verify_fintech_agent(p_fintech_agent_id)` — `ADMIN`/`REGIONAL_MANAGER`; rejects if indemnity not accepted; status `ACTIVE`; generates the 6-digit transaction PIN, stores the bcrypt hash, queues an SMS.
 - `set_fintech_status(p_fintech_agent_id, p_status, p_reason)` — `ADMIN`.
 - `rotate_warehouse_pin(p_warehouse_id)` / `rotate_fintech_pin(p_fintech_agent_id)` — `ADMIN`; new PIN, SMS.
 
 ### Orders & payments
-- `place_order(p_outlet_id, p_source_warehouse_id, p_items jsonb, p_payment_channel, p_notes, p_idempotency_key)` — `FIELD_AGENT`/`INFORMAL_REP`; validates zone, outlet `ACTIVE`, each product `is_active` and stocked, computes prices, atomically checks `available >= qty` and reserves (`RESERVED` movement + `stock_balances`), inserts `orders` `PENDING` + `order_items`, writes `customer_ledger` `INVOICE`, updates `outlet_balances`.
+- `place_order(p_outlet_id, p_source_warehouse_id, p_guarantor_id, p_items jsonb, p_payment_channel, p_notes, p_idempotency_key)` — `FIELD_AGENT`/`INFORMAL_REP`; validates zone, outlet `ACTIVE`, **`guarantor_id` present and `ACTIVE` when channel is not `DIRECT_CASH`**, each product `is_active` and stocked, computes prices, atomically checks `available >= qty` and reserves (`RESERVED` movement + `stock_balances`), inserts `orders` `PENDING` + `order_items`. For `DIRECT_CASH`/`CASH_AGENT` it writes `customer_ledger` `INVOICE` and raises `outlet_balances`; for `FINTECH_FINANCED` it writes `customer_ledger` `FINANCED` only (no TEFAIR receivable). If the source is an `INFORMAL_REP_DEPOT`, also accrues `consignment_balances.cash_owed`.
 - `confirm_order(p_order_id)` — `WAREHOUSE_MANAGER`(source)/`ADMIN`; `PENDING → CONFIRMED`.
 - `dispatch_order(p_order_id)` — `WAREHOUSE_MANAGER`; `CONFIRMED → DISPATCHED`.
 - `deliver_order(p_order_id, p_signature_path)` — `FIELD_AGENT`; `DISPATCHED → DELIVERED`, converts reservation to `SOLD`.
 - `cancel_order(p_order_id, p_reason)` — releases reservation (`UNRESERVED`), reverses ledger.
 - `record_payment(p_outlet_id, p_order_id, p_amount, p_channel, p_method, p_reference, p_idempotency_key)` — `FIELD_AGENT`/`WAREHOUSE_MANAGER`; inserts `payments`, `customer_ledger` `PAYMENT`, updates `outlet_balances`.
 - `verify_payment(p_payment_id)` — `ADMIN`/`AUDITOR` (finance).
+- `record_remittance(p_warehouse_id, p_amount, p_method, p_reference, p_idempotency_key)` — `INFORMAL_REP`/`WAREHOUSE_MANAGER`; depot cash paid to TEFAIR; inserts `remittances`, reduces `consignment_balances.cash_owed`.
+- `verify_remittance(p_remittance_id)` — `ADMIN`/`AUDITOR` (finance).
 
 ### Transfers
 - `initiate_transfer(p_source_warehouse_id, p_dest_warehouse_id, p_items jsonb, p_idempotency_key)` — `WAREHOUSE_MANAGER`(source)/`ADMIN`; reserves at source, sets `expires_at`, flags `is_cross_zone`.
@@ -527,17 +615,17 @@ internally. Grouped by area.
 - `post_adjustment(p_warehouse_id, p_product_id, p_batch_number, p_qty_delta, p_reason)` — `ADMIN`; explicit `REVERSAL`/adjustment movement with reason.
 - `receive_stock(p_warehouse_id, p_lines jsonb, p_reference)` — `WAREHOUSE_MANAGER`; `RECEIVED` movements (inbound supply, not a transfer).
 
-### Factoring
-- `create_invoice_discount(p_order_id, p_fintech_agent_id, p_discount_rate, p_idempotency_key)` — `FIELD_AGENT`; order belongs to caller, is `CONFIRMED`+, not already discounted; fintech `ACTIVE` and same zone; computes amounts, `due_date`/`collection_deadline`, status `PENDING`; `customer_ledger` `INVOICE`; queues fintech SMS + realtime.
-- `accept_invoice_discount(p_invoice_discount_id)` / `decline_invoice_discount(p_invoice_discount_id, p_reason)` — `FINTECH_AGENT` (own).
-- `record_fintech_funding(p_invoice_discount_id, p_amount, p_reference)` — `FINTECH_AGENT` (own) or `ADMIN`; inserts `FUNDED` event, status `PENDING → FUNDED` (provisional).
-- `verify_fintech_funding(p_invoice_discount_id)` — `ADMIN`/`AUDITOR` (finance); confirms the 90% landed, status `FUNDED → COLLECTING`, releases the invoice to the customer.
-- `record_fintech_collection(p_invoice_discount_id, p_amount, p_reference, p_pin, p_idempotency_key)` — `FINTECH_AGENT` (own); bcrypt PIN check; inserts `COLLECTION` event; when cumulative `>= customer_payment_amount` → status `COLLECTED`, `collected_at`, updates `fintech_agent_stats` + `customer_credit_profile`, `customer_ledger` `PAYMENT`.
-- `declare_default(p_invoice_discount_id, p_note)` — `FINTECH_AGENT` (own) or batch job; status `→ DEFAULTED`, `customer_ledger` `DEFAULT`, alert, credit profile update.
-- `resolve_default(p_invoice_discount_id, p_resolution)` — `REGIONAL_MANAGER`/`ADMIN`.
-- `dispute_invoice_discount(p_invoice_discount_id, p_reason)` — `FINTECH_AGENT` or `FIELD_AGENT`; `→ DISPUTED`, alert.
-- `resolve_invoice_dispute(p_invoice_discount_id, p_resolution, p_new_status)` — `REGIONAL_MANAGER`/`ADMIN`.
-- `process_settlement(p_invoice_discount_id, p_type, p_amount, p_method, p_reference)` — `ADMIN`; `REFUND`/`BONUS`/correction only.
+### Financing
+- `create_invoice_financing(p_order_id, p_fintech_agent_id, p_fee_rate, p_idempotency_key)` — `FIELD_AGENT`; order belongs to caller, is `CONFIRMED`+, channel `FINTECH_FINANCED`, has an `ACTIVE` guarantor, not already financed; fintech `ACTIVE`, indemnity accepted, same zone; `fee_rate` in `(0, 10]`; `invoice_total` = order total; status `PENDING`; `customer_ledger` `FINANCED`; queues fintech notification + realtime.
+- `accept_invoice_financing(p_invoice_financing_id, p_acknowledgement_version)` / `decline_invoice_financing(p_invoice_financing_id, p_reason)` — `FINTECH_AGENT` (own). Accept **requires an in-app acknowledgement** of the deal terms (Fintech carries collection + the ~90% default loss; TEFAIR indemnified and never carries principal; on success TEFAIR pays the negotiated fee, on default TEFAIR pays a flat 10% compensation) — the app must present this panel and record the acknowledgement version; the RPC rejects a stale/missing version.
+- `record_fintech_funding(p_invoice_financing_id, p_amount, p_reference)` — `FINTECH_AGENT` (own) or `ADMIN`; `p_amount` must equal `fintech_funding_amount`; inserts `FUNDED` event, status `PENDING → FUNDED` (provisional).
+- `verify_fintech_funding(p_invoice_financing_id)` — `ADMIN`/`AUDITOR` (finance); confirms the full amount landed; status `FUNDED → COLLECTING`; if the order was previously on TEFAIR credit, records a `payments` row clearing `outlet_balances` for that order.
+- `record_customer_repayment(p_invoice_financing_id, p_amount, p_reference, p_pin, p_idempotency_key)` — `FINTECH_AGENT` (own); bcrypt PIN check; inserts `CUSTOMER_REPAYMENT` event; when cumulative `>= invoice_total` → `REPAYMENT_COMPLETE` event, status `→ REPAID`, `repayment_completed_at`, updates `fintech_agent_stats` + `customer_credit_profile` (positive).
+- `declare_default(p_invoice_financing_id, p_note)` — `FINTECH_AGENT` (own); `ADMIN` may override; only from `COLLECTING`; status `→ DEFAULTED`; `customer_ledger` `DEFAULT`; alert; `customer_credit_profile` (negative). Surfaces in the ADMIN fee queue for the flat-10% default compensation. (The batch job only *alerts* on stale deals — it never auto-defaults.)
+- `process_fintech_fee(p_invoice_financing_id, p_amount, p_method, p_reference)` — `ADMIN` (finance); from `REPAID` → pays `success_fee_amount`, `fee_basis = SUCCESS`; from `DEFAULTED` → pays `default_fee_amount` (flat 10%), `fee_basis = DEFAULT`. `p_amount` must equal the applicable amount. Inserts `FEE_PAID` event, records `fee_paid_amount`/`fee_paid_at`, status `→ FEE_PAID`, updates `fintech_agent_stats.total_fees_earned`.
+- `dispute_invoice_financing(p_invoice_financing_id, p_reason)` — `FINTECH_AGENT` or `FIELD_AGENT`; `→ DISPUTED`, alert.
+- `resolve_financing_dispute(p_invoice_financing_id, p_resolution, p_new_status)` — `REGIONAL_MANAGER`/`ADMIN`.
+- `post_fintech_adjustment(p_fintech_agent_id, p_invoice_financing_id, p_kind, p_amount, p_reason, p_method, p_reference)` — `ADMIN`; `CORRECTION`/`BONUS`/`REFUND` only.
 
 ### Alerts & master data
 - `acknowledge_alert(p_alert_id)` / `resolve_alert(p_alert_id, p_note)` — role-appropriate to the alert's scope.
@@ -556,27 +644,29 @@ internally. Grouped by area.
 | Login / MFA / Forgot password | auth | Supabase Auth |
 | **Dashboard — "My Day"** | today's order count & value, pending confirmations, my open alerts, outstanding outlet debt in zone | `daily_sales_rollup` (agent), `alerts`, `outlet_balances` |
 | Outlets list + map | outlets in my zone, search, credit status | `outlets` + `outlet_balances` (RLS) |
-| Outlet detail | balance, credit limit, order & payment history | `outlets`, `customer_ledger`, `orders` |
+| Outlet detail | balance, credit limit, guarantors, order & payment history | `outlets`, `outlet_guarantors`, `customer_ledger`, `orders` |
 | Register outlet | capture business, contact, GPS, requested limit | `register_outlet` |
-| New order | outlet → warehouse → add products/qty → channel → review totals → submit | `products`, `stock_balances` (read), `place_order` |
+| Register guarantor | name, phone, relationship, ID photo, passport photo | `register_guarantor`, Storage |
+| New order | outlet → warehouse → **guarantor (if credit)** → add products/qty → channel → review totals → submit | `products`, `stock_balances` (read), `place_order` |
 | Orders list + detail | my orders, status, cancel | `orders` (RLS) |
 | Deliver order | confirm delivery + signature capture | `deliver_order`, Storage |
 | Record payment | amount, method, reference | `record_payment` |
-| Create invoice discount | pick confirmed order → pick fintech in zone → rate → summary (invoice / fintech pays / customer pays / deadline) → submit | `create_invoice_discount` |
-| My factored invoices | status of discounts I created | `invoice_discounts` (RLS) |
+| Create financing deal | pick confirmed `FINTECH_FINANCED` order → pick fintech in zone → negotiate fee rate (≤ 10%) → summary (invoice ₦X / fintech pays ₦X / TEFAIR fee) → submit | `create_invoice_financing` |
+| My financing deals | status of deals I created (`PENDING`→`FEE_PAID`, defaults) | `invoice_financings` (RLS) |
 | Register fintech agent | collect provider + KYC → show invite code to share | `register_fintech_agent` |
-| My registered fintechs | verification status | `fintech_agents` (RLS) |
+| My registered fintechs | verification + indemnity status | `fintech_agents` (RLS) |
 | Profile | details, change password, MFA, sign out | Auth |
 
-#### INFORMAL_REP
+#### INFORMAL_REP (consignment depot custodian — §4)
 Everything the FIELD_AGENT has, plus:
 | Screen | Purpose | Data source |
 |---|---|---|
-| **Dashboard — "Depot & Field"** | field KPIs + depot stock value, low stock, incoming transfers | `stock_balances`, `inventory_transfers` |
-| Depot stock | on-hand by product/batch, low-stock flags | `stock_balances` |
+| **Dashboard — "Depot & Field"** | hero: **cash owed to TEFAIR vs `debt_limit`** gauge; consignment stock value; today's sales; low stock; incoming transfers; needs-attention | `consignment_balances`, `stock_balances`, `inventory_transfers`, `alerts` |
+| Depot stock | consignment on-hand by product/batch, low-stock flags | `stock_balances` |
 | Receive stock | record inbound supply | `receive_stock` |
 | Incoming transfers | list, verify receipt (PIN + GPS + photo), reconcile | `verify_transfer`, `reconcile_transfer` |
 | Submit stock count | per-product counted qty | `submit_stock_count` |
+| Remittances | record cash paid to TEFAIR (reduces cash owed), history + verification status | `record_remittance`, `remittances` |
 
 #### WAREHOUSE_MANAGER
 | Screen | Purpose | Data source |
@@ -598,16 +688,17 @@ Everything the FIELD_AGENT has, plus:
 | Screen | Purpose | Data source |
 |---|---|---|
 | Sign up (phone OTP) + invite code | account creation and link | Auth, `link_fintech_agent` |
+| **Indemnity agreement** | read the full terms, e-sign; **blocks everything else until accepted** | `accept_fintech_indemnity`, Storage |
 | Login / MFA / transaction-PIN setup & change | auth + PIN | Auth, `rotate_fintech_pin` |
-| **Dashboard — "Earnings & Collections"** | earnings to date, outstanding collections, active invoices, default rate, weekly activity | `fintech_agent_stats` |
-| Pending invoices (offered) | list (realtime), invoice detail (order, outlet, amount, my 90%, deadline), accept / decline | `invoice_discounts` (realtime), `accept_invoice_discount`, `decline_invoice_discount` |
-| Record funding | amount + bank/transfer reference for the 90% | `record_fintech_funding` |
-| Active collections | `FUNDED`/`COLLECTING` invoices, per-invoice collection progress | `invoice_discounts`, `invoice_discount_events` |
-| Record collection | amount + reference + transaction PIN | `record_fintech_collection` |
-| Declare default / Dispute | with note | `declare_default`, `dispute_invoice_discount` |
-| Completed | `COLLECTED`/`SETTLED` history | `invoice_discounts` |
-| Earnings detail | chart over time, per-invoice breakdown, settlement (refund/bonus) history | `fintech_agent_stats`, `settlements` |
-| Outlets (read-only) | credit status of outlets I factor for | `customer_credit_profile` (RLS, limited columns) |
+| **Dashboard — "Fees & Repayments"** | total fees earned, outstanding customer debt (my exposure), active deals, default rate, weekly activity; new-offer badge; deadlines approaching | `fintech_agent_stats` |
+| Offers (pending) | realtime list; deal detail (order contents, outlet + credit history + guarantor, ₦X, my fee ≤ 10%); **terms & risk panel** → acknowledge → accept / decline | `invoice_financings` (realtime), `accept_invoice_financing`, `decline_invoice_financing` |
+| Record funding | pay TEFAIR ₦X in full → enter bank/transfer reference | `record_fintech_funding` |
+| Active deals | `FUNDED`/`COLLECTING`, per-deal repayment progress bar | `invoice_financings`, `invoice_financing_events` |
+| Record repayment | customer payment to me: amount + reference + transaction PIN | `record_customer_repayment` |
+| Declare default / Dispute | with note — default → I get flat 10% from TEFAIR, absorb the rest | `declare_default`, `dispute_invoice_financing` |
+| Completed | `REPAID` / `FEE_PAID` / `DEFAULTED` history | `invoice_financings` |
+| Fees detail | fees received from TEFAIR over time, per-deal breakdown (success vs default basis), adjustments | `fintech_agent_stats`, `fintech_adjustments` |
+| Outlets (read-only) | credit status of outlets I finance for | `customer_credit_profile` (RLS, limited columns) |
 | Profile | business info, provider account, change PIN, MFA, sign out | Auth |
 
 ### 8.2 `apps/desktop-windows`
@@ -618,26 +709,26 @@ Every dashboard reads **only cache tables** and polls on an interval.
 #### REGIONAL_MANAGER (scoped to assigned zones)
 | Screen | Purpose | Data source |
 |---|---|---|
-| **Dashboard — "Regional Health"** | per-zone cards: warehouses, outlets, active agents, stock value, debt, utilisation, open alerts; sales trend; factoring summary | `zone_health`, `daily_sales_rollup`, `fintech_program_health` |
+| **Dashboard — "Regional Health"** | per-zone cards: warehouses, outlets, active agents, stock value, outlet debt, consignment owed, utilisation, open alerts; sales trend; financing summary | `zone_health`, `daily_sales_rollup`, `fintech_program_health` |
 | Zones | zone detail, agent roster, warehouse roster | `market_zones`, `profiles`, `warehouses` |
-| Verification queue | pending outlets and fintech agents → approve / reject | `verify_outlet`, `verify_fintech_agent` |
+| Verification queue | pending outlets, guarantors and fintech agents → approve / reject | `verify_outlet`, `verify_guarantor`, `verify_fintech_agent` |
 | Orders | all in region, filters, detail | `orders` |
 | Transfers + disputes | region transfers, resolve disputes | `inventory_transfers`, `resolve_transfer_dispute` |
 | Stock count review | accept / reject submitted counts | `review_stock_count` |
-| Invoice discounts | region discounts, overdue & defaulted, resolve default / dispute | `invoice_discounts`, `resolve_default`, `resolve_invoice_dispute` |
+| Financing deals | region deals, overdue & defaulted, resolve disputes | `invoice_financings`, `resolve_financing_dispute` |
 | Alerts | region alerts, acknowledge / resolve | `acknowledge_alert`, `resolve_alert` |
-| Reports | sales by zone/agent/product, debt aging, factoring performance, agent productivity | cache tables + read views |
+| Reports | sales by zone/agent/product, debt aging, consignment exposure, financing performance, agent productivity | cache tables + read views |
 
 #### ADMIN (global — all of the above unscoped, plus)
 | Screen | Purpose | Data source |
 |---|---|---|
-| **Dashboard — "Company Overview"** | national sales, debt, inventory value, factoring exposure, top/bottom zones, alert summary | `daily_sales_rollup` (global), `zone_health`, `fintech_program_health` |
-| **Dashboard — "Fintech Program"** | active agents, factored volume, earnings, outstanding, default rate, avg collection days, open disputes | `fintech_program_health`, `fintech_agent_stats` |
-| **Dashboard — "Finance"** | funding-verification queue, payment-reconciliation queue, settlement ledger | `invoice_discounts`, `payments`, `settlements` |
+| **Dashboard — "Company Overview"** | national sales, outlet debt, consignment owed, inventory value, financing exposure, top/bottom zones, alert summary | `daily_sales_rollup` (global), `zone_health`, `fintech_program_health` |
+| **Dashboard — "Fintech Program"** | active agents, financed volume, fees paid, fees due, agent outstanding debt, default rate, avg repayment days, open disputes | `fintech_program_health`, `fintech_agent_stats` |
+| **Dashboard — "Finance"** | funding-verification queue, **fee-payment queue** (`REPAID` / `DEFAULTED`, unpaid), payment & remittance reconciliation | `invoice_financings`, `payments`, `remittances` |
 | Master data | products, warehouses, market zones, zone-manager assignments (CRUD) | `upsert_*`, `assign_zone_manager` |
 | Users | staff list, invite staff, role assignment, suspend / lock, PIN rotation | `invite_staff`, `rotate_warehouse_pin`, `rotate_fintech_pin` |
-| Fintech program admin | all agents, capacity, status changes | `set_fintech_status` |
-| Finance actions | verify fintech funding, verify payments, process settlement (refund/bonus) | `verify_fintech_funding`, `verify_payment`, `process_settlement` |
+| Fintech program admin | all agents, capacity, indemnity status, status changes | `set_fintech_status` |
+| Finance actions | verify fintech funding, verify payments/remittances, process fintech fee (success/default), post adjustment/bonus | `verify_fintech_funding`, `verify_payment`, `verify_remittance`, `process_fintech_fee`, `post_fintech_adjustment` |
 | Adjustments | post stock adjustments, view reversal log | `post_adjustment`, `inventory_movements` |
 | Alert config | fraud-rule thresholds, reorder points | config table |
 | System | audit-log browser, scheduled-job status, cache-refresh freshness | `audit_logs`, `cron.job_run_details` |
@@ -649,10 +740,10 @@ access, environment config.
 #### AUDITOR (read-only everywhere + reconciliation tools)
 | Screen | Purpose | Data source |
 |---|---|---|
-| **Dashboard — "Reconciliation"** | ledger vs cache drift, funding claimed vs verified, collection events vs invoice totals, open discrepancies | `inventory_movements` vs `stock_balances`; `customer_ledger` vs `outlet_balances`; `invoice_discount_events` vs `invoice_discounts` |
-| **Dashboard — "Compliance"** | factoring exposure, default analysis, zone-violation log, PIN-attempt log, dispute log | `alerts`, `invoice_discounts`, `transfer_verifications`, `audit_logs` |
+| **Dashboard — "Reconciliation"** | ledger vs cache drift, funding claimed vs verified, repayment events vs invoice totals, consignment owed vs ledger, open discrepancies | `inventory_movements` vs `stock_balances`; `customer_ledger` vs `outlet_balances`; `invoice_financing_events` vs `invoice_financings`; `remittances` vs `consignment_balances` |
+| **Dashboard — "Compliance"** | financing exposure, default analysis, guarantor coverage, zone-violation log, PIN-attempt log, dispute log, indemnity register | `alerts`, `invoice_financings`, `outlet_guarantors`, `fintech_agents`, `transfer_verifications`, `audit_logs` |
 | Audit-log browser | filter by table / actor / date / action; view diffs | `audit_logs` |
-| Read-only views | every dashboard, order, transfer, invoice, settlement, ledger | all cache + business tables |
+| Read-only views | every dashboard, order, transfer, financing deal, ledger | all cache + business tables |
 | Export | CSV export of any report | client-side |
 
 No write actions for `AUDITOR` beyond exporting.
@@ -666,14 +757,14 @@ No write actions for `AUDITOR` beyond exporting.
 | `profiles` | self; HQ all; zone manager sees zone staff | self-`UPDATE` (display fields, trigger-guarded); rest RPC |
 | `market_zones`, `products` | all authenticated (reference data) | RPC (`ADMIN`) |
 | `warehouses` | zone-scoped + HQ | RPC |
-| `outlets`, `outlet_balances`, `customer_ledger`, `customer_credit_profile` | zone-scoped + HQ; fintech sees limited columns for factored outlets | RPC |
+| `outlets`, `outlet_guarantors`, `outlet_balances`, `customer_ledger`, `customer_credit_profile` | zone-scoped + HQ; fintech sees limited columns for outlets/guarantors on their deals | RPC |
 | `orders`, `order_items` | agent's own + warehouse's + zone manager + HQ | RPC |
-| `inventory_movements`, `stock_balances`, `stock_counts` | warehouse + zone manager + HQ | RPC (movements INSERT-only, no update/delete) |
+| `inventory_movements`, `stock_balances`, `consignment_balances`, `stock_counts` | warehouse + zone manager + HQ | RPC (movements INSERT-only, no update/delete) |
 | `inventory_transfers`, `transfer_items`, `transfer_verifications`, `transfer_disputes` | source/dest warehouse + zone managers + HQ | RPC |
-| `payments` | zone-scoped + HQ | RPC (INSERT-only) |
+| `payments`, `remittances` | zone-scoped + HQ | RPC (INSERT-only) |
 | `fintech_agents`, `fintech_agent_stats` | own + registering agent + zone manager + HQ | RPC |
-| `invoice_discounts`, `invoice_discount_events` | fintech (own) + sales agent (own) + zone manager + HQ | RPC |
-| `settlements` | fintech (own) + HQ | RPC (`ADMIN`) |
+| `invoice_financings`, `invoice_financing_events` | fintech (own) + sales agent (own) + zone manager + HQ | RPC |
+| `fintech_adjustments` | fintech (own) + HQ | RPC (`ADMIN`) |
 | `alerts` | scoped to zone/warehouse/agent + HQ | RPC (ack/resolve) |
 | `audit_logs` | `ADMIN`, `SUPER_ADMIN`, `AUDITOR` | trigger only |
 | `daily_sales_rollup`, `zone_health`, `fintech_program_health` | HQ; zone rows visible to that zone's manager | job only |
@@ -690,7 +781,7 @@ No write actions for `AUDITOR` beyond exporting.
 - **Algorithmic credit scoring.** Launch uses a manual `credit_limit` and the
   `customer_credit_profile` counters.
 - **Returns / refunds** as a first-class flow (handled ad hoc via
-  `post_adjustment` and `process_settlement` until specified).
+  `post_adjustment` and `post_fintech_adjustment` until specified).
 - **Route optimisation** internals, promotions/price lists, push notifications
   (SMS only at launch), gamification.
 - **Prisma / Docker** local schema tooling — replaced by the Supabase CLI local
@@ -702,11 +793,11 @@ No write actions for `AUDITOR` beyond exporting.
 
 1. **Customer view-only app** — `outlets.profile_id` nullable FK, `CUSTOMER`
    role, phone-OTP claim flow (`link_outlet_account(invite_code)` matched on
-   phone), SELECT-only RLS on the customer's own invoices / ledger / credit
-   profile, a read-only dashboard.
+   phone), SELECT-only RLS on the customer's own orders / ledger / financing
+   deals / credit profile, a read-only dashboard.
 2. **Provider payment integration** — one Edge Function with per-provider
    adapters, credentials in Supabase Vault, webhook handlers, calling
-   `record_fintech_funding` / `verify_fintech_funding`.
+   `record_fintech_funding` / `verify_fintech_funding` / `process_fintech_fee`.
 3. **Price lists** — zone- and custody-type-scoped pricing, read by the pricing
    helper the order RPC already uses.
 
@@ -733,22 +824,30 @@ Follow-on documents (not this spec):
   generated types.
 - **CLAUDE.md rewrites** — root `CLAUDE.md`, new `apps/CLAUDE.md` and
   `supabase/CLAUDE.md`, delete `backend/CLAUDE.md`.
-- **Implementation plans** — one per subsystem (RTM core → factoring →
-  onboarding), each via the writing-plans skill.
+- **Implementation plans** — one per subsystem (RTM core → invoice financing →
+  onboarding/guarantors), each via the writing-plans skill.
 
 ---
 
 ## 13. Open questions
 
-1. **PIN delivery** — is SMS-only acceptable for the fintech transaction PIN, or
-   is in-app secure display at verification time also wanted?
-2. **Funding provisional window** — should a `FUNDED`-but-not-yet-verified
-   invoice be visible to the customer / block a second discount on the same
-   order, or is it fully inert until `verify_fintech_funding`?
-3. **Transfer GPS tolerance** — confirm `radius_km` per warehouse is the right
+1. **Default fee rate** — on default the spec pays a flat 10% (`default_fee_amount`)
+   regardless of the negotiated `fee_rate`. Confirm it's always 10%, not the
+   negotiated rate.
+2. **Fee timing** — `process_fintech_fee` runs when finance chooses (queue-driven)
+   after `REPAID`/`DEFAULTED`. Is there an SLA (e.g. within 7 days), and is it
+   ever automatic rather than an ADMIN action?
+3. **Guarantor reuse** — one guarantor per outlet reused across all its credit
+   orders, or must each credit order name a fresh guarantor acknowledgement?
+4. **Guarantor for `CASH_AGENT`** — the spec requires a guarantor for any
+   non-`DIRECT_CASH` channel. Confirm `CASH_AGENT` (non-fintech credit) also
+   requires one.
+5. **PIN delivery** — SMS-only for the fintech transaction PIN, or also in-app
+   secure display at verification time?
+6. **Transfer GPS tolerance** — confirm `radius_km` per warehouse is the right
    knob, and the same-zone vs cross-zone tightening factor.
-4. **Auditor exports** — any regulatory format required (CBN reporting?), or is
+7. **Auditor exports** — any regulatory format required (CBN reporting?), or is
    CSV sufficient?
-5. **Staff onboarding** — do `WAREHOUSE_MANAGER`/`FIELD_AGENT` accounts get
+8. **Staff onboarding** — do `WAREHOUSE_MANAGER`/`FIELD_AGENT` accounts get
    created by `ADMIN` invite only, or can a `REGIONAL_MANAGER` create field staff
    in their zones?
