@@ -162,7 +162,9 @@ it will call the same RPCs.
 | `flag_stale_financing()` | nightly | `COLLECTING` past `expected_repayment_date` → alert; the Fintech decides whether to `declare_default` |
 | `reconcile_stock_balances()` | nightly | recompute balances from ledger, alert on any drift |
 | `reconcile_financials()` | nightly | ledger vs `outlet_balances` / `consignment_balances` / `customer_credit_profile`, alert on drift |
-| `run_fraud_scans()` | nightly | the six financing fraud rules → alerts |
+| `run_fraud_scans()` | nightly | the fraud rules in §6 → alerts |
+| `expire_pending_verifications()` | hourly | offline-captured verification bundles never reconciled → `NEEDS_REVIEW` |
+| `downgrade_stale_photos()` | nightly | verification/delivery photos older than `photo_retention_days` on non-disputed records → thumbnail, purge full-res |
 | `drain_notifications_outbox()` | every 1 min | invoke the `notify` Edge Function |
 
 ### 3.5 Realtime
@@ -276,6 +278,8 @@ timestamps `TIMESTAMPTZ`. All PKs `uuid DEFAULT gen_random_uuid()` except
 | `invoice_financings.status` | PENDING, FUNDED, COLLECTING, REPAID, FEE_PAID, DEFAULTED, DISPUTED, CANCELLED |
 | `stock_counts.status` | PENDING_REVIEW, ACCEPTED, REJECTED |
 | `transfer_disputes.status` | OPEN, RESOLVED |
+| `location_update_requests.status` | PENDING, APPROVED, REJECTED |
+| `*_verifications.review_status` | AUTO_OK, NEEDS_REVIEW |
 | `alerts.status` | OPEN, ACKNOWLEDGED, RESOLVED |
 
 ### 5.3 Identity & geography
@@ -367,8 +371,12 @@ customer is liable for stock collected and the guarantor backs that liability
 
 **`transfer_verifications`** — INSERT-only. `transfer_id` (FK), `party`
 (`SENDER|RECEIVER`), `verified_by` (FK profile), `pin_verified` (bool),
-`gps_lat`, `gps_lng`, `gps_distance_m`, `photo_path` (Storage key), `verified_at`.
-Replaces the ~20 `sender_*`/`receiver_*` columns in the earlier draft.
+`methods` (text[] — which signals were present), `tier` (`T0..T3`, §6.3),
+`gps_lat?`, `gps_lng?`, `gps_distance_m?`, `cell_id?`, `photo_path` (Storage key),
+`review_status` (`AUTO_OK|NEEDS_REVIEW`), `captured_at`, `verified_at`. Replaces
+the ~20 `sender_*`/`receiver_*` columns in the earlier draft. Transfers are
+staff↔staff — routine verification is PIN + GPS-fix (when available) + photo from
+both ends; **never SMS**.
 
 **`transfer_disputes`** — `transfer_id` (FK), `opened_by` (FK), `reason`,
 `status`, `resolution?`, `resolved_by?`, `resolved_at?`.
@@ -528,18 +536,54 @@ company-wide and per-dimension rollups coexist.
 `recipient`, `template`, `params` (jsonb), `status` (`PENDING|SENT|FAILED`),
 `attempts`, `sent_at?`, `created_at`. Drained every minute by `notify`.
 
-### 5.13 Storage buckets
+### 5.13 Verification & location (§6.3)
 
-All private. `transfer_photos`, `count_photos`, `signatures`, `product_images`,
-`guarantor_documents` (ID + photo), `financing_docs` (signed indemnity, deal
-acknowledgements). Access via signed URLs minted by RPCs / policies scoped to the
-requesting role's zone.
+**`verification_config`** — per-zone tuning (one row per `market_zone_id`, plus a
+global default row). `sms_on_new_outlet_only` (bool, default true),
+`t2_gps_enforced_above` (₦ value — geofence strictly enforced above this),
+`t3_sms_above` (₦ value — SMS co-presence required above this, new outlets
+always), `heartbeat_grace_hours` (default 48), `photo_retention_days`
+(default 90). `ADMIN`-editable.
+
+**`delivery_verifications`** — INSERT-only, for `deliver_order` (Stage 4/5).
+`order_id` (FK), `outlet_id` (FK), `verified_by` (FK profile), `tier`
+(`T0..T3`), `methods` (text[]), `gps_lat?`, `gps_lng?`, `gps_distance_m?`
+(vs `outlets` GPS), `cell_id?`, `photo_path`, `signature_path`, `sms_confirmed?`
+(bool), `risk_tier`, `review_status` (`AUTO_OK|NEEDS_REVIEW`), `captured_at`,
+`verified_at`. Offline-captured bundles replay with their original `captured_at`
++ an idempotency key.
+
+**`depot_checkins`** — INSERT-only. `warehouse_id` (FK), `profile_id` (FK),
+`source` (`LOGIN|MANUAL`), `gps_lat?`, `gps_lng?`, `cell_id?`, `photo_path?`
+(weekly), `occurred_at`. Passive on login; a weekly photo is prompted.
+
+**`location_cell_observations`** — the learned cell-ID set per location.
+`location_type` (`WAREHOUSE|OUTLET`), `location_id`, `cell_id`, `first_seen_at`,
+`last_seen_at`, `observation_count`. Populated by every verification/checkin;
+after a warm-up (≥ N observations) a verification from an unseen cell for that
+location is flagged.
+
+**`location_update_requests`** — a depot/outlet moved. `location_type`,
+`location_id`, `requested_by` (FK), `new_lat`, `new_lng`, `new_address`,
+`capture_samples` (jsonb — the multi-sample GPS median), `status`
+(`PENDING|APPROVED|REJECTED`), `reviewed_by?`, `reviewed_at?`.
+
+### 5.14 Storage buckets
+
+All private. `transfer_photos`, `count_photos`, `delivery_photos`, `signatures`,
+`depot_photos`, `product_images`, `guarantor_documents` (ID + photo),
+`financing_docs` (signed indemnity, deal acknowledgements). Access via signed
+URLs minted by RPCs / policies scoped to the requesting role's zone. A retention
+job downgrades photos to thumbnails after `photo_retention_days` unless the
+parent record is disputed.
 
 ---
 
 ## 6. Integrity model (how wrong entries are stopped)
 
-Six layers, all near-zero incremental cost:
+### 6.1 Layers
+
+Seven layers, all near-zero incremental cost:
 
 1. **Structural constraints** — `CHECK`s (`quantity > 0`, `amount_paid <= total`,
    GPS ranges, valid status), FKs, generated totals (`line_total`, `total`,
@@ -562,7 +606,7 @@ Six layers, all near-zero incremental cost:
 7. **Batch anomaly detection** — nightly `run_fraud_scans()` plus ledger/cache
    reconciliation jobs raise `alerts`; nothing runs per-write.
 
-### Financing fraud rules (nightly, → `alerts`)
+### 6.2 Fraud rules (nightly, → `alerts`)
 
 | Rule | Trigger |
 |---|---|
@@ -572,6 +616,49 @@ Six layers, all near-zero incremental cost:
 | Zone match | deal's outlet / fintech / agent not all in one zone (also blocked at RPC time; the scan catches drift) |
 | Collusion | same (fintech agent, outlet) pair above a frequency threshold in a window |
 | Self-dealing | fintech agent's phone / name matches an outlet contact or guarantor on a deal they financed |
+| Depot silent | no `depot_checkins` row for a consignment depot in `heartbeat_grace_hours` |
+| Cell drift | a verification / checkin cell_id not in `location_cell_observations` for that location after warm-up |
+| GPS spoof pattern | verification GPS identical to the pre-registered point to > 5 decimals, repeatedly (replayed coordinates) |
+
+### 6.3 Location & delivery verification
+
+**Principle: capture everything free, enforce by risk tier, server decides.**
+The client captures a signal bundle — a GPS fix (whenever location permission is
+granted and a fix is available), best-effort `cell_id`, photo(s), signature — and
+submits it in one RPC call with an idempotency key (so an offline-queued bundle
+replays cleanly). The **RPC** computes the risk tier from server-side history +
+`verification_config`, decides which signals are mandatory, validates what's
+present, enforces the geofence where the tier requires it, writes the
+`*_verifications` row and sets `review_status`. The client never scores its own
+risk.
+
+GPS has **no per-request cost** here (geofence = `haversine_km` in SQL, no Maps
+API). It is captured on every verification when available and is the strongest
+signal; the tier only decides whether the geofence is strictly enforced or
+advisory.
+
+**Tier ladder:**
+
+| Tier | Signals | When |
+|---|---|---|
+| **T0** | pre-registered location + passive `depot_checkins` heartbeat | routine depot presence (Level 1, Level 3) |
+| **T1** | PIN + `cell_id` + photo (+ GPS fix advisory) | default for transfers and repeat-outlet deliveries |
+| **T2** | T1 + GPS fix with geofence **enforced** (`gps_distance_m <= radius_km`) | value > `t2_gps_enforced_above`, or agent has recent anomaly flags, or prior dispute on this counterparty pair |
+| **T3** | T2 + **SMS co-presence** to the customer (server-generated OTP, hashed, TTL, server-verified) | **first delivery to a new outlet only**, or value > `t3_sms_above` |
+
+SMS appears **only at T3**, only when the counterparty is not an app user
+(customers), and never on the offline critical path — a T3 delivery in a
+dead-signal market proceeds on T2 signals with `review_status = NEEDS_REVIEW` and
+the SMS reconciles later.
+
+**Learned cell IDs.** Every verification and checkin upserts
+`location_cell_observations`. After a warm-up (`observation_count >= N`), a
+verification from a cell never seen at that location is flagged (`cell drift`
+rule) — this replaces any fictional "tower registry".
+
+**Location moved.** `request_location_update` captures a multi-sample GPS median
+on-site; `REGIONAL_MANAGER` approves; the location's `latitude`/`longitude` and
+its `location_cell_observations` warm-up reset.
 
 ---
 
@@ -595,7 +682,7 @@ internally. Grouped by area.
 - `place_order(p_outlet_id, p_source_warehouse_id, p_guarantor_id, p_items jsonb, p_payment_channel, p_notes, p_idempotency_key)` — `FIELD_AGENT`/`INFORMAL_REP`; validates zone, outlet `ACTIVE`, **`guarantor_id` present and `ACTIVE` when channel is not `DIRECT_CASH`**, each product `is_active` and stocked, computes prices, atomically checks `available >= qty` and reserves (`RESERVED` movement + `stock_balances`), inserts `orders` `PENDING` + `order_items`. For `DIRECT_CASH`/`CASH_AGENT` it writes `customer_ledger` `INVOICE` and raises `outlet_balances`; for `FINTECH_FINANCED` it writes `customer_ledger` `FINANCED` only (no TEFAIR receivable). If the source is an `INFORMAL_REP_DEPOT`, also accrues `consignment_balances.cash_owed`.
 - `confirm_order(p_order_id)` — `WAREHOUSE_MANAGER`(source)/`ADMIN`; `PENDING → CONFIRMED`.
 - `dispatch_order(p_order_id)` — `WAREHOUSE_MANAGER`; `CONFIRMED → DISPATCHED`.
-- `deliver_order(p_order_id, p_signature_path)` — `FIELD_AGENT`; `DISPATCHED → DELIVERED`, converts reservation to `SOLD`.
+- `deliver_order(p_order_id, p_signal_bundle jsonb, p_idempotency_key)` — `FIELD_AGENT`; `p_signal_bundle` = `{gps?, cell_id?, photo_path, signature_path, sms_otp?, captured_at}`; RPC computes the tier (§6.3) from order value + outlet newness + agent flags + `verification_config`, enforces the mandatory signals for that tier, writes `delivery_verifications`, `DISPATCHED → DELIVERED`, converts reservation to `SOLD`. A tier-3 delivery with no SMS confirmation still completes as `DELIVERED` with `review_status = NEEDS_REVIEW`.
 - `cancel_order(p_order_id, p_reason)` — releases reservation (`UNRESERVED`), reverses ledger.
 - `record_payment(p_outlet_id, p_order_id, p_amount, p_channel, p_method, p_reference, p_idempotency_key)` — `FIELD_AGENT`/`WAREHOUSE_MANAGER`; inserts `payments`, `customer_ledger` `PAYMENT`, updates `outlet_balances`.
 - `verify_payment(p_payment_id)` — `ADMIN`/`AUDITOR` (finance).
@@ -604,7 +691,7 @@ internally. Grouped by area.
 
 ### Transfers
 - `initiate_transfer(p_source_warehouse_id, p_dest_warehouse_id, p_items jsonb, p_idempotency_key)` — `WAREHOUSE_MANAGER`(source)/`ADMIN`; reserves at source, sets `expires_at`, flags `is_cross_zone`.
-- `verify_transfer(p_transfer_id, p_party, p_pin, p_gps_lat, p_gps_lng, p_photo_path)` — the source/dest warehouse manager; `haversine_km` vs the relevant warehouse (`<= radius_km`, tighter for same-zone), bcrypt PIN check with 5-attempt/15-min lockout, inserts `transfer_verifications`, advances `PENDING → IN_TRANSIT` when the sender verifies.
+- `verify_transfer(p_transfer_id, p_party, p_pin, p_signal_bundle jsonb, p_idempotency_key)` — the source/dest warehouse manager; `p_signal_bundle` = `{gps?, cell_id?, photo_path, captured_at}` (**no SMS — staff↔staff**); bcrypt PIN check with 5-attempt/15-min lockout; RPC computes the tier, runs `haversine_km` vs the relevant warehouse (geofence enforced at T2+), upserts `location_cell_observations`, inserts `transfer_verifications`, advances `PENDING → IN_TRANSIT` when the sender verifies.
 - `mark_transfer_delivered(p_transfer_id)` — carrier/receiver; `IN_TRANSIT → DELIVERED`.
 - `reconcile_transfer(p_transfer_id, p_received jsonb)` — dest `WAREHOUSE_MANAGER`; sets `qty_received` per line, posts `TRANSFER_OUT` at source and `TRANSFER_IN` at dest, `DELIVERED → RECONCILED`, or opens a `transfer_disputes` row and `→ DISPUTED` on any mismatch.
 - `resolve_transfer_dispute(p_transfer_id, p_resolution, p_adjustments jsonb)` — `REGIONAL_MANAGER`/`ADMIN`; posts adjustment movements, `→ RECONCILED`.
@@ -613,7 +700,9 @@ internally. Grouped by area.
 - `submit_stock_count(p_warehouse_id, p_lines jsonb)` — `WAREHOUSE_MANAGER`/`INFORMAL_REP`; snapshots `system_qty` per line.
 - `review_stock_count(p_count_id, p_decision, p_note)` — `REGIONAL_MANAGER`/`ADMIN`; `ACCEPTED` → `COUNT_ADJUSTMENT` movement.
 - `post_adjustment(p_warehouse_id, p_product_id, p_batch_number, p_qty_delta, p_reason)` — `ADMIN`; explicit `REVERSAL`/adjustment movement with reason.
-- `receive_stock(p_warehouse_id, p_lines jsonb, p_reference)` — `WAREHOUSE_MANAGER`; `RECEIVED` movements (inbound supply, not a transfer).
+- `receive_stock(p_warehouse_id, p_lines jsonb, p_reference, p_photo_path, p_waybill_photo_path, p_idempotency_key)` — `WAREHOUSE_MANAGER`; `RECEIVED` movements (inbound supply, not a transfer); records a T0/T1 verification (pre-registered depot + photo).
+- `depot_checkin(p_warehouse_id, p_signal_bundle jsonb)` — any staff assigned to the warehouse; passive on login, weekly photo prompt; inserts `depot_checkins`, upserts `location_cell_observations`.
+- `request_location_update(p_location_type, p_location_id, p_new_lat, p_new_lng, p_new_address, p_capture_samples jsonb)` — `WAREHOUSE_MANAGER`/`FIELD_AGENT`; `approve_location_update(p_request_id, p_decision)` — `REGIONAL_MANAGER`/`ADMIN`; on approve, updates the location and resets its cell warm-up.
 
 ### Financing
 - `create_invoice_financing(p_order_id, p_fintech_agent_id, p_fee_rate, p_idempotency_key)` — `FIELD_AGENT`; order belongs to caller, is `CONFIRMED`+, channel `FINTECH_FINANCED`, has an `ACTIVE` guarantor, not already financed; fintech `ACTIVE`, indemnity accepted, same zone; `fee_rate` in `(0, 10]`; `invoice_total` = order total; status `PENDING`; `customer_ledger` `FINANCED`; queues fintech notification + realtime.
@@ -681,6 +770,7 @@ Everything the FIELD_AGENT has, plus:
 | Transfer detail | items, verifications, dispute status | `inventory_transfers`, `transfer_verifications`, `transfer_disputes` |
 | Orders to fulfil | confirm `PENDING` orders on my warehouse, dispatch | `confirm_order`, `dispatch_order` |
 | Stock counts | submit, track review outcome | `submit_stock_count` |
+| Depot check-in | weekly photo prompt; check-in history | `depot_checkin`, `depot_checkins` |
 | Alerts | warehouse alerts, acknowledge | `acknowledge_alert` |
 | Profile | — | Auth |
 
@@ -711,7 +801,7 @@ Every dashboard reads **only cache tables** and polls on an interval.
 |---|---|---|
 | **Dashboard — "Regional Health"** | per-zone cards: warehouses, outlets, active agents, stock value, outlet debt, consignment owed, utilisation, open alerts; sales trend; financing summary | `zone_health`, `daily_sales_rollup`, `fintech_program_health` |
 | Zones | zone detail, agent roster, warehouse roster | `market_zones`, `profiles`, `warehouses` |
-| Verification queue | pending outlets, guarantors and fintech agents → approve / reject | `verify_outlet`, `verify_guarantor`, `verify_fintech_agent` |
+| Verification queue | pending outlets, guarantors, fintech agents; `NEEDS_REVIEW` deliveries/transfers; `location_update_requests` → approve / reject | `verify_outlet`, `verify_guarantor`, `verify_fintech_agent`, `approve_location_update` |
 | Orders | all in region, filters, detail | `orders` |
 | Transfers + disputes | region transfers, resolve disputes | `inventory_transfers`, `resolve_transfer_dispute` |
 | Stock count review | accept / reject submitted counts | `review_stock_count` |
@@ -730,7 +820,7 @@ Every dashboard reads **only cache tables** and polls on an interval.
 | Fintech program admin | all agents, capacity, indemnity status, status changes | `set_fintech_status` |
 | Finance actions | verify fintech funding, verify payments/remittances, process fintech fee (success/default), post adjustment/bonus | `verify_fintech_funding`, `verify_payment`, `verify_remittance`, `process_fintech_fee`, `post_fintech_adjustment` |
 | Adjustments | post stock adjustments, view reversal log | `post_adjustment`, `inventory_movements` |
-| Alert config | fraud-rule thresholds, reorder points | config table |
+| Alert & verification config | fraud-rule thresholds, reorder points, per-zone `verification_config` (tier thresholds, SMS-on-new-outlet flag, retention days) | config tables |
 | System | audit-log browser, scheduled-job status, cache-refresh freshness | `audit_logs`, `cron.job_run_details` |
 
 #### SUPER_ADMIN
@@ -741,7 +831,7 @@ access, environment config.
 | Screen | Purpose | Data source |
 |---|---|---|
 | **Dashboard — "Reconciliation"** | ledger vs cache drift, funding claimed vs verified, repayment events vs invoice totals, consignment owed vs ledger, open discrepancies | `inventory_movements` vs `stock_balances`; `customer_ledger` vs `outlet_balances`; `invoice_financing_events` vs `invoice_financings`; `remittances` vs `consignment_balances` |
-| **Dashboard — "Compliance"** | financing exposure, default analysis, guarantor coverage, zone-violation log, PIN-attempt log, dispute log, indemnity register | `alerts`, `invoice_financings`, `outlet_guarantors`, `fintech_agents`, `transfer_verifications`, `audit_logs` |
+| **Dashboard — "Compliance"** | financing exposure, default analysis, guarantor coverage, verification `NEEDS_REVIEW` backlog, cell-drift / depot-silent flags, zone-violation log, PIN-attempt log, dispute log, indemnity register | `alerts`, `invoice_financings`, `outlet_guarantors`, `fintech_agents`, `transfer_verifications`, `delivery_verifications`, `depot_checkins`, `audit_logs` |
 | Audit-log browser | filter by table / actor / date / action; view diffs | `audit_logs` |
 | Read-only views | every dashboard, order, transfer, financing deal, ledger | all cache + business tables |
 | Export | CSV export of any report | client-side |
@@ -761,6 +851,9 @@ No write actions for `AUDITOR` beyond exporting.
 | `orders`, `order_items` | agent's own + warehouse's + zone manager + HQ | RPC |
 | `inventory_movements`, `stock_balances`, `consignment_balances`, `stock_counts` | warehouse + zone manager + HQ | RPC (movements INSERT-only, no update/delete) |
 | `inventory_transfers`, `transfer_items`, `transfer_verifications`, `transfer_disputes` | source/dest warehouse + zone managers + HQ | RPC |
+| `delivery_verifications`, `depot_checkins`, `location_update_requests` | agent's own + warehouse + zone manager + HQ | RPC (verifications INSERT-only) |
+| `verification_config` | all authenticated (read) | RPC (`ADMIN`) |
+| `location_cell_observations` | zone manager + HQ | job/RPC upsert only |
 | `payments`, `remittances` | zone-scoped + HQ | RPC (INSERT-only) |
 | `fintech_agents`, `fintech_agent_stats` | own + registering agent + zone manager + HQ | RPC |
 | `invoice_financings`, `invoice_financing_events` | fintech (own) + sales agent (own) + zone manager + HQ | RPC |
@@ -824,8 +917,8 @@ Follow-on documents (not this spec):
   generated types.
 - **CLAUDE.md rewrites** — root `CLAUDE.md`, new `apps/CLAUDE.md` and
   `supabase/CLAUDE.md`, delete `backend/CLAUDE.md`.
-- **Implementation plans** — one per subsystem (RTM core → invoice financing →
-  onboarding/guarantors), each via the writing-plans skill.
+- **Implementation plans** — one per subsystem (RTM core + verification → invoice
+  financing → onboarding/guarantors), each via the writing-plans skill.
 
 ---
 
@@ -846,8 +939,14 @@ Follow-on documents (not this spec):
    secure display at verification time?
 6. **Transfer GPS tolerance** — confirm `radius_km` per warehouse is the right
    knob, and the same-zone vs cross-zone tightening factor.
-7. **Auditor exports** — any regulatory format required (CBN reporting?), or is
+7. **Verification review capacity** — who works the `NEEDS_REVIEW` /
+   cell-drift / depot-silent backlog day to day, `REGIONAL_MANAGER` or a
+   dedicated ops role? Sets how aggressive the tier thresholds should be.
+8. **Cell-ID capture on Windows** — `depot_checkins` cell capture is
+   Android-only; on `desktop-windows` the heartbeat is login + GPS/IP only.
+   Acceptable?
+9. **Auditor exports** — any regulatory format required (CBN reporting?), or is
    CSV sufficient?
-8. **Staff onboarding** — do `WAREHOUSE_MANAGER`/`FIELD_AGENT` accounts get
-   created by `ADMIN` invite only, or can a `REGIONAL_MANAGER` create field staff
-   in their zones?
+10. **Staff onboarding** — do `WAREHOUSE_MANAGER`/`FIELD_AGENT` accounts get
+    created by `ADMIN` invite only, or can a `REGIONAL_MANAGER` create field staff
+    in their zones?
