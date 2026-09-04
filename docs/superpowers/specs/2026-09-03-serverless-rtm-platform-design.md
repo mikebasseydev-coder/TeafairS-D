@@ -84,8 +84,11 @@ Minimising Supabase spend drives the whole design:
 7. **RLS performance holds.** `EXPLAIN` on every hot list/dashboard query shows
    index usage, not sequential scans; no policy runs a per-row correlated
    subquery.
-8. **Offline tolerance.** Every RPC is idempotent on a client-supplied key. A
-   retried submission over a flaky connection never double-writes.
+8. **Offline tolerance.** `apps/mobile-android` works from a persistent client
+   cache + a write queue (§3.8): an agent can browse their outlets, catalogue and
+   open orders and capture new ones with no signal. Every queued action flushes
+   through the same RPC with live re-validation; every RPC is idempotent on a
+   client key, so a retry never double-writes.
 
 ---
 
@@ -196,6 +199,79 @@ SQL helper against a warehouse's stored `latitude`/`longitude` + `radius_km`.
 - Session tokens are stored in platform-secure storage (`react-native-keychain`
   on Android, the equivalent credential store on Windows) — never plain
   `AsyncStorage`.
+
+### 3.8 Client cache & offline
+
+Field agents work on 2G in market stalls. `apps/mobile-android` keeps a
+**persistent client cache** + a **write queue**; `apps/desktop-windows` is
+online-only (HQ has connectivity).
+
+**What is cached** — only data the agent could already read online (RLS still
+applies at fetch time), scoped to their zone/warehouse:
+
+- their outlets + guarantors + `outlet_balances`, `products`, their open/recent
+  `orders` + `order_items`, their `invoice_financings`, their `notifications`,
+  the source depot's `stock_balances` snapshot, and the zone's
+  `verification_config`.
+
+Not cached: other agents' data, other zones, HQ dashboards, `audit_logs`, any
+`fintech_agent` PIN/secret.
+
+**Sync mechanism** — delta, not full refetch. Each cached collection tracks a
+`synced_at` cursor; on reconnect the app runs `SELECT … WHERE updated_at > cursor`
+(mutable tables — `updated_at` is already maintained by a shared trigger) or
+`created_at > cursor` (append-only tables), RLS-scoped. No realtime, no extra
+Edge Function.
+
+**Write queue** — an ordered list of `{rpc, args, p_idempotency_key,
+captured_at}`. On reconnect it flushes **sequentially per agent** in
+`captured_at` order. Per-item outcome:
+
+- validation failure (stock gone, credit exceeded, price changed) → drop the
+  item, raise a `notification` telling the agent to redo it;
+- transient/network error → keep and retry with backoff.
+
+**What cannot happen offline** — anything needing a live second party or a live
+server check: transfer/collection **PIN verification**, **T3 SMS** co-presence,
+**financing-offer accept** (live terms version). Those actions wait for signal.
+
+#### Cost
+
+Net **cost-neutral to positive**. Device storage is free. A cold-start cache for
+one agent is a few hundred KB of egress, once. Delta sync queries are small.
+Steady state it *reduces* cost — the app reads its local copy instead of polling
+cache tables on every screen focus. The write queue flushes as ordinary RPC
+calls (cheap); a per-flush rate cap bounds burst load.
+
+#### Fraud / abuse validation
+
+Offline capture never relaxes validation — **every queued action goes through the
+same RPC** on flush, with identity from the live JWT (`auth.uid()`, never from
+the payload), and zone / stock / credit / guarantor / price all re-checked
+against **live** server state:
+
+- **Prices** in the cache are advisory. The RPC re-reads `products` and reprices;
+  a changed price fails the item → notification. Totals are server-computed
+  regardless.
+- **Stock & credit** are checked live and atomically on flush (`available >=
+  qty`, `balance + total <= limit`). An offline order that no longer fits is
+  rejected, not forced. Two-stage posting already means offline orders are
+  `PENDING` until an online second party confirms.
+- **Backdating** — the server records `created_at = now()` (server clock) and
+  stores the client's `captured_at` separately. `captured_at` in the future, or
+  older than `max_offline_age` (config), is rejected; a large `now() −
+  captured_at` gap is a fraud signal fed to `run_fraud_scans()`.
+- **Queue tampering** — the queue lives in app storage; a rooted device can edit
+  it. It buys nothing: the client cannot forge identity, and any payload it
+  submits still has to pass the RPC's full validation. Financial facts are
+  server-owned.
+- **Verification bundles** captured offline carry `captured_at`; the photo's EXIF
+  timestamp should roughly agree; a stale bundle lands `NEEDS_REVIEW`. Geofence
+  and cell checks run against current location state on flush.
+- **Volume abuse** — an agent racking up many offline actions then flushing is
+  caught by the existing daily-volume fraud rule and the per-flush cap.
+
+New config: `verification_config.max_offline_age_hours` (default 48).
 
 ---
 
@@ -568,7 +644,8 @@ global default row). `sms_on_new_outlet_only` (bool, default true),
 `t2_gps_enforced_above` (₦ value — geofence strictly enforced above this),
 `t3_sms_above` (₦ value — SMS co-presence required above this, new outlets
 always), `heartbeat_grace_hours` (default 48), `photo_retention_days`
-(default 90). `ADMIN`-editable.
+(default 90), `max_offline_age_hours` (default 48 — a flushed offline action
+older than this is rejected; §3.8). `ADMIN`-editable.
 
 **`delivery_verifications`** — INSERT-only, for `deliver_order` (Stage 4/5).
 `order_id` (FK), `outlet_id` (FK), `verified_by` (FK profile), `tier`
@@ -622,8 +699,11 @@ Seven layers, all near-zero incremental cost:
 2. **Server owns the facts the client shouldn't supply** — the client sends
    `product_id` + `quantity`; the RPC reads price, credit limit, zone, custody
    type from the database. The client cannot send a price or a total.
-3. **Business rules in the RPC, one transaction** — identity + zone + stock
-   availability + debt limit checked atomically before any write; all-or-nothing.
+3. **Business rules in the RPC, one transaction** — identity (live JWT, never the
+   payload) + zone + stock availability + debt limit checked atomically before
+   any write; all-or-nothing. Offline-queued actions get the same check on flush
+   against live state, plus a `captured_at` skew check (§3.8) — offline capture
+   never relaxes validation.
 4. **Two-stage posting** — nothing a field user enters alone is final.
    `PENDING` orders hold provisional reservations; a second party confirms.
    Transfers need sender dispatch + receiver receipt; mismatch → `DISPUTED`.
@@ -649,6 +729,7 @@ Seven layers, all near-zero incremental cost:
 | Depot silent | no `depot_checkins` row for a consignment depot in `heartbeat_grace_hours` |
 | Cell drift | a verification / checkin cell_id not in `location_cell_observations` for that location after warm-up |
 | GPS spoof pattern | verification GPS identical to the pre-registered point to > 5 decimals, repeatedly (replayed coordinates) |
+| Backdating | large `now() − captured_at` gap on flushed offline actions, or a pattern of near-`max_offline_age` submissions from one agent |
 
 ### 6.3 Location & delivery verification
 

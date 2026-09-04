@@ -45,6 +45,12 @@ import only from `@teafair/*` packages, never each other.
   risk tier — the client never scores its own risk.
 - Verification / depot heartbeat features exist **only in `mobile-android`** —
   HQ users are never in the field.
+- `mobile-android` is **offline-capable**: a persistent client cache (agent's
+  outlets, catalogue, open orders, …) + a write queue keyed by
+  `p_idempotency_key`, delta-synced on reconnect. `desktop-windows` is
+  online-only. Queued actions flush through the same RPCs with live
+  re-validation — offline never relaxes validation. See §3.8 and
+  `docs/features/client-cache-and-offline.md`.
 - Screens stay presentational: state and logic come from `packages/shared-*`.
 - `apps/mobile-android` — check the pinned framework's versioned docs before
   writing platform code (see its own `CLAUDE.md` once scaffolded).

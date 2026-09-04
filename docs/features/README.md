@@ -22,6 +22,7 @@ spec still governs anything that spans features.
 | [location-delivery-verification](location-delivery-verification.md) | §6.3, §5.13 | tier ladder, signal bundles, depot check-ins, cell learning, review queue |
 | [alerts-and-fraud](alerts-and-fraud.md) | §5.10, §6.2 | `alerts`, the fraud rules, nightly scans |
 | [notifications](notifications.md) | §5.12 | polled in-app inbox, SMS escalation, push fast-follow |
+| [client-cache-and-offline](client-cache-and-offline.md) | §3.8 | mobile persistent cache + write queue, delta sync, offline fraud controls |
 | [analytics-and-dashboards](analytics-and-dashboards.md) | §5.11, §8 | cache tables, per-role dashboards |
 | [audit-and-reconciliation](audit-and-reconciliation.md) | §5.10, §6.1 | `audit_logs` trigger, nightly reconciliation, HQ see-through |
 
