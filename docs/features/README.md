@@ -1,10 +1,11 @@
 # TEFAIR feature docs
 
 One reference per feature, derived from
-`docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` (the
-authority on cross-feature rules). Each doc lists the feature's tables, RPCs,
-screens by role, invariants, scheduled jobs, and open questions, with the spec
-section it derives from.
+`docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` (behaviour)
+and `docs/superpowers/specs/2026-09-04-architecture-and-scaffold-design.md`
+(structure/build). Each doc lists the feature's tables, RPCs, screens by role,
+invariants, scheduled jobs, and open questions, with the spec section it derives
+from.
 
 Use these as the brief when writing an implementation plan for a feature. The
 spec still governs anything that spans features.

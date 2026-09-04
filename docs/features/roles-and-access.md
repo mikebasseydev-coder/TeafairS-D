@@ -13,8 +13,8 @@ per-table auth columns.
 |---|---|---|---|
 | `SUPER_ADMIN` | HQ | desktop-windows | global; destructive/config |
 | `ADMIN` | HQ | desktop-windows | global; master data, users, finance, fintech program |
-| `REGIONAL_MANAGER` | HQ | desktop-windows | assigned zones (`zone_managers`) |
-| `COMPLIANCE_OFFICER` | HQ | desktop-windows | global; verification-review + fraud triage only. **Unassigned at launch** |
+| `REGIONAL_MANAGER` | HQ | desktop-windows **+ mobile-android** | assigned zones (`zone_managers`) |
+| `COMPLIANCE_OFFICER` | HQ | desktop-windows **+ mobile-android** | global; verification-review + fraud triage only. **Unassigned at launch** |
 | `AUDITOR` | HQ | desktop-windows | global read-only + reconciliation tools |
 | `WAREHOUSE_MANAGER` | field | mobile-android | one warehouse |
 | `INFORMAL_REP` | field | mobile-android | one consignment depot in a market |

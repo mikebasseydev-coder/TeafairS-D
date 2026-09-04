@@ -11,10 +11,17 @@ Moniepoint) pay TEFAIR an invoice in full immediately and collect from the
 customer over time.
 
 **As of 2026-09-03 the project is mid-pivot to a fully serverless architecture.**
-The governing document is
-`docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md`. It
-supersedes the data-model/architecture portions of the three August specs and
-makes the `2026-08-25-backend-foundation.md` plan (Prisma/Docker) obsolete.
+The governing documents:
+
+- `docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` — **what
+  it does**: data model, RPCs, RLS, features, screens.
+- `docs/superpowers/specs/2026-09-04-architecture-and-scaffold-design.md` — **how
+  it's built**: framework choices, `packages/` layout, build & local-dev
+  pipelines, migration from `frontend/`.
+
+Together they supersede the data-model/architecture portions of the three August
+specs and make the `2026-08-25-backend-foundation.md` plan (Prisma/Docker)
+obsolete.
 
 ### Target architecture (per the 2026-09-03 spec)
 
@@ -27,11 +34,12 @@ makes the `2026-08-25-backend-foundation.md` plan (Prisma/Docker) obsolete.
 - Money and inventory are an **append-only ledger + RPC-maintained cache** — no
   mutable balance columns. Dashboards read cache tables refreshed by `pg_cron`,
   never live views.
-- **Two apps:** `apps/mobile-android` (React Native — field: sales agents, depot
-  reps, warehouse managers, fintech agents) and `apps/desktop-windows`
-  (`react-native-windows` — HQ: admins, regional managers, compliance,
-  auditors). **No web target.**
-- `packages/shared-*` for cross-app code; `pnpm` workspaces.
+- **Two apps:** `apps/mobile-android` (**Expo** / React Native — field roles +
+  HQ-on-the-go for `REGIONAL_MANAGER` / `COMPLIANCE_OFFICER`, 6 roles) and
+  `apps/desktop-windows` (**bare RN + `react-native-windows`** — the full HQ
+  workstation). **No web target.**
+- `packages/shared-*` (types, schemas, supabase client, offline sync, hooks, ui,
+  config) for cross-app code; `pnpm` workspaces + Turborepo.
 
 ### Current repository state
 
@@ -39,7 +47,8 @@ Nothing in the target layout is scaffolded yet. What exists:
 
 | Path | Status |
 |---|---|
-| `docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` | the current source of truth |
+| `docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` | source of truth for behaviour |
+| `docs/superpowers/specs/2026-09-04-architecture-and-scaffold-design.md` | source of truth for structure/build |
 | `docs/features/` | per-feature reference docs (seed each implementation plan) |
 | `apps/CLAUDE.md`, `supabase/CLAUDE.md` | target conventions — **directories not yet scaffolded** |
 | `frontend/` | **legacy** — the old npm-workspaces Expo scaffold (`core` + `mobile`). Kept for reference during migration; see `frontend/CLAUDE.md`. To be replaced by `apps/` + `packages/`. |
@@ -50,15 +59,15 @@ Nothing in the target layout is scaffolded yet. What exists:
 
 The project is in planning. Before implementation:
 
-1. The 2026-09-03 spec is written and under review (§13 has open questions).
-2. Still to write: an **architecture / repo-scaffold spec** (`apps/` + `packages/`
-   structure, pnpm, APK/MSIX build, shared Supabase client, session storage,
-   generated types), then **implementation plans** per subsystem via the
-   writing-plans skill (RTM core + verification → invoice financing →
+1. The platform spec (2026-09-03) and architecture spec (2026-09-04) are written
+   and under review (open questions in each spec's final section).
+2. Still to write: **implementation plans** — first the monorepo-scaffold plan
+   (architecture spec §12–13), then one per subsystem via the writing-plans skill
+   (roles/access → RTM core + verification → invoice financing →
    onboarding/guarantors).
-3. `frontend/` is a **greenfield restart** under the new layout — patterns carry
-   over (injectable Supabase client, `unwrapSupabaseResult`, storage-adapter,
-   auth-store shape), code does not.
+3. `frontend/` is a **greenfield restart** — patterns carry over (injectable
+   Supabase client, `unwrapSupabaseResult`, storage-adapter, auth-store shape),
+   code does not.
 
 ## Conventions that already hold (from the spec)
 
