@@ -1,54 +1,82 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
 ## Project
 
-Teafair's client: a multi-target React Native app (Android via Expo dev-client today; Windows via `react-native-windows` and web via Next.js + `react-native-web` planned) sharing one platform-agnostic core logic package and a shared `ui` component package. The flagship feature is a Route-to-Market omni-channel sales-aggregation platform ("HQ Aggregation platform") built on field-rep data captured in `mobile`. Backend is Supabase (Postgres + Auth) — Prisma + Docker are local-only schema-development tooling, never a runtime; see `docs/superpowers/specs/2026-08-25-backend-aggregator-platform-design.md` for the full architecture. Only `frontend/` is scaffolded today; `backend/` (Prisma/Docker sandbox — see `backend/CLAUDE.md`) and `supabase/` (CLI-managed migrations) are planned but not yet created.
+TEFAIR's Route-to-Market platform for the Nigerian informal-retail market:
+field agents move consignment stock through market-zone depots to shop owners,
+with an **invoice-financing** feature that lets Fintech agents (OPay, PalmPay,
+Moniepoint) pay TEFAIR an invoice in full immediately and collect from the
+customer over time.
 
-## Commands
+**As of 2026-09-03 the project is mid-pivot to a fully serverless architecture.**
+The governing document is
+`docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md`. It
+supersedes the data-model/architecture portions of the three August specs and
+makes the `2026-08-25-backend-foundation.md` plan (Prisma/Docker) obsolete.
 
-All work happens inside `frontend/`, an npm-workspaces root (workspaces: `core`, `mobile`).
+### Target architecture (per the 2026-09-03 spec)
 
-Install once: `cd frontend && npm install`
+- **Backend: Supabase only** — Postgres + Auth (MFA) + Storage + `pg_cron` + one
+  Edge Function (`notify`). No server, no Docker, no Prisma.
+- **Write path = `SECURITY DEFINER` Postgres RPCs**, idempotent on a
+  client-supplied key. Business tables grant `authenticated` SELECT only; RLS
+  scopes reads via `(select auth.uid())` + `private.*` helper functions.
+- `profiles.id` **is** `auth.users.id` (no surrogate-key split).
+- Money and inventory are an **append-only ledger + RPC-maintained cache** — no
+  mutable balance columns. Dashboards read cache tables refreshed by `pg_cron`,
+  never live views.
+- **Two apps:** `apps/mobile-android` (React Native — field: sales agents, depot
+  reps, warehouse managers, fintech agents) and `apps/desktop-windows`
+  (`react-native-windows` — HQ: admins, regional managers, compliance,
+  auditors). **No web target.**
+- `packages/shared-*` for cross-app code; `pnpm` workspaces.
 
-### core (`frontend/core` — `@teafair/core`)
-- Run all tests: `cd frontend/core && npx jest`
-- Run a single test file: `npx jest src/lib/profiles.test.ts` (from `frontend/core`)
-- Typecheck: `cd frontend/core && npx tsc --noEmit`
+### Current repository state
 
-### mobile (`frontend/mobile` — Expo/Android dev-client target)
-- No test runner is configured for `mobile`; verify changes with: `cd frontend/mobile && npx tsc --noEmit`
-- Start Metro: `npx expo start` (from `frontend/mobile`)
-- Build and install a debug dev-client APK on a connected Android device: `npx expo run:android` (requires Android SDK, JDK 17, and a connected device)
-- `npx expo start --web` works for quick sanity checks only — the app uses native RN primitives (no `react-native-web`), so it isn't representative of real layout.
+Nothing in the target layout is scaffolded yet. What exists:
 
-No lint is configured in either package.
+| Path | Status |
+|---|---|
+| `docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` | the current source of truth |
+| `docs/features/` | per-feature reference docs (seed each implementation plan) |
+| `apps/CLAUDE.md`, `supabase/CLAUDE.md` | target conventions — **directories not yet scaffolded** |
+| `frontend/` | **legacy** — the old npm-workspaces Expo scaffold (`core` + `mobile`). Kept for reference during migration; see `frontend/CLAUDE.md`. To be replaced by `apps/` + `packages/`. |
+| `backend/` | **removed** — Prisma/Docker sandbox is gone |
+| the three August specs, `docs/superpowers/plans/` | historical — superseded, kept for rationale |
 
-## Architecture
+## Working here right now
 
-### Monorepo layout
-`frontend/` is an npm-workspaces root with packages `core` (platform-agnostic logic) and `mobile` (Expo app). Three more packages are planned but not yet scaffolded: `ui` (shared RN + NativeWind components, consumed by every app target), `web` (Next.js + `react-native-web`, the HQ Aggregation platform's primary UI), and `windows` (bare RN + `react-native-windows`) — see `docs/superpowers/specs/2026-08-23-frontend-scaffold-design.md` for the original frontend layout rationale and `docs/superpowers/specs/2026-08-25-backend-aggregator-platform-design.md` for `ui`/`web` and the backend. At the repo root, `backend/` (Prisma + Docker local schema-dev sandbox — see `backend/CLAUDE.md`) and `supabase/` (Supabase-CLI-managed migrations, the production source of truth) are likewise planned but not yet scaffolded.
+The project is in planning. Before implementation:
 
-### `core` — shared logic, zero platform imports
-- `core` must never import `react-native`, Expo, or any other platform-specific package — enforced by convention (no native/Expo deps in `core/package.json`), not tooling.
-- One directory per feature under `src/features/{auth,catalog,orders,products,brands,territories,alerts,gamification,aggregator}/`, each exporting `api.ts` and `store.ts` (a Zustand store) through a barrel `index.ts`. Except for `auth`, every module is still a structural placeholder: `api.ts` exports `create<Feature>ApiClient(baseUrl)` returning `{ baseUrl }`, and `store.ts` exports an empty `use<Feature>Store`. New placeholder modules get one shared test — add them to the `features` array in `src/features/features.test.ts` rather than writing a dedicated test file.
-- `auth` is the one feature module with real logic: it's wired directly to Supabase Auth, not a generic REST client. `src/features/auth/api.ts` exports `signUpWithEmail`, `signInWithEmail`, `signOut`, and `getSession`, each taking a `SupabaseClient` as a parameter (same injectable convention as `fetchProfiles`) and unwrapping results through `unwrapSupabaseResult`. `src/features/auth/store.ts`'s `useAuthStore` holds `session`/`user` plus `setSession`/`clear` actions. `core` itself never calls `setSession`/`clear` — that's the calling app's job: `mobile` does it both directly (after a successful `signInWithEmail`/`signUpWithEmail`/`signOut` call in `AuthScreen`) and via a global `supabase.auth.onAuthStateChange` listener (`mobile/src/lib/useAuthBootstrap.ts`) that rehydrates the store from persisted storage on app start.
-- `src/storage/types.ts` defines a `Storage` interface (`getItem`/`setItem`/`removeItem`) with no implementation in `core` — each app supplies its own adapter (mobile: `expo-secure-store`, see `mobile/src/storage/secureStore.ts`; windows, once built: `@react-native-async-storage/async-storage`). Note: `expo-secure-store` has historically had a ~2048-byte per-value limit on Android — if a Supabase session JWT ever fails to persist, that's the first thing to check.
-- `src/lib/supabaseClient.ts` exports `createSupabaseClient(url, anonKey, options?)` — an injectable factory, never a module-level singleton, and it never reads `process.env` itself. The optional third argument is `@supabase/supabase-js`'s own `SupabaseClientOptions` (not RN-specific), which is how `mobile` injects its `auth.storage` adapter and `persistSession`/`autoRefreshToken` config without `core` knowing anything about the platform. Anything that touches Supabase (e.g. `src/lib/profiles.ts`'s `fetchProfiles`) takes the client as a parameter instead of importing a shared instance, so the calling app owns env-var reads and client lifetime. Supabase result/error handling goes through the shared `src/lib/unwrapSupabaseResult.ts` helper — don't duplicate that unwrap logic in new query functions.
-- Everything is re-exported through `src/index.ts`; app code should only ever import from `@teafair/core`, not reach into `core/src/*` directly.
+1. The 2026-09-03 spec is written and under review (§13 has open questions).
+2. Still to write: an **architecture / repo-scaffold spec** (`apps/` + `packages/`
+   structure, pnpm, APK/MSIX build, shared Supabase client, session storage,
+   generated types), then **implementation plans** per subsystem via the
+   writing-plans skill (RTM core + verification → invoice financing →
+   onboarding/guarantors).
+3. `frontend/` is a **greenfield restart** under the new layout — patterns carry
+   over (injectable Supabase client, `unwrapSupabaseResult`, storage-adapter,
+   auth-store shape), code does not.
 
-### `mobile` — Expo app, UI only
-- Screens live at `src/features/*/screens/`, one per feature module, wired into a single bottom-tab navigator (`src/navigation/AppNavigator.tsx` + `RootStackParams.ts`, React Navigation `bottom-tabs`). Screens pull state/logic from `@teafair/core` and stay presentational otherwise.
-- Shared UI primitives (`Button`, `InputField`) live in `src/components/`, styled with NativeWind (Tailwind for RN). When a component accepts a caller-supplied `className`, merge it with the component's own default classes rather than letting the spread silently overwrite them.
-- `src/lib/supabaseClient.ts` is where `EXPO_PUBLIC_SUPABASE_URL`/`EXPO_PUBLIC_SUPABASE_ANON_KEY` are actually read from `process.env` and passed into `core`'s `createSupabaseClient`, along with the `secureStoreAdapter` (`src/storage/secureStore.ts`) as the auth storage and `persistSession`/`autoRefreshToken: true`. This lives in `mobile`'s own source root (not in `core`) so Metro's `EXPO_PUBLIC_*` inlining applies to it, and so `core` stays env-agnostic. `.env`/`.env*.local` are gitignored — never hardcode Supabase URLs/keys in source. The same file also wires `AppState` to call `supabase.auth.startAutoRefresh()`/`stopAutoRefresh()` on foreground/background — Supabase's refresh timer doesn't run in the background on its own, so without this a session can come back stale after the app is backgrounded.
-- `App.tsx` calls `useAuthBootstrap()` (`src/lib/useAuthBootstrap.ts`) once at the root: it calls `getSession` to hydrate `useAuthStore` from persisted storage on launch, then subscribes to `supabase.auth.onAuthStateChange` for the lifetime of the app so sign-in/sign-out/token-refresh events anywhere stay reflected in the store.
-- `frontend/mobile` has its own `CLAUDE.md` pointing to `AGENTS.md`, which instructs checking the versioned Expo docs (https://docs.expo.dev/versions/v57.0.0/) before writing Expo-related code — this repo pins Expo ~57.0.15.
+## Conventions that already hold (from the spec)
 
-### `backend` and `supabase` — Supabase is the source of truth
-- Supabase (Postgres + Auth) is the actual production backend; `backend/` is local-only Prisma/Docker tooling for fast schema iteration and is never deployed. `backend/CLAUDE.md` has the full workflow.
-- `supabase/` (Supabase-CLI-managed: `migrations/`, `config.toml`) is where validated schema changes land before being applied to the hosted project.
-- The data model centers on the Route-to-Market aggregation platform: RBAC via a central `profiles` table linked to Supabase Auth (not per-table auth columns), an append-only `inventory_movements` ledger (never a balance column), and `aggregated_sales` / `current_inventory_balance` as precomputed caches (function-populated table / materialized view respectively) so aggregator reads never recompute live from raw `orders`/`inventory_movements`. Full rationale in `docs/superpowers/specs/2026-08-25-backend-aggregator-platform-design.md`.
+- **Never** put a write on a business table for the `authenticated` role. Every
+  mutation is an RPC.
+- **Never** add a mutable balance column. Post a ledger row; the RPC updates the
+  cache in the same transaction.
+- Every `SECURITY DEFINER` function pins `SET search_path`.
+- RLS predicates use `(select auth.uid())` and `private.*` helpers — never a
+  per-row correlated subquery.
+- Workflow statuses are `text` + `CHECK` (evolve without `ALTER TYPE`); stable
+  sets (role, severity, provider, tier…) are enums.
+- `.env` / `.env*.local` are gitignored — never hardcode Supabase URLs/keys.
+- Money `NUMERIC(15,2)`, quantities `NUMERIC(14,3)`, timestamps `timestamptz`.
 
-### Design/spec docs
-`docs/superpowers/specs/2026-08-23-frontend-scaffold-design.md` is the source of truth for the original scaffold's architecture decisions (monorepo layout, why Zustand/NativeWind, why no Redux/web/Vercel, the storage-adapter pattern). `docs/superpowers/specs/2026-08-25-backend-aggregator-platform-design.md` is the source of truth for the backend, `ui`/`web` targets, and the Route-to-Market data model. `docs/superpowers/plans/` holds the implementation plans that built and then fixed this scaffold — useful background for conventions like the injectable-Supabase-client pattern above.
+## Feature docs
+
+`docs/features/` — one reference per feature (tables, RPCs, screens by role,
+invariants, jobs, open questions), each cross-linked to a spec section. Start
+there when implementing a feature; the spec is the authority on cross-feature
+rules.
