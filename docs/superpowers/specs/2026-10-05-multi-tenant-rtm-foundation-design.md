@@ -1,0 +1,836 @@
+# Multi-tenant RTM foundation — design
+
+**Date:** 2026-10-05
+**Status:** approved design, pending implementation plan
+**Scope:** Spec A of four (see §12)
+
+## 1. Purpose and standing
+
+This spec defines the foundation of the TEAFAIR Route-to-Market platform as a
+**multi-tenant** system: several client companies (Nestlé, Unilever, …) each
+running their own distribution network on one deployment, over a shared
+retail-shop registry.
+
+It **supersedes** the two previous governing specs in full:
+
+| Superseded | Why |
+|---|---|
+| `2026-09-03-serverless-rtm-platform-design.md` | single-tenant; write path was ~50 bare Postgres RPCs; HQ-centric 9-role taxonomy; no shared network |
+| `2026-09-04-architecture-and-scaffold-design.md` | `apps/` + `packages/` pnpm monorepo with a `react-native-windows` HQ app; Expo-first build sequence |
+
+Both are retained as history. The 15 references in `docs/features/` remain
+useful for **behavioural** detail (verification signals, cash-audit variance,
+financing lifecycle) but every one is superseded on architecture, roles and
+tenancy, and must be re-read against this document before use.
+
+This spec covers tenancy, the write contract, roles, the data model and offline
+reliability. It does **not** specify screens or feature workflows — those belong
+to Specs B–D (§12).
+
+## 2. Decisions locked
+
+Each of these was contested during design and is settled. Reversing one
+invalidates parts of this spec.
+
+1. **No direct client writes.** The React Native app and the deferred Windows
+   client never issue `INSERT`/`UPDATE`/`DELETE` against business tables.
+2. **Edge Function = gateway, Postgres RPC = transaction.** The function handles
+   HTTP, validation, PIN checks and external IO; one `SECURITY DEFINER` RPC call
+   performs the atomic database work.
+3. **The gateway forwards the caller's JWT** to the RPC. It does not use the
+   service-role key for user-initiated work.
+4. **`tenantId` is never accepted from the client.** The active tenant is read
+   from JWT claims and re-verified against `tenant_users` server-side.
+5. **Shared schema, `tenant_id` discriminator.** One database, one `public`
+   schema. No schema-per-tenant, no database-per-tenant.
+6. **Tenants are never deleted.** `ON DELETE RESTRICT` throughout;
+   `status = 'INACTIVE'` is the offboarding path.
+7. **Supabase CLI owns all DDL.** Prisma is retired from the architecture.
+8. **Two role axes.** `platform_role_enum` (TEAFAIR staff) is separate from
+   `tenant_role_enum` (client-company operations). `profiles.user_role` does not
+   exist.
+9. **No HQ approval tier.** The operational chain is DSA → DSM → ASM → TM → ZSM
+   and ends there.
+10. **No inventory movement ledger.** `inventory_batches.quantity` is
+    authoritative, protected by `SELECT … FOR UPDATE`; `audit_logs` carries
+    history.
+11. **Android only at launch.** The Windows HQ client is deferred; its CI
+    workflow and stub remain so the target is not lost.
+
+## 3. Architecture
+
+### 3.1 The write path
+
+```
+Client (React Native, Android)
+  │  POST /functions/v1/<name>      Authorization: Bearer <user JWT>
+  ▼
+Edge Function (Deno)  ── the HTTP gateway
+  1. verify JWT; reject anonymous
+  2. read claims → active_tenant_id, tenant_role, platform_role
+  3. Zod-validate the body   (any client-supplied tenantId is stripped)
+  4. bcrypt-verify the 4-digit PIN, if this operation requires one
+  5. external IO — Paystack / KudiSMS / BVN provider / PostGIS preparation
+  6. exactly one call ──►  db.rpc('<rpc_name>', { p_idempotency_key, … })
+  7. map Postgres error codes to HTTP status (§3.5)
+  ▼
+Postgres SECURITY DEFINER RPC  ── the transaction
+  · the function body IS the BEGIN … COMMIT
+  · actor  = (select auth.uid())
+  · tenant = (select auth.jwt()) -> 'app_metadata' ->> 'active_tenant_id'
+  · re-verify ACTIVE membership and role against tenant_users
+  · idempotency insert, ON CONFLICT DO NOTHING
+  · SELECT … FOR UPDATE on contended rows, locked in primary-key order
+  · multi-table writes + audit_logs
+  · RETURN jsonb
+```
+
+### 3.2 Why the gateway forwards the JWT
+
+If the gateway called the RPC with the service-role key, `auth.uid()` inside the
+RPC would be `NULL`. The function would have to be *told* the actor and tenant,
+and would have no way to verify either — leaving the isolation guarantee resting
+on thirteen Edge Functions each getting it right.
+
+Forwarding the caller's own `Authorization` header instead:
+
+```ts
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  global: { headers: { Authorization: req.headers.get("Authorization")! } },
+})
+await db.rpc("place_requisition", { p_idempotency_key, p_items })
+```
+
+The RPC now runs as `authenticated` with real claims, so it derives actor and
+tenant itself. **There is no tenant or actor parameter to forge.** It can still
+write to locked-down tables because it is `SECURITY DEFINER`.
+
+Consequence worth having: the service-role key is absent from every user-facing
+function, and present only in the system-initiated set (§3.4).
+
+### 3.3 Function requirements
+
+Every write RPC:
+
+- is `SECURITY DEFINER` with `SET search_path = public, pg_temp`;
+- is `GRANT EXECUTE … TO authenticated`, `REVOKE … FROM anon, public`;
+- takes `p_idempotency_key uuid` as its first parameter;
+- derives actor and tenant from claims — never from parameters;
+- re-asserts role before writing;
+- writes one `audit_logs` row per business effect;
+- returns `jsonb`.
+
+Every RLS helper:
+
+- lives in `public`, never in the Supabase-managed `auth` schema, which the
+  platform may reset on upgrade;
+- wraps the accessor as `(select auth.uid())` so Postgres can cache it as an
+  initPlan rather than re-evaluating per row;
+- is `SECURITY DEFINER STABLE` with `SET search_path = public, pg_temp`.
+
+### 3.4 Gateway inventory
+
+| Function | Flavour | DB identity | Purpose |
+|---|---|---|---|
+| `auth-verify-claims` | **auth hook** | — | Custom Access Token Hook; injects tenant claims. Not an HTTP gateway |
+| `onboarding-kyc-verify` | user | `authenticated` | BVN/NIN provider call, bank binding |
+| `warehouse-order-workflow` | user | `authenticated` | requisition approval transitions |
+| `stockist-allocation-process` | user | `authenticated` | atomic allocation from a source warehouse |
+| `territory-route-geosync` | user | `authenticated` | PostGIS route and geofence validation |
+| `fintech-advance-payout` | user | `authenticated` | advance risk evaluation and disbursement |
+| `dsa-commission-calculate` | user | `authenticated` | tenant-rate commission computation |
+| `process-payment` | **system** | `service_role` | gateway webhook; HMAC signature verified |
+| `fintech-commission-release` | **system** | `service_role` | scheduled commission release |
+| `reconcile-funds` | **system** | `service_role` | cash deposits against the digital ledger |
+| `reconcile-discounts-eod` | **system** | `service_role` | end-of-day discounting |
+| `zonal-performance-aggregate` | **system** | `service_role` | scheduled zonal rollups |
+| `inventory-sync` | **system** | `service_role` | cross-node catalogue and batch sync |
+
+System-initiated functions have no user context, so they authenticate by gateway
+signature or cron secret, run under `service_role`, and record
+`audit_logs.source = 'WEBHOOK'` or `'CRON'` with a system actor.
+
+### 3.5 Error contract
+
+The offline queue must distinguish retry from stop, so this mapping is part of
+the contract rather than per-function improvisation.
+
+| Postgres condition | HTTP | Queue behaviour |
+|---|---|---|
+| `P0001` business-rule violation | 422 | terminal — surface to the user |
+| `23505` unique violation | 409 | terminal |
+| insufficient stock (custom `P0002`) | 409 + structured detail | terminal |
+| idempotency key reused with a different payload | 409 | terminal |
+| lock timeout / serialization failure | 503 | retry with backoff |
+| network failure, 5xx | — | retry with backoff |
+
+Client-facing shape: `{ error: { code, message, details } }`.
+
+## 4. Tenancy and isolation
+
+### 4.1 Strategy
+
+Single database, single `public` schema, `tenant_id UUID NOT NULL REFERENCES
+tenants(id) ON DELETE RESTRICT` as the discriminator on tenant-scoped tables.
+
+Schema-per-tenant and database-per-tenant are both rejected for one decisive
+reason: the shared retail-shop registry is a core product requirement, and
+physical separation makes a shop visible to many tenants either impossible or a
+federation problem.
+
+### 4.2 Three data classes
+
+Treating every table as tenant-scoped is what produced the original
+`retail_shops` incoherence. There are three classes, each with a different
+policy shape.
+
+| Class | Tables | `tenant_id` | Read policy |
+|---|---|---|---|
+| **A — tenant-scoped** | `central_products`, `inventory_batches`, `warehouses`, `requisitions`, `orders`, `retail_stock_pickups`, `payments`, `commission_records`, `cash_audit_batches`, `zones`, `territories`, `routes`, `route_waypoints`, `field_check_ins`, `fintech_advances`, `fintech_terminals`, `tenant_shop_coverage` | `NOT NULL` | `public.is_tenant_member(tenant_id)` |
+| **B — platform-global** | `retail_shops` | none | active membership in any tenant, gated by `allow_shared_network` |
+| **C — identity** | `profiles`, `user_secure_profiles`, `tenant_users`, `devices` | none — a person serves multiple tenants | per-row owner, or shared membership |
+| **D — plumbing** | `audit_logs`, `idempotency_logs`, `notifications` | nullable — platform-level rows carry `NULL` | per-row actor or recipient; see §8 |
+
+Child tables (`requisition_items`, `order_items`, `retail_stock_pickup_items`)
+carry a denormalised `tenant_id NOT NULL` alongside their parent FK. It is
+redundant by derivation and deliberate: it lets the RLS predicate hit a local
+index instead of joining to the parent on every row.
+
+### 4.3 The shared retail network
+
+A shop is global; each tenant maps it into **its own** territory structure:
+
+```
+retail_shops          -- global registry, no tenant_id
+tenant_shop_coverage  -- (tenant_id, retail_shop_id, territory_id)
+```
+
+Nestlé and Unilever can both cover shop X, each through their own TM. This is
+also what makes `tenant_settings.allow_shared_network` enforceable:
+
+- `true` — the tenant can discover and claim any shop in the global registry;
+- `false` — the tenant sees only shops in its own `tenant_shop_coverage`.
+
+A shop owner is a `tenant_users` member of *some* tenant, so the peer-profile
+policy would otherwise expose their identity to unrelated tenants. `retail_shops`
+therefore carries its own operational contact fields (`shop_name`,
+`contact_phone`); the owner's `profiles` row stays behind shared membership.
+
+### 4.4 Active tenant: claims propose, the database decides
+
+`auth-verify-claims` is a Custom Access Token Hook. It injects:
+
+```
+tenant_ids[]        all ACTIVE memberships
+active_tenant_id    the tenant selected in tenant-selector
+tenant_role         the role within the active tenant
+platform_role       PLATFORM_SUPER_ADMIN, or null
+```
+
+Switching tenant re-mints the token: `tenant-selector` calls a gateway that
+records the selection, then the client refreshes the session so the hook re-runs.
+
+**Claims are a cache, never the authority.** A revoked membership leaves a valid
+JWT in the field until it expires, so `is_tenant_member()` reads `tenant_users`
+live. This is also what resolves the two-sources-of-truth problem:
+`tenant_users.role` is authoritative and the claim is a routing convenience.
+
+### 4.5 PII
+
+```
+user_secure_profiles(user_id PK → profiles, bvn_or_nin_hash UNIQUE,
+                     bank_name, bank_account_number, bank_code, verified_at)
+```
+
+RLS: `FOR SELECT USING ((select auth.uid()) = user_id)` — owner only, no peer
+access of any kind.
+
+BVN uniqueness is required (one BVN, one person) but the raw value must not be
+stored in a readable, indexable column. So the column holds
+`bvn_or_nin_hash` — HMAC-SHA256 with a pepper held in Supabase Vault — under a
+unique index. Duplicate detection works; harvesting does not. Compliance reads
+go through a gateway that writes `audit_logs` on every access.
+
+### 4.6 Audit
+
+Because `service_role` bypasses RLS, and because there is no inventory movement
+ledger, `audit_logs` is the only forensic record of who changed what. It is
+therefore load-bearing:
+
+- append-only: `REVOKE UPDATE, DELETE FROM PUBLIC`, with a trigger as backstop;
+- never pruned;
+- `before` / `after` JSONB on every `inventory_batches` write, so stock history
+  is reconstructable;
+- indexed on `(tenant_id, created_at DESC)`, `(tenant_id, entity_type,
+  entity_id)` and `(idempotency_key)`.
+
+## 5. Roles and access
+
+### 5.1 Enums
+
+```sql
+CREATE TYPE platform_role_enum AS ENUM ('PLATFORM_SUPER_ADMIN');
+
+CREATE TYPE tenant_role_enum AS ENUM (
+  'ZSM', 'TM', 'ASM', 'DSM', 'DSA', 'FINTECH_AGENT', 'RETAIL_SHOP_OWNER'
+);
+```
+
+Two axes rather than one nine-value enum, so invalid states are unrepresentable:
+`PLATFORM_SUPER_ADMIN` in `tenant_users.role` and `DSA` in a platform column are
+both impossible by construction.
+
+`PLATFORM_SUPER_ADMIN` is TEAFAIR staff: tenant provisioning, global tenant
+management, KYC approval. It operates through the Supabase dashboard and admin
+tooling, not the mobile app. All daily business logic lives in
+`tenant_role_enum`.
+
+### 5.2 Scope model
+
+Four management tiers sit over two geographic levels, so the tiers cannot all be
+geographic. `tenant_users` carries optional `zone_id` and `territory_id` plus
+`reports_to_id`.
+
+| Role | Geographic anchor | Scope |
+|---|---|---|
+| `PLATFORM_SUPER_ADMIN` | none | cross-tenant, out-of-app |
+| `ZSM` | `zone_id` | all territories in the zone; top of the in-app chain |
+| `TM` | `territory_id` | one territory |
+| `ASM` | `territory_id` + `reports_to_id` | team tier within a territory |
+| `DSM` | `territory_id` + `reports_to_id` | team tier; supervises DSAs |
+| `DSA` | `territory_id` + `reports_to_id` | own records only |
+| `FINTECH_AGENT` | `territory_id` | own terminals, advances, deposits |
+| `RETAIL_SHOP_OWNER` | none | own shop only |
+
+ASM and DSM are **team tiers, not a third geographic level** — a deliberate
+choice against an `areas` table. Visibility resolves by zone or territory, which
+is index-friendly, rather than by walking `reports_to_id` per row.
+
+### 5.3 Operation matrix
+
+PIN = bcrypt-verified 4-digit PIN required at the gateway.
+
+| Operation | Roles | Scope | PIN |
+|---|---|---|---|
+| `submit_kyc` | any | self | — |
+| `approve_kyc` | `PLATFORM_SUPER_ADMIN` | global | — |
+| `register_device` | any | self | — |
+| `invite_tenant_user` | `ZSM`; `PLATFORM_SUPER_ADMIN` for the first ZSM | zone | — |
+| `set_active_tenant` | any | self | — |
+| `upsert_zone` | `PLATFORM_SUPER_ADMIN`, `ZSM` | tenant | — |
+| `upsert_territory` | `ZSM` | zone | — |
+| `pin_retail_shop` | `DSA`, `DSM`, `ASM`, `TM`, `ZSM` | global insert + auto-coverage | — |
+| `claim_shop_coverage` | `TM`, `ZSM` | territory; needs `allow_shared_network` | — |
+| `plan_route` | `TM`, `ZSM` | territory | — |
+| `field_check_in` | `DSA`, `DSM`, `ASM`, `TM` | own; geofence validated | — |
+| `upsert_product` | `ZSM` | tenant | — |
+| `receive_inventory_batch` | `ASM`, `TM`, `ZSM` | warehouse | — |
+| `adjust_inventory` | `ZSM` | tenant | **yes** |
+| `submit_requisition` | `DSM`, `ASM` | territory | — |
+| `approve_requisition` | `DSM` → `ASM` → `TM` → `ZSM` by level | own tier | **yes** above the value band |
+| `fulfil_requisition` | `ASM`, `TM` | source warehouse | — |
+| `log_retail_pickup` | `DSA` | own | **yes**, deferrable (§7.4) |
+| `record_dsa_stock_issue` | `RETAIL_SHOP_OWNER` | own shop | **yes** |
+| `create_order` | `DSA`, `RETAIL_SHOP_OWNER` | own | — |
+| `fulfil_online_sale` | `DSM`, `ASM` | territory | — |
+| `initiate_checkout` | `DSA`, `RETAIL_SHOP_OWNER`, `FINTECH_AGENT` | own | — |
+| `request_advance` | `FINTECH_AGENT` | own | — |
+| `approve_advance` | system risk rules; `ZSM` override | tenant | **yes** (override) |
+| `log_cash_deposit` | `FINTECH_AGENT`, `DSA` | own | — |
+| `approve_commission` | `ZSM` | tenant | **yes** |
+| `process_payment`, `release_commission`, `reconcile_funds`, `aggregate_zonal` | system only | — | — |
+
+### 5.4 The approval ladder is data, not an enum
+
+`requisitions.current_approval_level` and `required_approval_level` hold
+`tenant_role_enum` values; the required level is derived from a value band in
+`tenant_settings.custom_fields`. Adding or removing a tier is therefore a config
+change, not `ALTER TYPE`. The approval trail itself goes to `audit_logs`.
+
+### 5.5 PIN storage
+
+Previously absent entirely:
+
+```
+tenant_users.pin_hash           text        -- bcrypt
+tenant_users.pin_failed_attempts int
+tenant_users.pin_locked_until   timestamptz
+```
+
+Five attempts, then a 15-minute lockout. A 4-digit PIN is a 10,000-key space;
+lockout is the only thing that makes it viable as a transaction control.
+
+## 6. Data model — 30 tables
+
+### 6.1 Count accounting
+
+The 16 tables in the input artifacts become 30: **+11 genuinely missing**
+(`warehouses`, `requisitions`, `requisition_items`, `orders`, `order_items`,
+`routes`, `route_waypoints`, `field_check_ins`, `devices`, `audit_logs`,
+`notifications`) and **+3 platform** (`user_secure_profiles`,
+`tenant_shop_coverage`, `idempotency_logs`).
+
+Four candidates were dropped to keep the count down:
+
+| Dropped | Instead |
+|---|---|
+| `sales` | merged into `orders` behind a `channel` discriminator — one revenue ledger, not two |
+| `bank_accounts` | settlement snapshot on `fintech_advances` at disbursement, which is also better for audit |
+| `alerts` | deferred post-launch; `notifications` carries what launch needs |
+| `inventory_movements` | struck by decision 10; `audit_logs` carries stock history |
+
+### 6.2 Enums and workflow statuses
+
+Stable sets are enums. Workflow statuses are `text` + `CHECK`, so they evolve
+without `ALTER TYPE`.
+
+```sql
+-- enums
+platform_role_enum      PLATFORM_SUPER_ADMIN
+tenant_role_enum        ZSM TM ASM DSM DSA FINTECH_AGENT RETAIL_SHOP_OWNER
+tenant_status_enum      ACTIVE SUSPENDED INACTIVE
+tenant_user_status_enum ACTIVE INVITED DISABLED
+kyc_status_enum         UNVERIFIED PENDING VERIFIED REJECTED
+density_category_enum   HIGH_DENSITY MARKET_SQUARE EVENT_CENTER SUBURBAN
+gateway_provider_enum   PAYSTACK OPAY MONIEPOINT
+payment_status_enum     INITIATED PROCESSING SUCCESS FAILED REFUNDED
+commission_status_enum  PENDING APPROVED PAID
+warehouse_kind_enum     CENTRAL REGIONAL STOCKIST
+order_channel_enum      ONLINE FIELD_DSA RETAIL
+audit_source_enum       USER SYSTEM WEBHOOK CRON
+
+-- text + CHECK
+requisitions.status          DRAFT PENDING_APPROVAL APPROVED REJECTED FULFILLED CANCELLED
+orders.status                PENDING PAID IN_TRANSIT DELIVERED CANCELLED REFUNDED
+retail_stock_pickups.status  PENDING_CONFIRMATION CONFIRMED DISPUTED
+fintech_advances.status      PENDING APPROVED DISBURSED REPAID DEFAULTED REJECTED
+routes.status                PLANNED IN_PROGRESS COMPLETED CANCELLED
+idempotency_logs.status      IN_PROGRESS COMPLETED FAILED
+```
+
+`order_status_enum` from the input artifact carried `TM_APPROVED` and
+`HQ_APPROVED`. Those belonged to the approval ladder, not to revenue, and the HQ
+tier no longer exists; they move to `requisitions` as approval *levels*.
+
+### 6.3 Tenancy and identity (6)
+
+```
+tenants(id, name, code UNIQUE, status, commission_rate NUMERIC(5,2),
+        logo_url, created_at, updated_at)
+
+tenant_settings(tenant_id PK → tenants, currency DEFAULT 'NGN',
+                timezone DEFAULT 'Africa/Lagos',
+                allow_shared_network BOOLEAN DEFAULT TRUE,
+                custom_fields JSONB)
+
+tenant_users(id, tenant_id, user_id → profiles, role tenant_role_enum,
+             zone_id?, territory_id?, reports_to_id? → tenant_users,
+             is_primary, status, pin_hash?, pin_failed_attempts,
+             pin_locked_until?, created_at, updated_at)
+             UNIQUE(tenant_id, user_id)
+
+profiles(id PK → auth.users, full_name, phone_number UNIQUE, email UNIQUE?,
+         platform_role platform_role_enum NULL, kyc_status,
+         created_at, updated_at)
+
+user_secure_profiles(user_id PK → profiles, bvn_or_nin_hash UNIQUE,
+                     bank_name, bank_account_number, bank_code, verified_at?)
+
+devices(id, user_id → profiles, hardware_id, device_model, push_token?,
+        last_seen_at)  UNIQUE(user_id, hardware_id)
+```
+
+`profiles.user_role` does not exist — role is per-tenant and cannot live on a
+global row.
+
+### 6.4 Geography and shared network (7)
+
+```
+zones(id, tenant_id, zone_name, zsm_id? → profiles, created_at)
+
+territories(id, tenant_id, zone_id → zones, territory_name,
+            tm_id? → profiles, created_at)
+
+retail_shops(id, shop_name, contact_phone, owner_id? → profiles,
+             density_category, location GEOMETRY(Point,4326),
+             address_text, created_at, updated_at)        -- GLOBAL
+
+tenant_shop_coverage(tenant_id, retail_shop_id → retail_shops,
+                     territory_id → territories, assigned_by, assigned_at)
+                     PRIMARY KEY (tenant_id, retail_shop_id)
+
+routes(id, tenant_id, territory_id, assigned_staff_id, route_date, status)
+
+route_waypoints(id, tenant_id, route_id → routes, seq, landmark_name,
+                location GEOMETRY(Point,4326), geofence_radius_m)
+
+field_check_ins(id, tenant_id, route_id?, waypoint_id?, user_id,
+                location GEOMETRY(Point,4326), captured_at,
+                within_geofence BOOLEAN)
+```
+
+GIST indexes on all three geometry columns, since `territory-route-geosync`
+queries all of them:
+
+```sql
+CREATE INDEX idx_retail_shops_geo    ON retail_shops    USING GIST (location);
+CREATE INDEX idx_route_waypoints_geo ON route_waypoints USING GIST (location);
+CREATE INDEX idx_field_checkins_geo  ON field_check_ins USING GIST (location);
+```
+
+The first corrects a syntax error in the input artifact, which was missing its
+table name and would have failed to apply.
+
+### 6.5 Catalogue and inventory (3)
+
+```
+warehouses(id, tenant_id, name, kind warehouse_kind_enum,
+           territory_id?, location?, manager_id? → profiles)
+
+central_products(id, tenant_id, sku_code, product_name, category,
+                 unit_price NUMERIC(15,2), wholesale_price NUMERIC(15,2),
+                 description?, is_active, created_at)
+                 UNIQUE(tenant_id, sku_code)
+
+inventory_batches(id, tenant_id, warehouse_id → warehouses, sku_code,
+                  batch_number, quantity NUMERIC(14,3) CHECK (quantity >= 0),
+                  expires_at?, created_at)
+                  FOREIGN KEY (tenant_id, sku_code)
+                    REFERENCES central_products(tenant_id, sku_code)
+```
+
+Three corrections folded in: `warehouse_destination_id` now has a real FK target;
+money widens to `NUMERIC(15,2)` and quantities to `NUMERIC(14,3)` so that
+cartons-and-units and weighed goods survive; `stockistOrgId` resolves to
+`warehouses` where `kind = 'STOCKIST'`, operated internally by an ASM or DSM —
+stockists have no independent login role at launch.
+
+### 6.6 Commerce (6)
+
+```
+requisitions(id, tenant_id, source_warehouse_id → warehouses,
+             dest_warehouse_id → warehouses, requested_by,
+             status, current_approval_level?, required_approval_level,
+             total_value NUMERIC(15,2), created_at, updated_at)
+
+requisition_items(id, tenant_id, requisition_id → requisitions, sku_code,
+                  requested_qty NUMERIC(14,3), approved_qty?, fulfilled_qty?)
+
+orders(id, tenant_id, channel order_channel_enum, retail_shop_id?,
+       agent_id? → profiles, customer_name?, customer_phone?,
+       total_amount NUMERIC(15,2), status, tracking_reference?,
+       created_at, updated_at)
+
+order_items(id, tenant_id, order_id → orders, sku_code,
+            qty NUMERIC(14,3), unit_price NUMERIC(15,2),
+            line_total NUMERIC(15,2))
+
+retail_stock_pickups(id, tenant_id, retail_shop_id → retail_shops,
+                     dsa_agent_id → profiles, dsm_supervisor_id?,
+                     event_tag?, status, confirmed_by?, confirmed_at?,
+                     created_at)
+
+retail_stock_pickup_items(id, tenant_id, pickup_id → retail_stock_pickups,
+                          sku_code, quantity_picked NUMERIC(14,3))
+```
+
+`payments.order_id` and `commission_records.sale_id` both now resolve to
+`orders(id)` with real foreign keys; in the input artifact both were
+`NOT NULL` columns pointing at nothing.
+
+**One event, two entry points.** `log_retail_pickup` (DSA-initiated) and
+`record_dsa_stock_issue` (shop-owner-initiated) are not two tables. They are two
+ways into the same `retail_stock_pickups` row: whichever party acts first creates
+it, and the other party's action is the confirmation that moves it from
+`PENDING_CONFIRMATION` to `CONFIRMED` (§7.4). A DSA with signal and a shop owner
+with signal therefore converge on one record rather than producing a duplicate
+pair that has to be reconciled later.
+
+**Shop-level stock balances are deferred** (§10). The pickup and issue events
+record quantities, so a shop's position is derivable from
+`retail_stock_pickup_items` plus the orders fulfilled from that shop. Whether
+that derivation gets cached into a balance table is a Spec C decision, taken
+when the `retail-shop-owner` screens define what they actually need to display.
+Until then `inventory_batches` tracks warehouse and stockist stock only, and
+nothing in this spec decrements a shop.
+
+### 6.7 Money (5)
+
+```
+payments(id, tenant_id, order_id → orders, customer_id? → profiles,
+         amount NUMERIC(15,2) CHECK (amount > 0), gateway_provider,
+         payment_status, transaction_reference,
+         gateway_response_payload JSONB, created_at, updated_at)
+         UNIQUE(tenant_id, transaction_reference)
+
+commission_records(id, tenant_id, order_id → orders, agent_id? → profiles,
+                   amount NUMERIC(15,2), rate_applied NUMERIC(5,2)
+                     CHECK (rate_applied BETWEEN 0 AND 100),
+                   status commission_status_enum, approved_by?,
+                   released_at?, created_at)
+
+fintech_terminals(id, tenant_id, agent_id → profiles, terminal_id,
+                  provider, is_active, created_at)
+                  UNIQUE(tenant_id, terminal_id)
+
+fintech_advances(id, tenant_id, agent_id → profiles,
+                 requested_amount NUMERIC(15,2) CHECK (> 0),
+                 repayment_duration_days INT CHECK (BETWEEN 1 AND 30),
+                 status, disbursed_to_bank_code?,
+                 disbursed_to_account_last4?, disbursed_at?, repaid_at?,
+                 created_at)
+
+cash_audit_batches(id, tenant_id, agent_id → profiles,
+                   teller_receipt_number,
+                   declared_cash_amount NUMERIC(15,2) CHECK (>= 0),
+                   digital_collection_total NUMERIC(15,2) CHECK (>= 0),
+                   variance_reason?, is_reconciled, created_at)
+                   UNIQUE(tenant_id, teller_receipt_number)
+```
+
+### 6.8 Platform (3)
+
+```
+idempotency_logs(key UUID PK, tenant_id?, actor_id, operation,
+                 request_hash, response JSONB, status, created_at)
+
+audit_logs(id, tenant_id?, actor_id?, actor_role TEXT, operation,
+           entity_type, entity_id, before JSONB, after JSONB,
+           idempotency_key?, source audit_source_enum, created_at)
+
+notifications(id, tenant_id?, user_id → profiles, kind, title, body,
+              payload JSONB, read_at?, created_at)
+```
+
+### 6.9 Conventions across the model
+
+- Money is `NUMERIC(15,2)`; quantities are `NUMERIC(14,3)`; all timestamps are
+  `timestamptz`.
+- Every FK out of `tenants` is `ON DELETE RESTRICT`. The input artifact used
+  `CASCADE`, which would have erased a client's payments, commissions and cash
+  audits on offboarding, making any later audit impossible to answer.
+- `updated_at` is maintained by a shared `set_updated_at()` trigger. In the
+  input artifact these columns defaulted to `NOW()` and never advanced.
+- `zones.zsm_id` and `territories.tm_id` are constrained by trigger to a profile
+  holding an ACTIVE `tenant_users` row in the same tenant with the matching role.
+
+## 7. Offline queue and idempotency
+
+### 7.1 Storage
+
+MMKV, via `src/store/mmkvStorage.ts`. Appropriate for a bounded write queue plus
+a read cache of a few thousand rows.
+
+> The resolution document said "SQLite/AsyncStorage" while the target tree
+> specifies MMKV. MMKV is adopted. Revisit only if the agent read cache grows
+> past roughly ten thousand rows, where a queryable store starts to earn its
+> cost.
+
+### 7.2 Queue entry
+
+```ts
+type QueuedMutation = {
+  id: string            // UUIDv4 — IS the idempotency_key, generated at enqueue
+  operation: string     // gateway function name
+  payload: unknown      // Zod-validated at enqueue, before it ever leaves
+  dependsOn?: string    // ordering within a causal chain
+  attempts: number
+  nextAttemptAt: number
+  lastError?: { code: string; message: string; terminal: boolean }
+  status: "PENDING" | "IN_FLIGHT" | "TERMINAL" | "DONE"
+}
+```
+
+The key is generated **at enqueue, not at send**. That is what makes a retry
+after an ambiguous timeout safe: the retry carries the same key, so the RPC
+recognises it. Validating with Zod at enqueue means a malformed mutation fails
+in the user's hands rather than rotting silently in the queue.
+
+### 7.3 Drain
+
+Strict FIFO within a `dependsOn` chain — a sale from picked-up stock cannot land
+before the pickup — and parallel across chains. Exponential backoff from 2s to
+5m. Retry on 503 and network failure; stop immediately on 409 and 422 per §3.5
+and move the entry to a visible "Needs attention" list. The alternative is an
+invisible infinite retry against a business rule that will never pass.
+
+### 7.4 PIN-gated operations and the pickup path
+
+The gateway bcrypt-verifies PINs against `tenant_users.pin_hash`, which is
+server-side by design. Caching any verifier on the device would defeat the
+control. So PIN-gated operations normally require connectivity at the moment of
+action: `record_dsa_stock_issue`, `approve_requisition` above the value band,
+`adjust_inventory`, `approve_commission`.
+
+`log_retail_pickup` is the exception, because it is a core field action in
+exactly the places where signal is worst. It uses a deferred-confirmation path:
+
+1. The DSA logs the pickup offline. It enqueues and lands as
+   `status = 'PENDING_CONFIRMATION'`, with no PIN.
+2. The shop owner confirms from their own app when either device reconnects,
+   which sets `CONFIRMED`, `confirmed_by` and `confirmed_at`.
+3. Unconfirmed pickups past a threshold surface to the DSM as a notification, and
+   the shop owner can instead mark the pickup `DISPUTED`.
+
+This keeps the control and the offline path. The pickup is an event record, not
+a balance mutation — no shop stock is decremented (§6.6) — so step 1 committing
+before confirmation cannot corrupt an inventory figure. The confirmation is the
+accountability record, not the gate.
+
+### 7.5 Read cache
+
+supabase-js reads persist to MMKV with a per-class TTL:
+
+| Class | TTL | Refresh |
+|---|---|---|
+| master data — products, territories, shops | long | on app foreground |
+| operational lists — own pickups, own orders | short | on screen focus |
+| money — balances, commissions | never served stale | spinner, or an explicitly stale-marked value |
+
+Server timestamps are authoritative throughout. The client's `captured_at` is
+recorded alongside and never substituted, because field device clocks drift.
+
+## 8. RLS policy inventory
+
+Grants, before any policy:
+
+```sql
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;
+REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM authenticated, anon;
+```
+
+Helpers, in `public`:
+
+```sql
+CREATE OR REPLACE FUNCTION public.is_tenant_member(p_tenant_id uuid)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER STABLE
+SET search_path = public, pg_temp AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM tenant_users tu
+    WHERE tu.tenant_id = p_tenant_id
+      AND tu.user_id = (select auth.uid())
+      AND tu.status = 'ACTIVE'
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.tenant_role(p_tenant_id uuid)
+RETURNS tenant_role_enum LANGUAGE sql SECURITY DEFINER STABLE
+SET search_path = public, pg_temp AS $$
+  SELECT tu.role FROM tenant_users tu
+  WHERE tu.tenant_id = p_tenant_id
+    AND tu.user_id = (select auth.uid())
+    AND tu.status = 'ACTIVE'
+  LIMIT 1;
+$$;
+```
+
+Policies are **`FOR SELECT` only**. There are no `INSERT`, `UPDATE` or `DELETE`
+policies on business tables, because the grants above make them unreachable;
+writes arrive through `SECURITY DEFINER` RPCs.
+
+| Table group | `FOR SELECT USING` |
+|---|---|
+| Class A (all tenant-scoped) | `public.is_tenant_member(tenant_id)` |
+| `retail_shops` | member of any ACTIVE tenant; narrowed to `tenant_shop_coverage` when that tenant has `allow_shared_network = false` |
+| `tenant_shop_coverage` | `public.is_tenant_member(tenant_id)` |
+| `tenants` | `public.is_tenant_member(id)` |
+| `tenant_settings` | `public.is_tenant_member(tenant_id)` |
+| `tenant_users` | `user_id = (select auth.uid())` OR `public.is_tenant_member(tenant_id)` |
+| `profiles` | `id = (select auth.uid())` OR shares an ACTIVE tenant membership |
+| `user_secure_profiles` | `user_id = (select auth.uid())` — owner only |
+| `devices` | `user_id = (select auth.uid())` |
+| `notifications` | `user_id = (select auth.uid())` |
+| `audit_logs` | `public.is_tenant_member(tenant_id)` AND `public.tenant_role(tenant_id) IN ('ZSM','TM')` |
+| `idempotency_logs` | `actor_id = (select auth.uid())` |
+
+The input artifact used `FOR ALL USING (is_tenant_member(tenant_id))` on
+thirteen tables. Because `FOR ALL` covers writes, and Postgres reuses `USING` as
+the `WITH CHECK` when none is given, any ACTIVE member of a tenant could rewrite
+product prices, insert themselves a `PAID` commission, flip a payment to
+`SUCCESS`, zero out a cash audit, or delete pickup records. Tenant isolation
+held; authorisation within a tenant did not exist. Restricting policies to
+`SELECT` and routing writes through RPCs is what closes that.
+
+## 9. Conventions that hold from here
+
+- **Never** grant `INSERT`, `UPDATE` or `DELETE` on a business table to
+  `authenticated`. Every mutation is a `SECURITY DEFINER` RPC.
+- **Never** accept `tenantId` from a client payload. Read the claim, verify the
+  membership.
+- **Never** call an RPC from a user-facing Edge Function with the service-role
+  key. Forward the caller's `Authorization` header.
+- **Never** create a function or helper in the `auth` schema. Use `public`.
+- Every `SECURITY DEFINER` function pins `SET search_path = public, pg_temp`.
+- RLS predicates use `(select auth.uid())` and `public.*` helpers, never a
+  per-row correlated subquery.
+- Workflow statuses are `text` + `CHECK`; stable sets are enums.
+- Money `NUMERIC(15,2)`, quantities `NUMERIC(14,3)`, timestamps `timestamptz`.
+- Every mutation carries a client-generated `p_idempotency_key`, checked inside
+  the transaction.
+- `.env` and `.env*.local` are gitignored. Supabase URLs and keys are never
+  hardcoded; the Vault holds the BVN pepper and gateway secrets.
+
+## 10. Deferred
+
+Out of scope for this spec and for launch, recorded so they are not rediscovered
+as gaps:
+
+- `alerts` as a first-class table with acknowledge/resolve — `notifications`
+  covers launch.
+- `bank_accounts` as a table, enabling multiple settlement accounts per agent.
+- `inventory_movements` as an append-only ledger, with nightly
+  `pg_cron` reconciliation against `inventory_batches.quantity`.
+- A cached shop-level stock balance. Shop position is derivable from pickup and
+  order events at launch (§6.6); caching it is a Spec C decision.
+- An independent `STOCKIST` login role; stockists are internally operated
+  warehouses at launch.
+- An `areas` table between territory and field, if ASM scope ever becomes
+  geographic rather than a team tier.
+- The Windows HQ desktop client, and with it the full master-data, finance and
+  audit-browser surfaces. `windows-hq-ci.yml` and the stub remain in the tree.
+- Push notifications beyond `devices.push_token` capture.
+- FIRS e-invoicing and QuickBooks connectors.
+
+## 11. Open questions
+
+1. **BVN pepper rotation** — rotating the HMAC pepper invalidates every
+   `bvn_or_nin_hash`. A rotation needs a re-hash migration with both peppers
+   live, or a versioned hash column. Decide before the first production KYC.
+2. **Commission rate precedence** — `tenants.commission_rate` defaults to `0`
+   while the fintech feature is described as a flat 10%. Which governs when they
+   disagree, and can a per-agent rate override the tenant rate?
+3. **Requisition value bands** — the thresholds that set
+   `required_approval_level` live in `tenant_settings.custom_fields`. Their
+   default values are unset.
+4. **Pickup confirmation threshold** — how long a `PENDING_CONFIRMATION` pickup
+   may sit before it escalates to the DSM (§7.4 step 3).
+5. **Gateway webhook replay window** — `process-payment` verifies an HMAC
+   signature; the acceptable timestamp skew is unset.
+
+## 12. Spec decomposition
+
+This is Spec A of four. Each gets its own spec, plan and implementation cycle.
+
+| # | Spec | Covers | Depends on |
+|---|---|---|---|
+| **A** | **this document** | tenancy, write contract, roles, data model, offline | — |
+| B | App shell and structure | flat `src/`, navigation, phone/tablet topology, zustand slices, `tenant-selector`, auth/onboarding/splash, `windows/` stub, both CI workflows | A |
+| C | RTM core | central-store, products-catalogue, stockist-distributors, retail-shop-owner, direct-sales, retail-footprint, zonal/territory/area oversight | A, B |
+| D | Money and integrations | fintech-advance, payments, sales-funds-return, EOD reconciliation, KudiSMS, KYC provider, gateways | A, B, C |
+
+## 13. Migration from the current repository
+
+1. `supabase/` — declarative schema, the 30 tables, enums, helpers, RLS, grants,
+   RPCs, seeds, type generation. Supabase CLI owns all DDL.
+2. `src/` — the flat app structure per the target tree, replacing the
+   `apps/` + `packages/` layout from the superseded architecture spec.
+3. Delete `frontend/` — 824 lines across 55 files, mostly placeholder modules
+   from the single-tenant Expo scaffold. Nothing is ported; the patterns worth
+   keeping (injectable Supabase client, result unwrapping, storage adapter,
+   auth-store shape) are re-created fresh against this spec.
+4. `prisma/` is not created. Prisma is retired.
+5. `CLAUDE.md`, `apps/CLAUDE.md` and `supabase/CLAUDE.md` describe the
+   superseded architecture and must be rewritten against this spec as part of
+   the Spec B scaffold plan.
+6. The 15 docs in `docs/features/` are marked superseded-in-part: behavioural
+   reference retained, architecture and roles replaced by this document.
