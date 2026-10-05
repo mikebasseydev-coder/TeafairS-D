@@ -138,8 +138,9 @@ Every RLS helper:
 | `stockist-allocation-process` | user | `authenticated` | atomic allocation from a source warehouse |
 | `territory-route-geosync` | user | `authenticated` | PostGIS route and geofence validation |
 | `fintech-advance-payout` | user | `authenticated` | advance risk evaluation and disbursement |
-| `dsa-commission-calculate` | user | `authenticated` | tenant-rate commission computation |
-| `process-payment` | **system** | `service_role` | gateway webhook; HMAC signature verified |
+| `dsa-commission-calculate` | user | `authenticated` | partner-bps commission computation |
+| `complete-pos-backed-order` | user | `authenticated` | dual-validation POS settlement (§6.11) |
+| `process-payment` | **system** | `service_role` | Paystack webhook; signature verified |
 | `fintech-commission-release` | **system** | `service_role` | scheduled commission release |
 | `reconcile-funds` | **system** | `service_role` | cash deposits against the digital ledger |
 | `reconcile-discounts-eod` | **system** | `service_role` | end-of-day discounting |
@@ -186,10 +187,10 @@ policy shape.
 
 | Class | Tables | `tenant_id` | Read policy |
 |---|---|---|---|
-| **A — tenant-scoped** | `central_products`, `inventory_batches`, `warehouses`, `requisitions`, `orders`, `retail_stock_pickups`, `payments`, `commission_records`, `cash_audit_batches`, `zones`, `territories`, `routes`, `route_waypoints`, `field_check_ins`, `fintech_advances`, `fintech_terminals`, `tenant_shop_coverage` | `NOT NULL` | `public.is_tenant_member(tenant_id)` |
+| **A — tenant-scoped** | `central_products`, `inventory_batches`, `warehouses`, `requisitions`, `orders`, `retail_stock_pickups`, `payments`, `commission_records`, `cash_audit_batches`, `zones`, `territories`, `routes`, `route_waypoints`, `field_check_ins`, `fintech_advances`, `fintech_terminals`, `fintech_partners`, `tenant_shop_coverage` | `NOT NULL` | `public.is_tenant_member(tenant_id)` |
 | **B — platform-global** | `retail_shops` | none | active membership in any tenant, gated by `allow_shared_network` |
 | **C — identity** | `profiles`, `user_secure_profiles`, `tenant_users`, `devices` | none — a person serves multiple tenants | per-row owner, or shared membership |
-| **D — plumbing** | `audit_logs`, `idempotency_logs`, `notifications` | nullable — platform-level rows carry `NULL` | per-row actor or recipient; see §8 |
+| **D — plumbing** | `audit_logs`, `idempotency_logs`, `notifications`, `otp_challenges` | nullable — platform-level rows carry `NULL` | per-row actor or recipient; see §8 |
 
 Child tables (`requisition_items`, `order_items`, `retail_stock_pickup_items`)
 carry a denormalised `tenant_id NOT NULL` alongside their parent FK. It is
@@ -238,7 +239,7 @@ live. This is also what resolves the two-sources-of-truth problem:
 ### 4.5 PII
 
 ```
-user_secure_profiles(user_id PK → profiles, bvn_or_nin_hash UNIQUE,
+user_secure_profiles(user_id PK → profiles, bvn_nin_hash UNIQUE,
                      bank_name, bank_account_number, bank_code, verified_at)
 ```
 
@@ -247,7 +248,7 @@ access of any kind.
 
 BVN uniqueness is required (one BVN, one person) but the raw value must not be
 stored in a readable, indexable column. So the column holds
-`bvn_or_nin_hash` — HMAC-SHA256 with a pepper held in Supabase Vault — under a
+`bvn_nin_hash` — HMAC-SHA256 with a pepper held in Supabase Vault — under a
 unique index. Duplicate detection works; harvesting does not. Compliance reads
 go through a gateway that writes `audit_logs` on every access.
 
@@ -360,15 +361,16 @@ tenant_users.pin_locked_until   timestamptz
 Five attempts, then a 15-minute lockout. A 4-digit PIN is a 10,000-key space;
 lockout is the only thing that makes it viable as a transaction control.
 
-## 6. Data model — 30 tables
+## 6. Data model — 32 tables
 
 ### 6.1 Count accounting
 
-The 16 tables in the input artifacts become 30: **+11 genuinely missing**
+The 16 tables in the input artifacts become 32: **+11 genuinely missing**
 (`warehouses`, `requisitions`, `requisition_items`, `orders`, `order_items`,
 `routes`, `route_waypoints`, `field_check_ins`, `devices`, `audit_logs`,
-`notifications`) and **+3 platform** (`user_secure_profiles`,
-`tenant_shop_coverage`, `idempotency_logs`).
+`notifications`), **+3 platform** (`user_secure_profiles`,
+`tenant_shop_coverage`, `idempotency_logs`), and **+2 for the liquidity engine**
+(`fintech_partners`, `otp_challenges`).
 
 Four candidates were dropped to keep the count down:
 
@@ -392,12 +394,14 @@ tenant_status_enum      ACTIVE SUSPENDED INACTIVE
 tenant_user_status_enum ACTIVE INVITED DISABLED
 kyc_status_enum         UNVERIFIED PENDING VERIFIED REJECTED
 density_category_enum   HIGH_DENSITY MARKET_SQUARE EVENT_CENTER SUBURBAN
-gateway_provider_enum   PAYSTACK OPAY MONIEPOINT
+gateway_provider_enum   PAYSTACK
+pos_network_enum        MONIEPOINT OPAY PALMPAY
 payment_status_enum     INITIATED PROCESSING SUCCESS FAILED REFUNDED
 commission_status_enum  PENDING APPROVED PAID
 warehouse_kind_enum     CENTRAL REGIONAL STOCKIST
 order_channel_enum      ONLINE FIELD_DSA RETAIL
 audit_source_enum       USER SYSTEM WEBHOOK CRON
+otp_purpose_enum        PICKUP_CONFIRM POS_SETTLEMENT
 
 -- text + CHECK
 requisitions.status          DRAFT PENDING_APPROVAL APPROVED REJECTED FULFILLED CANCELLED
@@ -412,28 +416,39 @@ idempotency_logs.status      IN_PROGRESS COMPLETED FAILED
 `HQ_APPROVED`. Those belonged to the approval ladder, not to revenue, and the HQ
 tier no longer exists; they move to `requisitions` as approval *levels*.
 
+**Gateway and POS network are two different axes.** The input artifacts
+conflated them in a single `gateway_provider_enum` of
+`PAYSTACK OPAY MONIEPOINT`. They are unrelated: **Paystack is the exclusive
+collection engine** — every digital payment, webhook and split settlement routes
+through it — while Moniepoint, OPay and PalmPay are *POS agent networks* acting
+as local liquidity nodes. A shop owner settles an order at a nearby POS agent
+whose terminal belongs to one of those networks, and the money reaches Teafair
+through Paystack. So `gateway_provider_enum` holds one value and
+`pos_network_enum` is a separate dimension on `fintech_partners`.
+
 ### 6.3 Tenancy and identity (6)
 
 ```
-tenants(id, name, code UNIQUE, status, commission_rate NUMERIC(5,2),
-        logo_url, created_at, updated_at)
+tenants(id, name, code UNIQUE, status, logo_url, created_at, updated_at)
+        -- no commission_rate: the rate is per-partner, in
+        -- fintech_partners.commission_bps (§6.7)
 
 tenant_settings(tenant_id PK → tenants, currency DEFAULT 'NGN',
                 timezone DEFAULT 'Africa/Lagos',
                 allow_shared_network BOOLEAN DEFAULT TRUE,
                 custom_fields JSONB)
 
-tenant_users(id, tenant_id, user_id → profiles, role tenant_role_enum,
+tenant_users(id, tenant_id, profile_id → profiles, role tenant_role_enum,
              zone_id?, territory_id?, reports_to_id? → tenant_users,
              is_primary, status, pin_hash?, pin_failed_attempts,
              pin_locked_until?, created_at, updated_at)
-             UNIQUE(tenant_id, user_id)
+             UNIQUE(tenant_id, profile_id)
 
 profiles(id PK → auth.users, full_name, phone_number UNIQUE, email UNIQUE?,
          platform_role platform_role_enum NULL, kyc_status,
          created_at, updated_at)
 
-user_secure_profiles(user_id PK → profiles, bvn_or_nin_hash UNIQUE,
+user_secure_profiles(user_id PK → profiles, bvn_nin_hash UNIQUE,
                      bank_name, bank_account_number, bank_code, verified_at?)
 
 devices(id, user_id → profiles, hardware_id, device_model, push_token?,
@@ -446,10 +461,12 @@ global row.
 ### 6.4 Geography and shared network (7)
 
 ```
-zones(id, tenant_id, zone_name, zsm_id? → profiles, created_at)
+zones(id, tenant_id, zone_name, zsm_id? → profiles,
+      boundary GEOMETRY(MultiPolygon, 4326), created_at)
 
 territories(id, tenant_id, zone_id → zones, territory_name,
-            tm_id? → profiles, created_at)
+            tm_id? → profiles,
+            boundary GEOMETRY(MultiPolygon, 4326), created_at)
 
 retail_shops(id, shop_name, contact_phone, owner_id? → profiles,
              density_category, location GEOMETRY(Point,4326),
@@ -476,6 +493,8 @@ queries all of them:
 CREATE INDEX idx_retail_shops_geo    ON retail_shops    USING GIST (location);
 CREATE INDEX idx_route_waypoints_geo ON route_waypoints USING GIST (location);
 CREATE INDEX idx_field_checkins_geo  ON field_check_ins USING GIST (location);
+CREATE INDEX idx_zones_boundary      ON zones           USING GIST (boundary);
+CREATE INDEX idx_territories_boundary ON territories    USING GIST (boundary);
 ```
 
 The first corrects a syntax error in the input artifact, which was missing its
@@ -554,26 +573,38 @@ when the `retail-shop-owner` screens define what they actually need to display.
 Until then `inventory_batches` tracks warehouse and stockist stock only, and
 nothing in this spec decrements a shop.
 
-### 6.7 Money (5)
+### 6.7 Money and the liquidity engine (6)
 
 ```
+fintech_partners(id, tenant_id, business_name, pos_network pos_network_enum,
+                 commission_bps INT CHECK (commission_bps BETWEEN 0 AND 10000),
+                 territory_id? → territories, contact_phone,
+                 paystack_subaccount_code?, status, approved_by,
+                 approved_at, created_at)
+                 UNIQUE(tenant_id, pos_network, business_name)
+
 payments(id, tenant_id, order_id → orders, customer_id? → profiles,
-         amount NUMERIC(15,2) CHECK (amount > 0), gateway_provider,
-         payment_status, transaction_reference,
+         teafair_agent_id → profiles, fintech_partner_id? → fintech_partners,
+         fintech_terminal_id? → fintech_terminals,
+         amount NUMERIC(15,2) CHECK (amount > 0),
+         gateway_provider gateway_provider_enum DEFAULT 'PAYSTACK',
+         payment_status, paystack_reference, otp_challenge_id? → otp_challenges,
          gateway_response_payload JSONB, created_at, updated_at)
-         UNIQUE(tenant_id, transaction_reference)
+         UNIQUE(tenant_id, paystack_reference)
 
-commission_records(id, tenant_id, order_id → orders, agent_id? → profiles,
-                   amount NUMERIC(15,2), rate_applied NUMERIC(5,2)
-                     CHECK (rate_applied BETWEEN 0 AND 100),
-                   status commission_status_enum, approved_by?,
-                   released_at?, created_at)
+commission_records(id, tenant_id, order_id → orders, payment_id → payments,
+                   fintech_partner_id → fintech_partners,
+                   teafair_agent_id → profiles,
+                   amount NUMERIC(15,2), bps_applied INT,
+                   status commission_status_enum, released_at?, created_at)
 
-fintech_terminals(id, tenant_id, agent_id → profiles, terminal_id,
-                  provider, is_active, created_at)
+fintech_terminals(id, tenant_id, partner_id → fintech_partners,
+                  agent_id? → profiles, terminal_id, territory_id?,
+                  is_active, created_at)
                   UNIQUE(tenant_id, terminal_id)
 
-fintech_advances(id, tenant_id, agent_id → profiles,
+fintech_advances(id, tenant_id, partner_id? → fintech_partners,
+                 agent_id → profiles,
                  requested_amount NUMERIC(15,2) CHECK (> 0),
                  repayment_duration_days INT CHECK (BETWEEN 1 AND 30),
                  status, disbursed_to_bank_code?,
@@ -588,13 +619,19 @@ cash_audit_batches(id, tenant_id, agent_id → profiles,
                    UNIQUE(tenant_id, teller_receipt_number)
 ```
 
-### 6.8 Platform (3)
+### 6.8 Platform (4)
 
 ```
+otp_challenges(id, tenant_id, subject_id → profiles,
+               purpose otp_purpose_enum, code_hash, destination_phone,
+               issued_by → profiles, expires_at, consumed_at?,
+               failed_attempts, locked_until?, created_at)
+
 idempotency_logs(key UUID PK, tenant_id?, actor_id, operation,
                  request_hash, response JSONB, status, created_at)
 
-audit_logs(id, tenant_id?, actor_id?, actor_role TEXT, operation,
+audit_logs(id, tenant_id?, actor_id?, actor_role TEXT,
+           teafair_agent_id?, operation,
            entity_type, entity_id, before JSONB, after JSONB,
            idempotency_key?, source audit_source_enum, created_at)
 
@@ -613,6 +650,45 @@ notifications(id, tenant_id?, user_id → profiles, kind, title, body,
   input artifact these columns defaulted to `NOW()` and never advanced.
 - `zones.zsm_id` and `territories.tm_id` are constrained by trigger to a profile
   holding an ACTIVE `tenant_users` row in the same tenant with the matching role.
+- `zones` and `territories` carry `boundary GEOMETRY(MultiPolygon, 4326)` with
+  GIST indexes, so territory assignment and geofence checks are spatial rather
+  than by lookup table.
+
+### 6.10 Agent accountability
+
+`actor_id` and `teafair_agent_id` are different things and both are recorded.
+
+The actor is whoever made the call — which on a POS-backed settlement is a
+`RETAIL_SHOP_OWNER` or a partner's agent, neither of whom works for Teafair. The
+`teafair_agent_id` is the Teafair staff member (`DSA`, `DSM`, `TM`) accountable
+for that trade cluster. Without the second column, a disputed settlement traces
+back only to a shop owner, and nobody inside the business owns it.
+
+It is therefore `NOT NULL` on `orders`, `payments` and `commission_records`, and
+nullable on `audit_logs` only because platform-level and cron rows have no
+supervising agent. The RPC derives it from the order's cluster rather than
+accepting it as a parameter.
+
+### 6.11 The dual-validation handshake
+
+A POS-backed settlement needs two independent proofs before it is believed, and
+`complete_pos_backed_order` will not write a commission row without both:
+
+| Proof | What it establishes | Source |
+|---|---|---|
+| **Paystack reference** | the funds actually moved | verified server-side against the Paystack API inside the gateway, never trusted from the client |
+| **Shop-owner OTP** | the physical stock actually changed hands | `otp_challenges` row, SMS-delivered, hash-compared in the RPC |
+
+Either one alone is forgeable by a single party: a POS agent with a reference
+but no OTP may have collected cash without releasing stock; an OTP with no
+reference means stock moved on credit, which is the exact street-credit trap the
+product exists to remove. Requiring both is what lets commission be split
+automatically without a human approving each one.
+
+`otp_challenges` carries the controls the input artifacts had no home for:
+single use via `consumed_at`, a short `expires_at`, `failed_attempts` with
+`locked_until`, and issuance rate limiting per `subject_id`. The code is stored
+hashed, never in plaintext.
 
 ## 7. Offline queue and idempotency
 
@@ -702,13 +778,23 @@ REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM authenticated,
 Helpers, in `public`:
 
 ```sql
+-- active tenant from the verified JWT. Actor comes from auth.uid() directly;
+-- a jwt_user_id() wrapper would only reimplement it.
+CREATE OR REPLACE FUNCTION public.jwt_tenant_id()
+RETURNS uuid LANGUAGE sql STABLE
+SET search_path = public, pg_temp AS $$
+  SELECT NULLIF(
+    (select auth.jwt()) -> 'app_metadata' ->> 'active_tenant_id', ''
+  )::uuid;
+$$;
+
 CREATE OR REPLACE FUNCTION public.is_tenant_member(p_tenant_id uuid)
 RETURNS boolean LANGUAGE sql SECURITY DEFINER STABLE
 SET search_path = public, pg_temp AS $$
   SELECT EXISTS (
     SELECT 1 FROM tenant_users tu
     WHERE tu.tenant_id = p_tenant_id
-      AND tu.user_id = (select auth.uid())
+      AND tu.profile_id = (select auth.uid())
       AND tu.status = 'ACTIVE'
   );
 $$;
@@ -718,11 +804,17 @@ RETURNS tenant_role_enum LANGUAGE sql SECURITY DEFINER STABLE
 SET search_path = public, pg_temp AS $$
   SELECT tu.role FROM tenant_users tu
   WHERE tu.tenant_id = p_tenant_id
-    AND tu.user_id = (select auth.uid())
+    AND tu.profile_id = (select auth.uid())
     AND tu.status = 'ACTIVE'
   LIMIT 1;
 $$;
 ```
+
+> **Do not read claims through `current_setting('request.jwt.claim.<name>')`.**
+> PostgREST removed those per-claim GUCs in favour of a single
+> `request.jwt.claims` JSON setting, so the per-claim form returns `NULL` on
+> current Supabase and a predicate built on it fails open or closed silently
+> depending on how it is written. Use `auth.jwt()`, as above.
 
 Policies are **`FOR SELECT` only**. There are no `INSERT`, `UPDATE` or `DELETE`
 policies on business tables, because the grants above make them unreachable;
@@ -735,13 +827,15 @@ writes arrive through `SECURITY DEFINER` RPCs.
 | `tenant_shop_coverage` | `public.is_tenant_member(tenant_id)` |
 | `tenants` | `public.is_tenant_member(id)` |
 | `tenant_settings` | `public.is_tenant_member(tenant_id)` |
-| `tenant_users` | `user_id = (select auth.uid())` OR `public.is_tenant_member(tenant_id)` |
+| `tenant_users` | `profile_id = (select auth.uid())` OR `public.is_tenant_member(tenant_id)` |
 | `profiles` | `id = (select auth.uid())` OR shares an ACTIVE tenant membership |
 | `user_secure_profiles` | `user_id = (select auth.uid())` — owner only |
 | `devices` | `user_id = (select auth.uid())` |
 | `notifications` | `user_id = (select auth.uid())` |
 | `audit_logs` | `public.is_tenant_member(tenant_id)` AND `public.tenant_role(tenant_id) IN ('ZSM','TM')` |
 | `idempotency_logs` | `actor_id = (select auth.uid())` |
+| `otp_challenges` | `subject_id = (select auth.uid())` — code_hash column never selectable by the client |
+| `fintech_partners` | `public.is_tenant_member(tenant_id)` |
 
 The input artifact used `FOR ALL USING (is_tenant_member(tenant_id))` on
 thirteen tables. Because `FOR ALL` covers writes, and Postgres reuses `USING` as
@@ -794,18 +888,46 @@ as gaps:
 ## 11. Open questions
 
 1. **BVN pepper rotation** — rotating the HMAC pepper invalidates every
-   `bvn_or_nin_hash`. A rotation needs a re-hash migration with both peppers
+   `bvn_nin_hash`. A rotation needs a re-hash migration with both peppers
    live, or a versioned hash column. Decide before the first production KYC.
-2. **Commission rate precedence** — `tenants.commission_rate` defaults to `0`
-   while the fintech feature is described as a flat 10%. Which governs when they
-   disagree, and can a per-agent rate override the tenant rate?
-3. **Requisition value bands** — the thresholds that set
+2. **Requisition value bands** — the thresholds that set
    `required_approval_level` live in `tenant_settings.custom_fields`. Their
    default values are unset.
-4. **Pickup confirmation threshold** — how long a `PENDING_CONFIRMATION` pickup
+3. **Pickup confirmation threshold** — how long a `PENDING_CONFIRMATION` pickup
    may sit before it escalates to the DSM (§7.4 step 3).
-5. **Gateway webhook replay window** — `process-payment` verifies an HMAC
+4. **Paystack webhook replay window** — `process-payment` verifies the Paystack
    signature; the acceptable timestamp skew is unset.
+
+> *Commission rate precedence*, previously question 2, is **closed**:
+> `fintech_partners.commission_bps` is the single source, negotiated per
+> partner and stored in basis points. `tenants.commission_rate` and
+> `commission_records.rate_applied` are removed.
+
+### 11.1 Awaiting a ruling
+
+These four came out of the liquidity blueprint and are **not** yet settled. The
+schema above assumes the reading given in each; each one changes code.
+
+1. **Deployment target.** The blueprint's data-flow diagram reads
+   `PostgreSQL Database (Supabase / Azure)`. This spec assumes **Supabase**
+   throughout, and the assumption is load-bearing: `auth.uid()`, Supabase Auth,
+   the Custom Access Token Hook, Edge Functions and Vault have no Azure
+   equivalent. If Azure is genuinely in play, §3 and §8 are invalidated rather
+   than amended.
+2. **Commission approval — automated or ZSM-gated?** The blueprint pays splits
+   "instantly upon verified Paystack collection"; §5.3 has `approve_commission`
+   as a PIN-gated `ZSM` action. Assumed here: **automated**, with the control
+   moved to partner onboarding and the §6.11 handshake. The `ZSM` row in §5.3
+   and `commission_status_enum` both change if that is wrong.
+3. **Who performs the split?** If Paystack Subaccounts execute it, then
+   `commission_records` *records* a split that already happened and
+   reconciliation compares against Paystack's settlement report — which is why
+   `fintech_partners.paystack_subaccount_code` is present but nullable. If
+   Teafair collects in full and pays partners separately, a payout table and a
+   different reconciliation job are needed.
+4. **Is `retail_shops` still a global shared registry?** The blueprint describes
+   it without mentioning `tenant_shop_coverage`. Assumed here: **yes, it
+   stands** — that join is what makes `allow_shared_network` enforceable (§4.3).
 
 ## 12. Spec decomposition
 
@@ -820,7 +942,7 @@ This is Spec A of four. Each gets its own spec, plan and implementation cycle.
 
 ## 13. Migration from the current repository
 
-1. `supabase/` — declarative schema, the 30 tables, enums, helpers, RLS, grants,
+1. `supabase/` — declarative schema, the 32 tables, enums, helpers, RLS, grants,
    RPCs, seeds, type generation. Supabase CLI owns all DDL.
 2. `src/` — the flat app structure per the target tree, replacing the
    `apps/` + `packages/` layout from the superseded architecture spec.
