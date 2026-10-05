@@ -56,6 +56,22 @@ invalidates parts of this spec.
     history.
 11. **Android only at launch.** The Windows HQ client is deferred; its CI
     workflow and stub remain so the target is not lost.
+12. **Supabase is the only backend.** Supabase Auth, the Custom Access Token
+    Hook, Vault, Deno Edge Functions and the Supabase CLI. Azure is not a
+    deployment option — §3 and §8 depend on Supabase primitives that have no
+    equivalent there.
+13. **Paystack is the exclusive collection engine, and performs the split
+    itself.** Paystack Subaccounts route the partner's share natively during
+    collection, so `commission_records` *reconciles* a split that already
+    happened and never instructs a payout.
+14. **Commission is fully automated.** There is no human approval gate. The
+    controls are partner onboarding and the §6.11 dual-validation handshake.
+15. **`retail_shops` is a global shared registry**, mapped per tenant through
+    `tenant_shop_coverage`.
+16. **Two permanent security overrides.** Claim helpers live only in `public`,
+    never in the Supabase-managed `auth` schema. `bvn_nin_hash` lives only in
+    `user_secure_profiles` under owner-only RLS, never on the peer-readable
+    `profiles` row.
 
 ## 3. Architecture
 
@@ -141,8 +157,8 @@ Every RLS helper:
 | `dsa-commission-calculate` | user | `authenticated` | partner-bps commission computation |
 | `complete-pos-backed-order` | user | `authenticated` | dual-validation POS settlement (§6.11) |
 | `process-payment` | **system** | `service_role` | Paystack webhook; signature verified |
-| `fintech-commission-release` | **system** | `service_role` | scheduled commission release |
-| `reconcile-funds` | **system** | `service_role` | cash deposits against the digital ledger |
+| `fintech-commission-release` | **system** | `service_role` | matches `commission_records` against Paystack settlement reports; `SPLIT` → `SETTLED` |
+| `reconcile-funds` | **system** | `service_role` | physical cash deposits against Paystack settlements |
 | `reconcile-discounts-eod` | **system** | `service_role` | end-of-day discounting |
 | `zonal-performance-aggregate` | **system** | `service_role` | scheduled zonal rollups |
 | `inventory-sync` | **system** | `service_role` | cross-node catalogue and batch sync |
@@ -338,7 +354,6 @@ PIN = bcrypt-verified 4-digit PIN required at the gateway.
 | `request_advance` | `FINTECH_AGENT` | own | — |
 | `approve_advance` | system risk rules; `ZSM` override | tenant | **yes** (override) |
 | `log_cash_deposit` | `FINTECH_AGENT`, `DSA` | own | — |
-| `approve_commission` | `ZSM` | tenant | **yes** |
 | `process_payment`, `release_commission`, `reconcile_funds`, `aggregate_zonal` | system only | — | — |
 
 ### 5.4 The approval ladder is data, not an enum
@@ -397,7 +412,7 @@ density_category_enum   HIGH_DENSITY MARKET_SQUARE EVENT_CENTER SUBURBAN
 gateway_provider_enum   PAYSTACK
 pos_network_enum        MONIEPOINT OPAY PALMPAY
 payment_status_enum     INITIATED PROCESSING SUCCESS FAILED REFUNDED
-commission_status_enum  PENDING APPROVED PAID
+commission_status_enum  SPLIT SETTLED DISPUTED
 warehouse_kind_enum     CENTRAL REGIONAL STOCKIST
 order_channel_enum      ONLINE FIELD_DSA RETAIL
 audit_source_enum       USER SYSTEM WEBHOOK CRON
@@ -579,7 +594,7 @@ nothing in this spec decrements a shop.
 fintech_partners(id, tenant_id, business_name, pos_network pos_network_enum,
                  commission_bps INT CHECK (commission_bps BETWEEN 0 AND 10000),
                  territory_id? → territories, contact_phone,
-                 paystack_subaccount_code?, status, approved_by,
+                 paystack_subaccount_code, status, approved_by,
                  approved_at, created_at)
                  UNIQUE(tenant_id, pos_network, business_name)
 
@@ -596,7 +611,12 @@ commission_records(id, tenant_id, order_id → orders, payment_id → payments,
                    fintech_partner_id → fintech_partners,
                    teafair_agent_id → profiles,
                    amount NUMERIC(15,2), bps_applied INT,
-                   status commission_status_enum, released_at?, created_at)
+                   paystack_split_reference, paystack_subaccount_code,
+                   status commission_status_enum, settled_at?,
+                   dispute_reason?, created_at)
+                   -- SPLIT at collection, SETTLED once matched against
+                   -- Paystack's settlement report, DISPUTED on mismatch.
+                   -- There is no approval state: nothing human gates this.
 
 fintech_terminals(id, tenant_id, partner_id → fintech_partners,
                   agent_id? → profiles, terminal_id, territory_id?,
@@ -736,7 +756,7 @@ The gateway bcrypt-verifies PINs against `tenant_users.pin_hash`, which is
 server-side by design. Caching any verifier on the device would defeat the
 control. So PIN-gated operations normally require connectivity at the moment of
 action: `record_dsa_stock_issue`, `approve_requisition` above the value band,
-`adjust_inventory`, `approve_commission`.
+`adjust_inventory`.
 
 `log_retail_pickup` is the exception, because it is a core field action in
 exactly the places where signal is worst. It uses a deferred-confirmation path:
@@ -903,31 +923,21 @@ as gaps:
 > partner and stored in basis points. `tenants.commission_rate` and
 > `commission_records.rate_applied` are removed.
 
-### 11.1 Awaiting a ruling
+### 11.1 Resolved rulings
 
-These four came out of the liquidity blueprint and are **not** yet settled. The
-schema above assumes the reading given in each; each one changes code.
+The four questions raised by the liquidity blueprint are settled and have been
+folded into §2 as locked decisions 12–16. Recorded here for provenance:
 
-1. **Deployment target.** The blueprint's data-flow diagram reads
-   `PostgreSQL Database (Supabase / Azure)`. This spec assumes **Supabase**
-   throughout, and the assumption is load-bearing: `auth.uid()`, Supabase Auth,
-   the Custom Access Token Hook, Edge Functions and Vault have no Azure
-   equivalent. If Azure is genuinely in play, §3 and §8 are invalidated rather
-   than amended.
-2. **Commission approval — automated or ZSM-gated?** The blueprint pays splits
-   "instantly upon verified Paystack collection"; §5.3 has `approve_commission`
-   as a PIN-gated `ZSM` action. Assumed here: **automated**, with the control
-   moved to partner onboarding and the §6.11 handshake. The `ZSM` row in §5.3
-   and `commission_status_enum` both change if that is wrong.
-3. **Who performs the split?** If Paystack Subaccounts execute it, then
-   `commission_records` *records* a split that already happened and
-   reconciliation compares against Paystack's settlement report — which is why
-   `fintech_partners.paystack_subaccount_code` is present but nullable. If
-   Teafair collects in full and pays partners separately, a payout table and a
-   different reconciliation job are needed.
-4. **Is `retail_shops` still a global shared registry?** The blueprint describes
-   it without mentioning `tenant_shop_coverage`. Assumed here: **yes, it
-   stands** — that join is what makes `allow_shared_network` enforceable (§4.3).
+| Question | Ruling |
+|---|---|
+| Deployment target | **Supabase only.** Azure dropped entirely |
+| Commission approval | **Fully automated.** No human gate |
+| Who performs the split | **Paystack Subaccounts**, natively during collection |
+| Shared network | **`retail_shops` stays global**, mapped via `tenant_shop_coverage` |
+
+Two overrides this spec made against the blueprint were also confirmed as
+permanent: claim helpers live only in `public` and never in `auth`, and
+`bvn_nin_hash` lives only in `user_secure_profiles` and never on `profiles`.
 
 ## 12. Spec decomposition
 
