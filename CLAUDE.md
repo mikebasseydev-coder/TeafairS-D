@@ -4,88 +4,88 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-TEFAIR's Route-to-Market platform for the Nigerian informal-retail market:
-field agents move consignment stock through market-zone depots to shop owners,
-with an **invoice-financing** feature that lets Fintech agents (OPay, PalmPay,
-Moniepoint) pay TEFAIR an invoice in full immediately and collect from the
-customer over time.
+Teafair is a **multi-tenant Route-to-Market (RTM) and embedded-liquidity
+platform** for African FMCG supply chains. Several brand owners (Nestlé,
+Unilever, …) run their own distribution networks on one Supabase deployment,
+over a shared registry of retail shops. **Teafair is itself a tenant**
+(`TEAFAIR`), selling its own house brands.
 
-**As of 2026-09-03 the project is mid-pivot to a fully serverless architecture.**
-The governing documents:
+Third-party POS agents (Moniepoint, OPay, PalmPay) act as liquidity nodes that
+replace high-interest street credit for shop owners. **Paystack is the
+exclusive collection engine** and splits each partner's commission natively
+through Subaccounts.
 
-- `docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` — **what
-  it does**: data model, RPCs, RLS, features, screens.
-- `docs/superpowers/specs/2026-09-04-architecture-and-scaffold-design.md` — **how
-  it's built**: framework choices, `packages/` layout, build & local-dev
-  pipelines, migration from `frontend/`.
+## The governing document
 
-Together they supersede the data-model/architecture portions of the three August
-specs and make the `2026-08-25-backend-foundation.md` plan (Prisma/Docker)
-obsolete.
+**`docs/superpowers/specs/2026-10-05-multi-tenant-rtm-foundation-design.md`
+(Spec A) is the authority.** Read its §2 locked decisions before changing
+anything structural. It supersedes the 2026-09-03 and 2026-09-04 specs, the
+August specs and every plan in `docs/superpowers/plans/` — all kept as history
+only.
 
-### Target architecture (per the 2026-09-03 spec)
+Spec A is the first of four (§12): B app shell, C RTM core, D money and
+integrations. Its implementation runs in four phases (§14).
 
-- **Backend: Supabase only** — Postgres + Auth (MFA) + Storage + `pg_cron` + one
-  Edge Function (`notify`). No server, no Docker, no Prisma.
-- **Write path = `SECURITY DEFINER` Postgres RPCs**, idempotent on a
-  client-supplied key. Business tables grant `authenticated` SELECT only; RLS
-  scopes reads via `(select auth.uid())` + `private.*` helper functions.
-- `profiles.id` **is** `auth.users.id` (no surrogate-key split).
-- Money and inventory are an **append-only ledger + RPC-maintained cache** — no
-  mutable balance columns. Dashboards read cache tables refreshed by `pg_cron`,
-  never live views.
-- **Two apps:** `apps/mobile-android` (**Expo** / React Native — field roles +
-  HQ-on-the-go for `REGIONAL_MANAGER` / `COMPLIANCE_OFFICER`, 6 roles) and
-  `apps/desktop-windows` (**bare RN + `react-native-windows`** — the full HQ
-  workstation). **No web target.**
-- `packages/shared-*` (types, schemas, supabase client, offline sync, hooks, ui,
-  config) for cross-app code; `pnpm` workspaces + Turborepo.
-
-### Current repository state
-
-Nothing in the target layout is scaffolded yet. What exists:
+## Repository state
 
 | Path | Status |
 |---|---|
-| `docs/superpowers/specs/2026-09-03-serverless-rtm-platform-design.md` | source of truth for behaviour |
-| `docs/superpowers/specs/2026-09-04-architecture-and-scaffold-design.md` | source of truth for structure/build |
-| `docs/features/` | per-feature reference docs (seed each implementation plan) |
-| `apps/CLAUDE.md`, `supabase/CLAUDE.md` | target conventions — **directories not yet scaffolded** |
-| `frontend/` | **legacy** — the old npm-workspaces Expo scaffold (`core` + `mobile`). Kept for reference during migration; see `frontend/CLAUDE.md`. To be replaced by `apps/` + `packages/`. |
-| `backend/` | **removed** — Prisma/Docker sandbox is gone |
-| the three August specs, `docs/superpowers/plans/` | historical — superseded, kept for rationale |
+| `supabase/` | **Phases 1–2 done**: 16 migrations, 200 pgTAP assertions. See `supabase/CLAUDE.md` |
+| `docs/superpowers/specs/2026-10-05-…` | Spec A — the authority |
+| `docs/features/` | behavioural reference only; superseded on architecture, roles and tenancy |
+| `apps/` | **superseded** — Spec A §13 replaces `apps/` + `packages/` with a flat `src/` (Spec B) |
+| `frontend/` | **legacy** single-tenant Expo scaffold, to be deleted (§13); nothing is ported |
 
-## Working here right now
+Phase 3 (Edge Function gateway) is next; Phase 4 (client offline queue) needs
+the Spec B app shell.
 
-The project is in planning. Before implementation:
+## Architecture in one screen
 
-1. The platform spec (2026-09-03) and architecture spec (2026-09-04) are written
-   and under review (open questions in each spec's final section).
-2. Still to write: **implementation plans** — first the monorepo-scaffold plan
-   (architecture spec §12–13), then one per subsystem via the writing-plans skill
-   (roles/access → RTM core + verification → invoice financing →
-   onboarding/guarantors).
-3. `frontend/` is a **greenfield restart** — patterns carry over (injectable
-   Supabase client, `unwrapSupabaseResult`, storage-adapter, auth-store shape),
-   code does not.
+```
+Android app (React Native/Expo, MMKV offline queue)
+  │ POST /functions/v1/<name>   Authorization: Bearer <user JWT>
+  ▼
+Edge Function gateway (Deno)    JWT, Zod, PIN, Paystack/KudiSMS/KYC IO
+  │ forwards the caller's JWT — never the service-role key for user work
+  ▼
+Postgres SECURITY DEFINER RPC   the transaction: idempotency, live
+                                membership + role check, writes, audit
+```
 
-## Conventions that already hold (from the spec)
+Supabase only: Auth with a Custom Access Token Hook, Vault, Deno Edge
+Functions, `pg_cron`, PostGIS. **No Azure, no Prisma, no server of our own.**
+Android only at launch; the Windows HQ client is deferred.
 
-- **Never** put a write on a business table for the `authenticated` role. Every
-  mutation is an RPC.
-- **Never** add a mutable balance column. Post a ledger row; the RPC updates the
-  cache in the same transaction.
-- Every `SECURITY DEFINER` function pins `SET search_path`.
-- RLS predicates use `(select auth.uid())` and `private.*` helpers — never a
-  per-row correlated subquery.
-- Workflow statuses are `text` + `CHECK` (evolve without `ALTER TYPE`); stable
-  sets (role, severity, provider, tier…) are enums.
-- `.env` / `.env*.local` are gitignored — never hardcode Supabase URLs/keys.
+## Rules that hold everywhere (Spec A §9)
+
+- **No direct client writes.** `authenticated` has `SELECT` only. Every
+  mutation is a `SECURITY DEFINER` RPC.
+- **Never accept `tenantId` from a client.** The tenant comes from the JWT
+  (`public.jwt_tenant_id()`) and is re-verified **live** against
+  `tenant_users`. Claims propose; the database decides.
+- **Never call an RPC from a user-facing Edge Function with the service-role
+  key.** Forward the caller's `Authorization` header.
+- **Nothing in the `auth` schema.** Helpers live in `public` and read claims
+  through `auth.jwt()`, never `current_setting('request.jwt.claim.*')`.
+- Every `SECURITY DEFINER` function pins `SET search_path = public, pg_temp`.
+- RLS policies are `FOR SELECT` only, using `(select auth.uid())` and
+  `public.*` helpers — never a per-row correlated subquery.
+- Every mutation takes a client-generated `p_idempotency_key uuid` first,
+  generated at enqueue time, not send time.
+- `bvn_nin_hash` lives only in `user_secure_profiles` (owner-only).
+- `teafair_agent_id` is `NOT NULL` on `orders`, `payments`,
+  `commission_records`; nullable on `audit_logs` only for cron/webhook rows.
+- Workflow statuses are `text` + `CHECK`; stable sets are enums.
 - Money `NUMERIC(15,2)`, quantities `NUMERIC(14,3)`, timestamps `timestamptz`.
+- `.env` / `.env*.local` are gitignored. Never hardcode Supabase URLs or keys.
 
-## Feature docs
+## Commands
 
-`docs/features/` — one reference per feature (tables, RPCs, screens by role,
-invariants, jobs, open questions), each cross-linked to a spec section. Start
-there when implementing a feature; the spec is the authority on cross-feature
-rules.
+```bash
+supabase start          # local stack (needs Docker Desktop running)
+supabase db reset       # wipe local DB, replay every migration
+supabase migration up   # apply only new migrations
+supabase test db        # run all pgTAP tests — look for "Result: PASS"
+```
+
+Everything stays local until explicitly pushed; no remote project is linked.
