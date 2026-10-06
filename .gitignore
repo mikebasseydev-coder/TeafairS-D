@@ -1,1 +1,5 @@
 .claude/
+
+# Environment — never commit Supabase URLs or keys
+.env
+.env*.local
