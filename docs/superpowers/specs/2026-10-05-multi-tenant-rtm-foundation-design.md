@@ -1,8 +1,49 @@
 # Multi-tenant RTM foundation — design
 
-**Date:** 2026-10-05
-**Status:** approved design, pending implementation plan
-**Scope:** Spec A of four (see §12)
+**Date:** 2026-10-05 (open questions closed 2026-10-06)
+**Status:** approved design — the governing authority for implementation
+**Scope:** Spec A of four (see §12); implementation phases in §14
+
+## Executive summary
+
+Teafair is a multi-tenant Route-to-Market (RTM) and embedded-liquidity platform
+for African FMCG supply chains. Several brand owners run their own distribution
+networks on one Supabase deployment, over a shared registry of retail shops.
+
+**The liquidity engine.** Shop owners in the informal market restock on
+high-interest street credit. Teafair replaces that with third-party POS agents —
+`FINTECH_AGENT` members operating Moniepoint, OPay and PalmPay terminals,
+registered as `fintech_partners` — who act as local liquidity nodes: the shop
+owner settles an order at a nearby agent, the brand owner is paid immediately,
+and the agent earns a negotiated commission (`fintech_partners.commission_bps`).
+**Paystack is the exclusive collection engine**, and Paystack Subaccounts
+perform the commission split natively during collection, so the cost of
+collection is locked at the moment the money moves and no human approves a
+payout.
+
+**The invariants that make it safe:**
+
+- **No direct client writes.** The Android app never issues DML against a
+  business table. A Deno Edge Function gateway validates the JWT, the Zod
+  payload, PINs and Paystack, then makes exactly one call to a `SECURITY
+  DEFINER` Postgres RPC that performs the whole transaction (§3).
+- **Tenant isolation from verified claims.** `tenant_id` is never accepted from
+  a client. It comes from the JWT and is re-verified live against
+  `tenant_users`, so a revoked membership loses access immediately rather than
+  when its token expires (§4.4, §8).
+- **Dual-validation handshake.** A POS-backed settlement needs a
+  server-verified Paystack reference *and* a shop-owner OTP before a commission
+  row is written (§6.11).
+- **Teafair agent accountability.** Every order, payment and commission names
+  the Teafair staff member accountable for that trade cluster (§6.10).
+- **Brand-tier approvals.** A requisition's approval level is set by the brands
+  on it, not by its cash value (§5.4).
+- **Offline-first field work.** A pickup logged without signal lands as
+  `PENDING_CONFIRMATION` and escalates to the DSM after 24 hours unconfirmed
+  (§7.4).
+- **Hardened money edges.** Paystack webhooks are signature-verified, held to a
+  5-minute replay window, and processed at most once (§3.6); BVN/NIN hashes are
+  versioned for pepper rotation and readable only by their owner (§4.5).
 
 ## 1. Purpose and standing
 
@@ -72,6 +113,17 @@ invalidates parts of this spec.
     never in the Supabase-managed `auth` schema. `bvn_nin_hash` lives only in
     `user_secure_profiles` under owner-only RLS, never on the peer-readable
     `profiles` row.
+17. **BVN/NIN hashes are versioned.** `user_secure_profiles` carries
+    `bvn_hash_version`; a pepper rotation stores the new hash alongside the old,
+    matches against either, and migrates rows in the background (§4.5).
+18. **Requisition approval is set by brand tier, not cash value.** Each tenant
+    maps brands to the tier that must sign off; a requisition needs the highest
+    tier among its brands, regardless of total value (§5.4).
+19. **Unconfirmed pickups escalate after 24 hours.** A `PENDING_CONFIRMATION`
+    pickup unconfirmed for 24 hours is flagged and escalated to the supervising
+    DSM by a `pg_cron` job (§7.4).
+20. **Paystack webhooks have a 5-minute replay window** (±300 s), on top of
+    signature verification and at-most-once processing (§3.6).
 
 ## 3. Architecture
 
@@ -156,9 +208,9 @@ Every RLS helper:
 | `fintech-advance-payout` | user | `authenticated` | advance risk evaluation and disbursement |
 | `dsa-commission-calculate` | user | `authenticated` | partner-bps commission computation |
 | `complete-pos-backed-order` | user | `authenticated` | dual-validation POS settlement (§6.11) |
-| `process-payment` | **system** | `service_role` | Paystack webhook; signature verified |
+| `process-payment` | **system** | `service_role` | Paystack webhook; signature, ±300 s replay window, Verify API, at-most-once (§3.6) |
 | `fintech-commission-release` | **system** | `service_role` | matches `commission_records` against Paystack settlement reports; `SPLIT` → `SETTLED` |
-| `reconcile-funds` | **system** | `service_role` | physical cash deposits against Paystack settlements |
+| `reconcile-funds` | **system** | `service_role` | physical cash deposits against Paystack settlements; sweeps unconfirmed payments through the Verify API (§3.6) |
 | `reconcile-discounts-eod` | **system** | `service_role` | end-of-day discounting |
 | `zonal-performance-aggregate` | **system** | `service_role` | scheduled zonal rollups |
 | `inventory-sync` | **system** | `service_role` | cross-node catalogue and batch sync |
@@ -183,6 +235,31 @@ the contract rather than per-function improvisation.
 
 Client-facing shape: `{ error: { code, message, details } }`.
 
+### 3.6 Paystack webhook verification
+
+`process-payment` applies four checks, in order, before it calls an RPC:
+
+1. **Signature.** `x-paystack-signature` must equal the hex HMAC-SHA512 of the
+   **raw** request body keyed with the Paystack secret key, compared in constant
+   time. Parsing the body before hashing it breaks the check.
+2. **Replay window — ±300 seconds.** Paystack's signature covers the body only
+   and carries no timestamp, so the window is measured against the event's own
+   time: `data.paid_at`, falling back to `data.created_at`. An event outside
+   `now() ± 300 s` is not processed. The gateway answers `200` so Paystack stops
+   retrying, and writes an `audit_logs` row with operation `WEBHOOK_STALE`.
+3. **Source confirmation.** The reference is re-verified against the Paystack
+   Verify Transaction API; amount, currency and status come from that response,
+   never from the webhook body.
+4. **At most once.** `(event, data.reference)` is the idempotency key, so a
+   replay that slips inside the window is a no-op.
+
+**Late confirmations are not lost.** Paystack retries a failed delivery for up
+to 72 hours, so the window will drop some legitimate retries. `reconcile-funds`
+therefore sweeps every payment still `INITIATED` or `PROCESSING` more than five
+minutes after creation and settles it through the Verify API. Payments are
+confirmed by the sweep as well as by the webhook; the webhook is the fast path
+only.
+
 ## 4. Tenancy and isolation
 
 ### 4.1 Strategy
@@ -203,7 +280,7 @@ policy shape.
 
 | Class | Tables | `tenant_id` | Read policy |
 |---|---|---|---|
-| **A — tenant-scoped** | `central_products`, `inventory_batches`, `warehouses`, `requisitions`, `orders`, `retail_stock_pickups`, `payments`, `commission_records`, `cash_audit_batches`, `zones`, `territories`, `routes`, `route_waypoints`, `field_check_ins`, `fintech_advances`, `fintech_terminals`, `fintech_partners`, `tenant_shop_coverage` | `NOT NULL` | `public.is_tenant_member(tenant_id)` |
+| **A — tenant-scoped** | `central_products`, `brand_approval_policies`, `inventory_batches`, `warehouses`, `requisitions`, `orders`, `retail_stock_pickups`, `payments`, `commission_records`, `cash_audit_batches`, `zones`, `territories`, `routes`, `route_waypoints`, `field_check_ins`, `fintech_advances`, `fintech_terminals`, `fintech_partners`, `tenant_shop_coverage` | `NOT NULL` | `public.is_tenant_member(tenant_id)` |
 | **B — platform-global** | `retail_shops` | none | active membership in any tenant, gated by `allow_shared_network` |
 | **C — identity** | `profiles`, `user_secure_profiles`, `tenant_users`, `devices` | none — a person serves multiple tenants | per-row owner, or shared membership |
 | **D — plumbing** | `audit_logs`, `idempotency_logs`, `notifications`, `otp_challenges` | nullable — platform-level rows carry `NULL` | per-row actor or recipient; see §8 |
@@ -255,7 +332,9 @@ live. This is also what resolves the two-sources-of-truth problem:
 ### 4.5 PII
 
 ```
-user_secure_profiles(user_id PK → profiles, bvn_nin_hash UNIQUE,
+user_secure_profiles(user_id PK → profiles,
+                     bvn_nin_hash UNIQUE, bvn_hash_version,
+                     bvn_nin_hash_prev?, bvn_hash_prev_version?,
                      bank_name, bank_account_number, bank_code, verified_at)
 ```
 
@@ -266,7 +345,31 @@ BVN uniqueness is required (one BVN, one person) but the raw value must not be
 stored in a readable, indexable column. So the column holds
 `bvn_nin_hash` — HMAC-SHA256 with a pepper held in Supabase Vault — under a
 unique index. Duplicate detection works; harvesting does not. Compliance reads
-go through a gateway that writes `audit_logs` on every access.
+go through a gateway that writes `audit_logs` on every access. The hash is
+computed inside the RPC from the Vault secret, so the pepper never leaves the
+database.
+
+**Pepper rotation.** The raw BVN is never stored, so a background job cannot
+recompute a hash from it. Each version therefore wraps the previous one:
+
+```
+h1 = HMAC(pepper_1, bvn)
+h2 = HMAC(pepper_2, h1)          -- computable from h1 alone
+```
+
+A rotation to version *n*:
+
+1. adds `pepper_n` to Vault; new submissions are written at version *n*;
+2. a background job moves each row: `bvn_nin_hash_prev ← bvn_nin_hash`,
+   `bvn_nin_hash ← HMAC(pepper_n, bvn_nin_hash)`, `bvn_hash_version ← n`;
+3. while it runs, a lookup computes the incoming BVN at both versions and matches
+   either, under an advisory lock on the hash so two registrations cannot race
+   past each other;
+4. once no row remains below *n*, `bvn_nin_hash_prev` is cleared.
+
+There is no downtime and no re-collection of BVNs. The cost is that every
+pepper in the chain must stay in Vault. A leaked older pepper alone is useless
+against stored values, because each stored hash also needs every later pepper.
 
 ### 4.6 Audit
 
@@ -341,10 +444,11 @@ PIN = bcrypt-verified 4-digit PIN required at the gateway.
 | `plan_route` | `TM`, `ZSM` | territory | — |
 | `field_check_in` | `DSA`, `DSM`, `ASM`, `TM` | own; geofence validated | — |
 | `upsert_product` | `ZSM` | tenant | — |
+| `set_brand_approval_policy` | `ZSM` | tenant | **yes** |
 | `receive_inventory_batch` | `ASM`, `TM`, `ZSM` | warehouse | — |
 | `adjust_inventory` | `ZSM` | tenant | **yes** |
 | `submit_requisition` | `DSM`, `ASM` | territory | — |
-| `approve_requisition` | `DSM` → `ASM` → `TM` → `ZSM` by level | own tier | **yes** above the value band |
+| `approve_requisition` | `DSM` → `ASM` → `TM` → `ZSM` by level | own tier | **yes** when the required level is `TM` or `ZSM` |
 | `fulfil_requisition` | `ASM`, `TM` | source warehouse | — |
 | `log_retail_pickup` | `DSA` | own | **yes**, deferrable (§7.4) |
 | `record_dsa_stock_issue` | `RETAIL_SHOP_OWNER` | own shop | **yes** |
@@ -359,9 +463,28 @@ PIN = bcrypt-verified 4-digit PIN required at the gateway.
 ### 5.4 The approval ladder is data, not an enum
 
 `requisitions.current_approval_level` and `required_approval_level` hold
-`tenant_role_enum` values; the required level is derived from a value band in
-`tenant_settings.custom_fields`. Adding or removing a tier is therefore a config
-change, not `ALTER TYPE`. The approval trail itself goes to `audit_logs`.
+`tenant_role_enum` values. Adding or removing a tier is a data change, not
+`ALTER TYPE`. The approval trail itself goes to `audit_logs`.
+
+**Brand tiers set the required level, not cash value.** High-value or
+restricted brands need a senior sign-off however small the requisition;
+fast-moving staples clear at a supervisory tier however large it is. Each
+tenant keeps its policy in `brand_approval_policies (tenant_id, brand,
+required_approval_level)`:
+
+- the ladder ranks `DSM < ASM < TM < ZSM`; a policy level must be one of those
+  four;
+- a requisition's `required_approval_level` is the **highest** level among the
+  brands of its line items, fixed when it is submitted;
+- a brand with no policy row clears at `DSM`;
+- `total_value` is still recorded, for reporting only — it plays no part in
+  approval.
+
+`public.requisition_required_level(tenant_id, sku_codes[])` computes the level,
+so `submit_requisition` and any later re-check use one definition. Changing a
+policy (`set_brand_approval_policy`) is PIN-gated, because it decides who may
+release restricted stock. It affects requisitions submitted afterwards, never
+those already in flight.
 
 ### 5.5 PIN storage
 
@@ -376,16 +499,17 @@ tenant_users.pin_locked_until   timestamptz
 Five attempts, then a 15-minute lockout. A 4-digit PIN is a 10,000-key space;
 lockout is the only thing that makes it viable as a transaction control.
 
-## 6. Data model — 32 tables
+## 6. Data model — 33 tables
 
 ### 6.1 Count accounting
 
-The 16 tables in the input artifacts become 32: **+11 genuinely missing**
+The 16 tables in the input artifacts become 33: **+11 genuinely missing**
 (`warehouses`, `requisitions`, `requisition_items`, `orders`, `order_items`,
 `routes`, `route_waypoints`, `field_check_ins`, `devices`, `audit_logs`,
 `notifications`), **+3 platform** (`user_secure_profiles`,
-`tenant_shop_coverage`, `idempotency_logs`), and **+2 for the liquidity engine**
-(`fintech_partners`, `otp_challenges`).
+`tenant_shop_coverage`, `idempotency_logs`), **+2 for the liquidity engine**
+(`fintech_partners`, `otp_challenges`), and **+1 for brand-tier approvals**
+(`brand_approval_policies`, decision 18).
 
 Four candidates were dropped to keep the count down:
 
@@ -463,8 +587,11 @@ profiles(id PK → auth.users, full_name, phone_number UNIQUE, email UNIQUE?,
          platform_role platform_role_enum NULL, kyc_status,
          created_at, updated_at)
 
-user_secure_profiles(user_id PK → profiles, bvn_nin_hash UNIQUE,
+user_secure_profiles(user_id PK → profiles,
+                     bvn_nin_hash UNIQUE, bvn_hash_version SMALLINT,
+                     bvn_nin_hash_prev?, bvn_hash_prev_version?,
                      bank_name, bank_account_number, bank_code, verified_at?)
+                     -- versioning and rotation: §4.5
 
 devices(id, user_id → profiles, hardware_id, device_model, push_token?,
         last_seen_at)  UNIQUE(user_id, hardware_id)
@@ -515,13 +642,19 @@ CREATE INDEX idx_territories_boundary ON territories    USING GIST (boundary);
 The first corrects a syntax error in the input artifact, which was missing its
 table name and would have failed to apply.
 
-### 6.5 Catalogue and inventory (3)
+### 6.5 Catalogue and inventory (4)
 
 ```
 warehouses(id, tenant_id, name, kind warehouse_kind_enum,
            territory_id?, location?, manager_id? → profiles)
 
-central_products(id, tenant_id, sku_code, product_name, category,
+brand_approval_policies(tenant_id, brand,
+                        required_approval_level tenant_role_enum
+                          CHECK (IN ('DSM','ASM','TM','ZSM')),
+                        updated_by → profiles, updated_at)
+                        PRIMARY KEY (tenant_id, brand)       -- §5.4
+
+central_products(id, tenant_id, sku_code, product_name, brand, category,
                  unit_price NUMERIC(15,2), wholesale_price NUMERIC(15,2),
                  description?, is_active, created_at)
                  UNIQUE(tenant_id, sku_code)
@@ -562,7 +695,7 @@ order_items(id, tenant_id, order_id → orders, sku_code,
 retail_stock_pickups(id, tenant_id, retail_shop_id → retail_shops,
                      dsa_agent_id → profiles, dsm_supervisor_id?,
                      event_tag?, status, confirmed_by?, confirmed_at?,
-                     created_at)
+                     escalated_at?, created_at)      -- escalation: §7.4
 
 retail_stock_pickup_items(id, tenant_id, pickup_id → retail_stock_pickups,
                           sku_code, quantity_picked NUMERIC(14,3))
@@ -755,8 +888,8 @@ invisible infinite retry against a business rule that will never pass.
 The gateway bcrypt-verifies PINs against `tenant_users.pin_hash`, which is
 server-side by design. Caching any verifier on the device would defeat the
 control. So PIN-gated operations normally require connectivity at the moment of
-action: `record_dsa_stock_issue`, `approve_requisition` above the value band,
-`adjust_inventory`.
+action: `record_dsa_stock_issue`, `approve_requisition` at the `TM` or `ZSM`
+level, `set_brand_approval_policy`, `adjust_inventory`.
 
 `log_retail_pickup` is the exception, because it is a core field action in
 exactly the places where signal is worst. It uses a deferred-confirmation path:
@@ -765,8 +898,26 @@ exactly the places where signal is worst. It uses a deferred-confirmation path:
    `status = 'PENDING_CONFIRMATION'`, with no PIN.
 2. The shop owner confirms from their own app when either device reconnects,
    which sets `CONFIRMED`, `confirmed_by` and `confirmed_at`.
-3. Unconfirmed pickups past a threshold surface to the DSM as a notification, and
-   the shop owner can instead mark the pickup `DISPUTED`.
+3. A pickup still `PENDING_CONFIRMATION` **24 hours** after it landed is
+   escalated. The shop owner can instead mark the pickup `DISPUTED` at any
+   time.
+
+**The escalation job.** `public.escalate_stale_pickups()` runs from `pg_cron`
+every 15 minutes, so an escalation fires between 24 hours and 24 hours 15
+minutes after landing. For each pickup that is `PENDING_CONFIRMATION`, has
+`created_at < now() - interval '24 hours'` and has `escalated_at IS NULL`, it:
+
+- sets `escalated_at = now()` — this is the flag, and it stops a second
+  escalation;
+- sends a `notifications` row to `dsm_supervisor_id`, or, when that is null, to
+  the DSA's `reports_to_id` holding the `DSM` role;
+- writes an `audit_logs` row with `source = 'CRON'`.
+
+The status stays `PENDING_CONFIRMATION`, so the shop owner can still confirm or
+dispute; the DSM intervenes manually. The 24 hours run from `created_at`, the
+server time the pickup landed. A pickup logged offline for two days therefore
+gets its full 24 hours once it arrives, because the shop owner could not
+confirm it before then.
 
 This keeps the control and the offline path. The pickup is an event record, not
 a balance mutation — no shop stock is decremented (§6.6) — so step 1 committing
@@ -907,18 +1058,10 @@ as gaps:
 
 ## 11. Open questions
 
-1. **BVN pepper rotation** — rotating the HMAC pepper invalidates every
-   `bvn_nin_hash`. A rotation needs a re-hash migration with both peppers
-   live, or a versioned hash column. Decide before the first production KYC.
-2. **Requisition value bands** — the thresholds that set
-   `required_approval_level` live in `tenant_settings.custom_fields`. Their
-   default values are unset.
-3. **Pickup confirmation threshold** — how long a `PENDING_CONFIRMATION` pickup
-   may sit before it escalates to the DSM (§7.4 step 3).
-4. **Paystack webhook replay window** — `process-payment` verifies the Paystack
-   signature; the acceptable timestamp skew is unset.
+None. Every question raised during design is settled; the rulings are recorded
+below for provenance.
 
-> *Commission rate precedence*, previously question 2, is **closed**:
+> *Commission rate precedence* is **closed**:
 > `fintech_partners.commission_bps` is the single source, negotiated per
 > partner and stored in basis points. `tenants.commission_rate` and
 > `commission_records.rate_applied` are removed.
@@ -939,6 +1082,25 @@ Two overrides this spec made against the blueprint were also confirmed as
 permanent: claim helpers live only in `public` and never in `auth`, and
 `bvn_nin_hash` lives only in `user_secure_profiles` and never on `profiles`.
 
+The four open questions this spec carried were closed on 2026-10-06 and folded
+into §2 as locked decisions 17–20:
+
+| Question | Ruling |
+|---|---|
+| BVN pepper rotation | **Versioned hash column.** New hash stored alongside the old, lookups match either, rows migrate in the background (§4.5) |
+| Requisition approval thresholds | **Brand-tier policies**, not cash value bands (§5.4) |
+| Pickup confirmation threshold | **24 hours**, then escalation to the supervising DSM (§7.4) |
+| Paystack webhook replay window | **±300 seconds**, measured against the event time, because the signature carries none (§3.6) |
+
+A blueprint draft circulated on 2026-10-06 reintroduced five positions this
+spec had already overruled. They were rejected and this document stands:
+Azure as a target (decision 12); `bvn_nin_hash` on `profiles` (decision 16);
+claim extractors in the `auth` schema reading
+`current_setting('request.jwt.claim.*')`, which returns `NULL` on current
+PostgREST (§8); RLS trusting claims without a live `tenant_users` check
+(§4.4); and a non-null `teafair_agent_id` on cron and webhook audit rows
+(§6.10).
+
 ## 12. Spec decomposition
 
 This is Spec A of four. Each gets its own spec, plan and implementation cycle.
@@ -952,8 +1114,12 @@ This is Spec A of four. Each gets its own spec, plan and implementation cycle.
 
 ## 13. Migration from the current repository
 
-1. `supabase/` — declarative schema, the 32 tables, enums, helpers, RLS, grants,
-   RPCs, seeds, type generation. Supabase CLI owns all DDL.
+1. `supabase/` — ordered, hand-written migrations: the 33 tables, enums,
+   helpers, RLS, grants, RPCs, cron jobs, seeds, type generation. Supabase CLI
+   owns all DDL. Declarative schemas (`supabase/schemas/` + `db diff`) are not
+   used: grants and revokes, comments, column privileges and DML — including
+   `cron.schedule` — are on the diff engine's documented caveat list, and
+   grants are the security core of §8.
 2. `src/` — the flat app structure per the target tree, replacing the
    `apps/` + `packages/` layout from the superseded architecture spec.
 3. Delete `frontend/` — 824 lines across 55 files, mostly placeholder modules
@@ -966,3 +1132,20 @@ This is Spec A of four. Each gets its own spec, plan and implementation cycle.
    the Spec B scaffold plan.
 6. The 15 docs in `docs/features/` are marked superseded-in-part: behavioural
    reference retained, architecture and roles replaced by this document.
+
+## 14. Implementation roadmap
+
+Spec A ships in four phases. Each phase gets its own plan, and each phase ends
+with tests passing against a local Supabase stack (`supabase start`,
+`supabase db reset`, `supabase test db`).
+
+| Phase | Delivers | Spec sections |
+|---|---|---|
+| **1. Database schema and migration core** | Supabase CLI project; extensions (`pgcrypto`, `postgis`, `pg_cron`); every enum; the 33 tables with keys, checks, indexes and `updated_at` triggers; `audit_logs` append-only backstop | §4.2, §6 |
+| **2. Security, RLS and atomic RPCs** | grants and revokes; the `public.*` claim and membership helpers; every `FOR SELECT` policy; the write-RPC skeleton (idempotency, audit, error codes); foundation RPCs; `requisition_required_level()`; `escalate_stale_pickups()` and its cron job | §3.3, §3.5, §4.4, §5, §8 |
+| **3. Edge Function gateway layer** | shared gateway module (JWT, Zod, PIN, error mapping); `auth-verify-claims` access-token hook; `process-payment` with the §3.6 checks; OTP issue and verify | §3.1–3.6, §6.11 |
+| **4. Client-side foundation** | React Native (Expo) + TypeScript; MMKV write queue with enqueue-time keys, `dependsOn` FIFO and 2 s–5 min exponential backoff; `PENDING_CONFIRMATION` offline pickup; read cache | §7 |
+
+Phase 4 is built inside the Spec B app shell. Feature RPCs and gateways beyond
+the foundation set belong to Specs C and D.
+
