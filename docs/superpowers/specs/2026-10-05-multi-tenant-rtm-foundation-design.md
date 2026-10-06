@@ -9,6 +9,8 @@
 Teafair is a multi-tenant Route-to-Market (RTM) and embedded-liquidity platform
 for African FMCG supply chains. Several brand owners run their own distribution
 networks on one Supabase deployment, over a shared registry of retail shops.
+Teafair is itself one of those tenants, selling its own house brands alongside
+the client networks it serves (§4.7).
 
 **The liquidity engine.** Shop owners in the informal market restock on
 high-interest street credit. Teafair replaces that with third-party POS agents —
@@ -227,13 +229,21 @@ the contract rather than per-function improvisation.
 | Postgres condition | HTTP | Queue behaviour |
 |---|---|---|
 | `P0001` business-rule violation | 422 | terminal — surface to the user |
+| `42501` not authenticated, not a member, or role not permitted | 403 | terminal |
 | `23505` unique violation | 409 | terminal |
-| insufficient stock (custom `P0002`) | 409 + structured detail | terminal |
-| idempotency key reused with a different payload | 409 | terminal |
-| lock timeout / serialization failure | 503 | retry with backoff |
+| `TF001` insufficient stock | 409 + structured detail | terminal |
+| `TF002` idempotency key reused with a different payload, actor or operation | 409 | terminal |
+| `40001` serialization failure, or the same key still in flight | 503 | retry with backoff |
+| `55P03` lock timeout | 503 | retry with backoff |
 | network failure, 5xx | — | retry with backoff |
 
 Client-facing shape: `{ error: { code, message, details } }`.
+
+Teafair's own conditions use the `TF` SQLSTATE class. An earlier draft
+assigned insufficient stock to `P0002`, but that is PL/pgSQL's built-in
+`no_data_found`, raised by any `SELECT … INTO STRICT` that finds nothing — a
+lookup bug would have reached the user as "out of stock". `TF001`/`TF002`
+cannot collide with a built-in code.
 
 ### 3.6 Paystack webhook verification
 
@@ -383,6 +393,21 @@ therefore load-bearing:
   is reconstructable;
 - indexed on `(tenant_id, created_at DESC)`, `(tenant_id, entity_type,
   entity_id)` and `(idempotency_key)`.
+
+### 4.7 Teafair as a tenant
+
+Teafair sells its own house brands, so Teafair is also a tenant: `TEAFAIR`,
+seeded by migration with the fixed id `7eaf0000-0000-4000-8000-000000000001`
+so it exists in every environment. It is an ordinary tenant — its own
+catalogue, brand-tier policies, staff, POS partners, Paystack collections and
+audit trail — and is isolated from client tenants exactly as they are from
+each other.
+
+Membership of `TEAFAIR` confers **no** platform power. A Teafair ZSM is a ZSM
+of the Teafair tenant only; cross-tenant work remains `PLATFORM_SUPER_ADMIN`,
+which lives on `profiles.platform_role`, not on any membership (§5.1). Staff
+who work client brands and house brands hold one `tenant_users` row per
+tenant, with a role in each, and switch between them with `set_active_tenant`.
 
 ## 5. Roles and access
 
@@ -987,6 +1012,21 @@ $$;
 > current Supabase and a predicate built on it fails open or closed silently
 > depending on how it is written. Use `auth.jwt()`, as above.
 
+**Implementation notes (Phase 2).**
+
+- Policies express the live membership check set-wise —
+  `tenant_id in (select public.my_tenant_ids())` — rather than calling
+  `public.is_tenant_member(tenant_id)` per row. Both read `tenant_users` live
+  with the same predicate; the set form is evaluated once per statement and
+  hashed. `is_tenant_member()` and `tenant_role()` remain for RPC bodies.
+- Secrets are excluded by **column** grant as well as by policy:
+  `tenant_users.pin_hash` and `otp_challenges.code_hash` are never selectable
+  by `authenticated`, even on rows the caller may otherwise read.
+- Postgres grants `EXECUTE` to `PUBLIC` on every new function through a
+  global default that a per-schema default cannot remove. The grants
+  migration revokes it globally for functions `postgres` creates; every
+  function the API may call is granted explicitly.
+
 Policies are **`FOR SELECT` only**. There are no `INSERT`, `UPDATE` or `DELETE`
 policies on business tables, because the grants above make them unreachable;
 writes arrive through `SECURITY DEFINER` RPCs.
@@ -1145,6 +1185,10 @@ with tests passing against a local Supabase stack (`supabase start`,
 | **2. Security, RLS and atomic RPCs** | grants and revokes; the `public.*` claim and membership helpers; every `FOR SELECT` policy; the write-RPC skeleton (idempotency, audit, error codes); foundation RPCs; `requisition_required_level()`; `escalate_stale_pickups()` and its cron job | §3.3, §3.5, §4.4, §5, §8 |
 | **3. Edge Function gateway layer** | shared gateway module (JWT, Zod, PIN, error mapping); `auth-verify-claims` access-token hook; `process-payment` with the §3.6 checks; OTP issue and verify | §3.1–3.6, §6.11 |
 | **4. Client-side foundation** | React Native (Expo) + TypeScript; MMKV write queue with enqueue-time keys, `dependsOn` FIFO and 2 s–5 min exponential backoff; `PENDING_CONFIRMATION` offline pickup; read cache | §7 |
+
+**Status (2026-10-06):** phases 1 and 2 are implemented in
+`supabase/migrations/` and verified by 200 pgTAP assertions in
+`supabase/tests/database/`.
 
 Phase 4 is built inside the Spec B app shell. Feature RPCs and gateways beyond
 the foundation set belong to Specs C and D.
