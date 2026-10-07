@@ -10,7 +10,7 @@ the authority; this file is the working summary.
 |---|---|
 | 1. Schema — extensions, enums, 33 tables | done |
 | 2. Grants, RLS, write contract, foundation RPCs, brand tiers, escalation cron | done |
-| 3. Edge Function gateway (`supabase/functions/`) | next |
+| 3. Edge Function gateway (`supabase/functions/`) | done |
 | 4. Client offline queue | needs Spec B |
 
 No remote project is linked. Nothing is pushed until explicitly asked.
@@ -21,8 +21,15 @@ No remote project is linked. Nothing is pushed until explicitly asked.
 supabase/
 ├── config.toml
 ├── migrations/        hand-written, ordered — Supabase CLI owns all DDL
-└── tests/database/    pgTAP, run by `supabase test db`
+├── tests/database/    pgTAP, run by `supabase test db`
+└── functions/         Edge Functions — one flat directory per function
+    └── _shared/       core/ (gateway kernel) · auth/ · fintech-liquidity/
 ```
+
+Code is grouped by domain: `auth`, `rtm-core`, `commerce`,
+`fintech-liquidity`. Migration and pgTAP file names carry the domain
+(`…_auth_pin_verification.sql`, `008_fintech_liquidity_otp.test.sql`). A
+domain gets a `_shared/<domain>/` folder once it has code.
 
 Migrations are **hand-written**, not generated from declarative schemas: grants,
 column privileges, comments and `cron.schedule` are outside what `db diff`
@@ -72,6 +79,45 @@ grant execute on function public.<op>(...) to authenticated;
   `no_data_found`.
 - Pure DB work is an RPC; scheduled pure-SQL work is a `pg_cron` job. Edge
   Functions are for HTTP, PINs and external IO only.
+- **PIN-gated RPCs** call `public.consume_pin_pass()` right after
+  `idempotency_begin`. The gateway's `requirePin` leaves a single-use pass
+  that lasts 60 s, so a call that skips the gateway and goes straight through
+  PostgREST still needs the PIN.
+- **The one idempotency exception** is `verify_pin`. It returns a
+  `pin_check` composite and takes no key: it is a guard, not a queued write,
+  and a replayed key must never re-grant a pass.
+
+## Writing an Edge Function
+
+Each function is a self-contained directory. `index.ts` only wires live
+dependencies, `handler.ts` exports `create…Handler(deps)`, and tests sit
+beside it. Code used by two or more functions goes in `_shared/<domain>/`,
+one responsibility per file. Third-party versions appear only in
+`_shared/core/deps.ts`.
+
+- **User gateways** use `userGateway(schema, handle, liveUserGatewayDeps())`.
+  The pipeline: POST only → JWT (`auth.getClaims`) → tenant keys stripped →
+  Zod → handler → §3.5 error mapping. The handler's `rpc` forwards the
+  caller's JWT. Never import `serviceRpc` into a user gateway.
+- **PIN-gated operations** call `requirePin(rpc, body.pin)` (from
+  `_shared/auth/pin.ts`) before their RPC.
+- **System functions** (`auth-verify-claims`, `process-payment`)
+  authenticate by signature and use `serviceRpc()`.
+- **`verify_jwt = false`** is set for every function in `config.toml`; each
+  one verifies its caller itself.
+
+```bash
+supabase functions serve --env-file supabase/functions/.env     # serve locally
+deno test --allow-env supabase/functions/                       # unit tests
+supabase status -o env > supabase/.env.test.local               # then:
+deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
+  --env-file=supabase/functions/.env supabase/functions/_tests/gateway.integration.ts
+```
+
+**Secrets:** copy `supabase/.env.example` and
+`supabase/functions/.env.example`; `AUTH_HOOK_SECRET` must match in both. Set
+`SMS_PROVIDER=log` locally, and `kudisms` (with `KUDISMS_TOKEN` and
+`KUDISMS_SENDER_ID`) anywhere real.
 
 ## Testing
 

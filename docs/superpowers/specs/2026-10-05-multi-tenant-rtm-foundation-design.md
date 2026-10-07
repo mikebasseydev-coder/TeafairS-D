@@ -1186,9 +1186,10 @@ with tests passing against a local Supabase stack (`supabase start`,
 | **3. Edge Function gateway layer** | shared gateway module (JWT, Zod, PIN, error mapping); `auth-verify-claims` access-token hook; `process-payment` with the §3.6 checks; OTP issue and verify | §3.1–3.6, §6.11 |
 | **4. Client-side foundation** | React Native (Expo) + TypeScript; MMKV write queue with enqueue-time keys, `dependsOn` FIFO and 2 s–5 min exponential backoff; `PENDING_CONFIRMATION` offline pickup; read cache | §7 |
 
-**Status (2026-10-06):** phases 1 and 2 are implemented in
-`supabase/migrations/` and verified by 200 pgTAP assertions in
-`supabase/tests/database/`.
+**Status (2026-10-07):** phases 1–3 are implemented:
+`supabase/migrations/` (287 pgTAP assertions in `supabase/tests/database/`)
+and `supabase/functions/` (unit tests beside each function, plus
+`_tests/gateway.integration.ts`).
 
 Phase 4 is built inside the Spec B app shell. Feature RPCs and gateways beyond
 the foundation set belong to Specs C and D.
