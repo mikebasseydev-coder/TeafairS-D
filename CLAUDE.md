@@ -19,9 +19,8 @@ through Subaccounts.
 
 **`docs/superpowers/specs/2026-10-05-multi-tenant-rtm-foundation-design.md`
 (Spec A) is the authority.** Read its §2 locked decisions before changing
-anything structural. It supersedes the 2026-09-03 and 2026-09-04 specs, the
-August specs and every plan in `docs/superpowers/plans/` — all kept as history
-only.
+anything structural. The August and September 2026 specs and plans it
+superseded have been removed; git history still holds them.
 
 Spec A is the first of four (§12): B app shell, C RTM core, D money and
 integrations. Its implementation runs in four phases (§14).
