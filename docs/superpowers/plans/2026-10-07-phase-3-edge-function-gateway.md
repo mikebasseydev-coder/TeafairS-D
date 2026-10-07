@@ -1423,7 +1423,10 @@ Deno.test("a verified user yields the caller and the claims it proposes", async 
     authorization: "Bearer tok",
     activeTenantId: "10000000-0000-0000-0000-000000000001",
     tenantRole: "DSA",
-    platformRole: null,```
+    platformRole: null,
+  });
+});
+```
 
 `supabase/functions/_shared/validate.test.ts`:
 
