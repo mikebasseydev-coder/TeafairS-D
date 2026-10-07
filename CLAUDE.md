@@ -32,9 +32,7 @@ integrations. Its implementation runs in four phases (§14).
 |---|---|
 | `supabase/` | **Phases 1–2 done**: 16 migrations, 200 pgTAP assertions. See `supabase/CLAUDE.md` |
 | `docs/superpowers/specs/2026-10-05-…` | Spec A — the authority |
-| `docs/features/` | behavioural reference only; superseded on architecture, roles and tenancy |
-| `apps/` | **superseded** — Spec A §13 replaces `apps/` + `packages/` with a flat `src/` (Spec B) |
-| `frontend/` | **legacy** single-tenant Expo scaffold, to be deleted (§13); nothing is ported |
+| client app | **none yet**: built fresh under Spec B as a flat `src/`. `frontend/`, `apps/` and `docs/features/` were removed (§13) |
 
 Phase 3 (Edge Function gateway) is next; Phase 4 (client offline queue) needs
 the Spec B app shell.
