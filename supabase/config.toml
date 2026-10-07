@@ -281,9 +281,11 @@ max_frequency = "5s"
 # uri = "pg-functions://postgres/auth/before-user-created-hook"
 
 # This hook runs before a token is issued and allows you to add additional claims based on the authentication method used.
-# [auth.hook.custom_access_token]
-# enabled = true
-# uri = "pg-functions://<database>/<schema>/<hook_name>"
+# Spec A §4.4 — tenant claims, minted by the auth-verify-claims Edge Function.
+[auth.hook.custom_access_token]
+enabled = true
+uri = "http://host.docker.internal:54321/functions/v1/auth-verify-claims"
+secrets = "env(AUTH_HOOK_SECRET)"
 
 # Configure one of the supported SMS providers: `twilio`, `twilio_verify`, `messagebird`, `textlocal`, `vonage`.
 [auth.sms.twilio]
@@ -381,6 +383,21 @@ policy = "per_worker"
 inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
+
+# Every function verifies its own caller: the user gateways through
+# auth.getClaims(), the hook through Standard Webhooks, the webhook through
+# Paystack's HMAC. The platform's legacy JWT check is therefore off.
+[functions.auth-verify-claims]
+verify_jwt = false
+
+[functions.process-payment]
+verify_jwt = false
+
+[functions.otp-issue]
+verify_jwt = false
+
+[functions.otp-verify]
+verify_jwt = false
 
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
