@@ -135,3 +135,8 @@ Test helpers created with `create function pg_temp.*` need an explicit
 If `supabase start` / `db reset` fails with `LegacyDbSetupError` and a realtime
 `nxdomain` message, Docker's internal DNS hiccuped; restart Docker Desktop and
 retry. `supabase migration up` applies new migrations without a full reset.
+
+If it fails with `HealthCheckTimeoutError … unhealthy`, the host is CPU-starved:
+the CLI's 2s probes are not configurable. `[analytics]` is off in
+`config.toml` for this reason; keep it off, and stop other heavy containers
+before starting.

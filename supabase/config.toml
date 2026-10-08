@@ -402,8 +402,12 @@ verify_jwt = false
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Off locally: Logflare + vector saturate a 4-vCPU Docker VM at boot, so the
+# CLI's fixed 2s health probes time out (analytics, pg_meta, studio) and
+# `supabase start` tears the stack down. Studio works without it; only the
+# Logs Explorer is lost.
 [analytics]
-enabled = true
+enabled = false
 port = 54327
 # Configure one of the supported backends: `postgres`, `bigquery`.
 backend = "postgres"
