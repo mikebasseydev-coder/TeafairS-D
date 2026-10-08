@@ -84,4 +84,6 @@ supabase migration up   # apply only new migrations
 supabase test db        # run all pgTAP tests — look for "Result: PASS"
 ```
 
-Everything stays local until explicitly pushed; no remote project is linked.
+Linked to remote project `vwmjyfjdwrohfizljxrq`; all 20 migrations and the
+four Edge Functions are deployed there (2026-10-08). See `supabase/CLAUDE.md`
+for the remote secrets. Nothing else is pushed until explicitly asked.

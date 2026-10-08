@@ -13,7 +13,13 @@ the authority; this file is the working summary.
 | 3. Edge Function gateway (`supabase/functions/`) | done |
 | 4. Client offline queue | needs Spec B |
 
-No remote project is linked. Nothing is pushed until explicitly asked.
+Linked to remote project `vwmjyfjdwrohfizljxrq` (2026-10-08): all 20
+migrations applied and all four Edge Functions deployed. Remote secrets must
+use the names the code reads (see `functions/.env.example`): `otp-issue`
+needs `SMS_PROVIDER` (+ `KUDISMS_TOKEN`, `KUDISMS_SENDER_ID` for `kudisms`)
+and `auth-verify-claims` needs `AUTH_HOOK_SECRET`, or they fail at boot.
+Never `supabase config push`: the hook URI in `config.toml` is local-only.
+Nothing is pushed until explicitly asked.
 
 ## Layout
 
