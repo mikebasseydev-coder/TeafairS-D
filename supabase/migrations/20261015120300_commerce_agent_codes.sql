@@ -40,7 +40,9 @@ begin
   end if;
 
   select * into v_agent from public.tenant_users
-   where tenant_id = v_me.tenant_id and profile_id = p_agent_id and status = 'ACTIVE';
+   where tenant_id = v_me.tenant_id and profile_id = p_agent_id
+   order by (status = 'ACTIVE') desc
+   limit 1;
   if not found then
     raise exception 'the agent must be an active member of this tenant' using errcode = 'P0001';
   end if;
@@ -78,16 +80,22 @@ begin
     if v_before.agent_id <> p_agent_id then
       raise exception 'a code''s agent never changes; deactivate it and issue a new code' using errcode = 'P0001';
     end if;
+    if coalesce(p_is_active, v_before.is_active) and v_agent.status <> 'ACTIVE' then
+      raise exception 'the agent must be an active member of this tenant' using errcode = 'P0001';
+    end if;
     update public.agent_codes
        set terminal_id     = p_terminal_id,
            discount_type   = p_discount_type,
            discount_value  = p_discount_value,
            max_redemptions = p_max_redemptions,
            expires_at      = p_expires_at,
-           is_active       = coalesce(p_is_active, true)
+           is_active       = coalesce(p_is_active, v_before.is_active)
      where id = v_before.id
     returning * into v_after;
   else
+    if v_agent.status <> 'ACTIVE' and coalesce(p_is_active, true) then
+      raise exception 'the agent must be an active member of this tenant' using errcode = 'P0001';
+    end if;
     insert into public.agent_codes (tenant_id, code, agent_id, terminal_id, discount_type, discount_value,
                                     max_redemptions, expires_at, is_active, created_by)
     values (v_me.tenant_id, v_code, p_agent_id, p_terminal_id, p_discount_type, p_discount_value,

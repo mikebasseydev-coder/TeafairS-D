@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(30);
+select plan(34);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -222,6 +222,29 @@ select lives_ok(
   $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000c', 'HOUSE-IKEJA',
       '20000000-0000-0000-0000-000000000006', null, null, null, null, null, true)$$,
   'a staff member can hold a house code with no terminal');
+reset role;
+
+-- ── departed agents' codes ──────────────────────────────────────────────
+update public.tenant_users set status = 'DISABLED' where id = '50000000-0000-0000-0000-000000000005';
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select lives_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000d', 'KANO-05',
+      '20000000-0000-0000-0000-000000000005', '61000000-0000-0000-0000-000000000005',
+      null, null, null, null, false)$$,
+  'a ZSM can deactivate a departed agent''s code');
+reset role;
+select is((select is_active from public.agent_codes where code = 'KANO-05'), false,
+  'the departed agent''s code is now inactive');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000e', 'KANO-05',
+      '20000000-0000-0000-0000-000000000005', '61000000-0000-0000-0000-000000000005',
+      null, null, null, null, true)$$,
+  'P0001', null, 'a departed agent''s code cannot be reactivated');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000f', 'KANO-06',
+      '20000000-0000-0000-0000-000000000005', null, null, null, null, null, true)$$,
+  'P0001', null, 'no new codes for a departed agent');
 reset role;
 
 select * from finish();
