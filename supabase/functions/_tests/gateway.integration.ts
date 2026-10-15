@@ -249,7 +249,8 @@ const webOrder = (over: Record<string, unknown> = {}) => ({
   idempotency_key: crypto.randomUUID(),
   code: CODE,
   items: [{ sku_code: "MILO-400", qty: 2 }, { sku_code: "MAGGI-12", qty: 1 }],
-  customer: { name: "Ada Obi", phone: `+${phone(7)}`, delivery_address: "5 Opebi Road, Ikeja" },
+  // a real Nigerian mobile shape (234 + [789][01] + 8 digits), as normalizePhone requires
+  customer: { name: "Ada Obi", phone: `+23480${String(Date.now()).slice(-7)}7`, delivery_address: "5 Opebi Road, Ikeja" },
   utm: { source: "whatsapp" },
   payment_route: "PAYSTACK_WEB",
   turnstile_token: "pass",
