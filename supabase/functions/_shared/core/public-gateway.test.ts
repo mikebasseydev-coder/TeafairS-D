@@ -84,3 +84,23 @@ Deno.test("business errors keep the §3.5 shape and no-store", async () => {
   assertEquals([res.status, (await res.json()).error.code], [422, "BUSINESS_RULE"]);
   assertEquals(res.headers.get("cache-control"), "no-store");
 });
+
+Deno.test("every response carries Vary: Origin, with or without an Origin", async () => {
+  const ok = await getRoute(req("GET", "http://x/?code=GRACE-01", { origin: ORIGIN }));
+  assertEquals(ok.headers.get("vary"), "Origin");
+  await ok.body?.cancel();
+
+  const noOrigin = await getRoute(req("GET", "http://x/?code=GRACE-01"));
+  assertEquals(noOrigin.headers.get("vary"), "Origin");
+  await noOrigin.body?.cancel();
+
+  const denied = await getRoute(req("GET", "http://x/?code=GRACE-01", { origin: "https://evil.example" }));
+  assertEquals([denied.status, denied.headers.get("vary")], [403, "Origin"]);
+  await denied.body?.cancel();
+
+  const pre = await getRoute(req("OPTIONS", "http://x/", { origin: ORIGIN }));
+  assertEquals([pre.status, pre.headers.get("vary"), pre.headers.get("cache-control")], [204, "Origin", "no-store"]);
+
+  const preDenied = await getRoute(req("OPTIONS", "http://x/", { origin: "https://evil.example" }));
+  assertEquals([preDenied.status, preDenied.headers.get("vary"), preDenied.headers.get("cache-control")], [403, "Origin", "no-store"]);
+});

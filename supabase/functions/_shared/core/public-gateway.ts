@@ -29,9 +29,12 @@ function corsHeaders(origin: string): Record<string, string> {
     "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "content-type, authorization, apikey, x-client-info",
     "access-control-max-age": "86400",
-    vary: "Origin",
   };
 }
+
+// Responses differ by Origin, so every one says so, or a CDN could serve a
+// copy without (or with the wrong) CORS headers to another caller.
+const BASE_HEADERS: Record<string, string> = { vary: "Origin" };
 
 function withHeaders(res: Response, headers: Record<string, string>): Response {
   for (const [k, v] of Object.entries(headers)) res.headers.set(k, v);
@@ -58,7 +61,10 @@ export function publicGateway<S extends z.ZodTypeAny>(
     const cors = allowed ? corsHeaders(origin) : {};
 
     if (req.method === "OPTIONS") {
-      return new Response(null, { status: allowed ? 204 : 403, headers: cors });
+      return new Response(null, {
+        status: allowed ? 204 : 403,
+        headers: { ...BASE_HEADERS, ...cors, "cache-control": "no-store" },
+      });
     }
     try {
       if (origin !== null && !allowed) {
@@ -70,11 +76,12 @@ export function publicGateway<S extends z.ZodTypeAny>(
       const body = route.method === "GET" ? parseQuery(req, route.schema) : await parseJsonBody(req, route.schema);
       const result = await handle({ body, rpc: deps.rpc, req });
       return withHeaders(json(200, result), {
+        ...BASE_HEADERS,
         ...cors,
         "cache-control": route.cacheControl ?? "no-store",
       });
     } catch (e) {
-      return withHeaders(errorResponse(e), { ...cors, "cache-control": "no-store" });
+      return withHeaders(errorResponse(e), { ...BASE_HEADERS, ...cors, "cache-control": "no-store" });
     }
   };
 }
