@@ -9,7 +9,7 @@ select has_extension('pgcrypto');
 select has_extension('postgis');
 select has_extension('pg_cron');
 
--- the 33 Spec A tables (§6.1) + agent_codes (addendum A1)
+-- the 33 Spec A tables (§6.1) + agent_codes (addendum A1) + order_contacts (addendum A2)
 select tables_are('public', array[
   -- tenancy and identity (6)
   'tenants', 'tenant_settings', 'tenant_users', 'profiles',
@@ -20,22 +20,22 @@ select tables_are('public', array[
   -- catalogue and inventory (4)
   'warehouses', 'brand_approval_policies', 'central_products',
   'inventory_batches',
-  -- commerce (6) + web storefront (1, addendum A1)
+  -- commerce (6) + web storefront (1, addendum A1) + buyer contacts (1, addendum A2)
   'requisitions', 'requisition_items', 'orders', 'order_items',
-  'retail_stock_pickups', 'retail_stock_pickup_items', 'agent_codes',
+  'retail_stock_pickups', 'retail_stock_pickup_items', 'agent_codes', 'order_contacts',
   -- money and the liquidity engine (6)
   'fintech_partners', 'payments', 'commission_records', 'fintech_terminals',
   'fintech_advances', 'cash_audit_batches',
   -- platform (4)
   'otp_challenges', 'idempotency_logs', 'audit_logs', 'notifications'
-], 'public holds exactly the 34 tables');
+], 'public holds exactly the 35 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  34, 'RLS is enabled on all 34 tables');
+  35, 'RLS is enabled on all 35 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN']);

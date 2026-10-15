@@ -117,10 +117,10 @@ insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, disc
 
 -- CAP-01 has already been redeemed once (a PAID order), so it is used up
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, agent_code_id,
-                           attributed_agent_id, payment_route, delivery_address, public_reference) values
+                           attributed_agent_id, payment_route, public_reference) values
   ('70000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'ONLINE',
    '20000000-0000-0000-0000-000000000002', 100, 'PAID', '62000000-0000-0000-0000-000000000008',
-   '20000000-0000-0000-0000-000000000004', 'PAYSTACK_WEB', '5 Opebi Road', 'TF-CAP001');
+   '20000000-0000-0000-0000-000000000004', 'PAYSTACK_WEB', 'TF-CAP001');
 
 create function pg_temp.as_service() returns void language sql as $$
   select set_config('role', 'service_role', true),
@@ -332,9 +332,13 @@ select throws_ok(
 reset role;
 
 -- five unpaid web orders in the last hour from one phone
-insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, customer_phone)
-select '10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000002', 100, '+2348099999999'
-  from generate_series(1, 5);
+with o as (
+  insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount)
+  select '10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000002', 100
+    from generate_series(1, 5)
+  returning id, tenant_id)
+insert into public.order_contacts (order_id, tenant_id, customer_phone)
+select id, tenant_id, '+2348099999999' from o;
 select pg_temp.as_service();
 select throws_ok(
   $$select public.place_web_order('cccccccc-0000-0000-0000-00000000000b', 'GRACE-01',

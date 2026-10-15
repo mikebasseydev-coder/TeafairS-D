@@ -111,24 +111,24 @@ select throws_ok(
 -- ── orders: web attribution ─────────────────────────────────────────────
 select throws_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, agent_code_id,
-                               attributed_agent_id, payment_route, delivery_address)
+                               attributed_agent_id, payment_route)
     values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100,
             '62000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-            'POS_AGENT', '5 Opebi Road')$$,
+            'POS_AGENT')$$,
   '23514', null, 'an attributed web order needs a public reference');
 select throws_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, agent_code_id,
-                               attributed_agent_id, payment_route, delivery_address, public_reference)
+                               attributed_agent_id, payment_route, public_reference)
     values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100,
             '62000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-            'POS_AGENT', '5 Opebi Road', 'TF-OOOOOO')$$,
+            'POS_AGENT', 'TF-OOOOOO')$$,
   '23514', null, 'a public reference uses Crockford base-32 (no O)');
 select lives_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, agent_code_id,
-                               attributed_agent_id, payment_route, delivery_address, public_reference)
+                               attributed_agent_id, payment_route, public_reference)
     values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100,
             '62000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-            'POS_AGENT', '5 Opebi Road', 'TF-7K3Q9X')$$,
+            'POS_AGENT', 'TF-7K3Q9X')$$,
   'a complete attributed web order is accepted');
 select throws_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, discount_amount)
