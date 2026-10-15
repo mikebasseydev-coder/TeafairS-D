@@ -132,7 +132,7 @@ agent_codes(id, tenant_id → tenants RESTRICT,
 | `discount_amount` | `NUMERIC(15,2) NOT NULL DEFAULT 0` | `>= 0` |
 | `customer_email` | `text` | lower-case, optional |
 | `delivery_address` | `text` | required on web orders |
-| `public_reference` | `text UNIQUE` | 8-char code the buyer shows the agent, e.g. `TF-7K3Q9X` |
+| `public_reference` | `text UNIQUE` | `TF-` + 6 Crockford base-32 characters (no I, L, O, U), shown to the agent, e.g. `TF-7K3Q9X` |
 
 A check ties them together: when `channel = 'ONLINE'` and `agent_code_id` is
 set, `payment_route`, `attributed_agent_id`, `delivery_address` and
@@ -210,7 +210,10 @@ orders in `PAID`, `IN_TRANSIT` or `DELIVERED` is below it. An invalid code is
 ### 5.1 Kernel — `_shared/core/public-gateway.ts`
 
 - Allows only the origins in `WEB_ALLOWED_ORIGINS` (comma-separated env var)
-  and answers CORS preflight.
+  and answers CORS preflight. A request from any other `Origin` is 403. A
+  request with no `Origin` (server-side rendering on Vercel) is served: CORS
+  only governs browsers, so it is not an access control, and Turnstile is the
+  gate on checkout.
 - Strips any tenant key from the body, Zod-validates it, maps errors per §3.5.
 - Uses `serviceRpc()`; imports nothing from the user-gateway path.
 - `verify_jwt = false` in `config.toml`, as for every function.
@@ -262,6 +265,8 @@ can change none of them. A tampered Paystack amount would still be caught by
 | `PAYSTACK_SECRET_KEY` | `web-checkout` (already set for `process-payment`) |
 | `TURNSTILE_SECRET_KEY` | `web-checkout`; locally Cloudflare's always-pass test key |
 | `WEB_ALLOWED_ORIGINS` | both public gateways |
+| `WEB_CHECKOUT_CALLBACK_URL` | `web-checkout`: Paystack's return URL on `teafairweb.com` |
+| `TURNSTILE_VERIFY_URL` | optional; local tests point it at a fake |
 
 ## 6. Payment flows
 
@@ -279,7 +284,7 @@ must send its OTP to the order's `customer_phone`: web buyers have no
 
 ## 7. Testing
 
-- **pgTAP:** `010_commerce_web_storefront.test.sql` covers schema shape; RLS
+- **pgTAP:** `010`–`012_commerce_web_*.test.sql` cover schema shape; RLS
   (members read `agent_codes`, `anon`/`authenticated` cannot execute the public
   RPCs); `set_terminal_venue` and `upsert_agent_code` role scoping;
   code-validity rejections; pricing, the discount cap and `p_expected_total`;
