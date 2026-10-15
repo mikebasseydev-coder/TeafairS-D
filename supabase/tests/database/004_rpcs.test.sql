@@ -52,12 +52,14 @@ $$;
 grant execute on function pg_temp.act_as(uuid, uuid) to authenticated;
 
 -- ── contract shape (§3.3) ───────────────────────────────────────────────
--- every RPC the app may call takes the idempotency key first and no tenant
+-- every RPC the app may call takes the idempotency key first and no tenant;
+-- the one exemption is a read, pos_order_lookup (addendum A2 §4.2)
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and has_function_privilege('authenticated', p.oid, 'execute')
       and p.prorettype = 'jsonb'::regtype
+      and p.oid <> 'public.pos_order_lookup(text)'::regprocedure
       and (p.proargnames[1] is distinct from 'p_idempotency_key'
            or p.proargtypes[0] <> 'uuid'::regtype)),
   0, 'every app-callable RPC takes p_idempotency_key uuid first');

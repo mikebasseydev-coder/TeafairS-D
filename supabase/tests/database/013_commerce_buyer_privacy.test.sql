@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(24);
+select plan(35);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -205,6 +205,59 @@ select throws_ok(
       null, 'POS_AGENT', 2250.00, null)$$,
   'P0001', 'Too many unpaid orders for this phone number. Try again later.',
   'a sixth pending web order within the hour is still refused');
+reset role;
+
+-- ── pos_order_lookup: a masked till view for the order's agent ──────────
+select ok(has_function_privilege('authenticated', 'public.pos_order_lookup(text)', 'execute'),
+  'the app can call pos_order_lookup');
+select ok(not has_function_privilege('anon', 'public.pos_order_lookup(text)', 'execute'),
+  'anon cannot');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
+select is(
+  public.pos_order_lookup((select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001'))
+    - 'public_reference',
+  '{"first_name":"Ada","phone_last4":"4567","total":2250.00,"currency":"NGN","status":"PENDING"}'::jsonb,
+  'the agent sees first name, phone last 4, total and status');
+select is(
+  public.pos_order_lookup((select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001'))
+    ->> 'public_reference',
+  (select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001'),
+  'and the reference');
+select is(
+  public.pos_order_lookup((select ' ' || lower(public_reference) || ' ' from refs
+                            where key = 'dddddddd-0000-0000-0000-000000000001')) ->> 'first_name',
+  'Ada', 'a lower-case, padded reference is accepted');
+select throws_ok(
+  format('select public.pos_order_lookup(%L)',
+         (select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000004')),
+  'P0001', 'Order not found', 'a Paystack-route order is not shown');
+select throws_ok($$select public.pos_order_lookup('TF-000000')$$,
+  'P0001', 'Order not found', 'an unknown reference is not shown');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  format('select public.pos_order_lookup(%L)',
+         (select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001')),
+  'P0001', 'Order not found', 'another agent cannot look the order up');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000002');
+select throws_ok(
+  format('select public.pos_order_lookup(%L)',
+         (select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001')),
+  'P0001', 'Order not found', 'another tenant cannot look the order up');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  format('select public.pos_order_lookup(%L)',
+         (select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001')),
+  'P0001', 'Order not found', 'the till lookup is only for the order''s agent, not the ZSM');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  format('select public.pos_order_lookup(%L)',
+         (select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001')),
+  '42501', null, 'a disabled member is refused');
 reset role;
 
 select * from finish();
