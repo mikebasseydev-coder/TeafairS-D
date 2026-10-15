@@ -1,7 +1,7 @@
 # Web storefront and agent attribution — Spec A addendum A1
 
 **Date:** 2026-10-15
-**Status:** draft — awaiting review
+**Status:** approved 2026-10-15 — implementation plan: `docs/superpowers/plans/2026-10-15-web-storefront-agent-attribution.md`
 **Amends:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) §2,
 §3.4, §6.2, §6.6, §6.7 and §8. Where this document and Spec A disagree on the
 subjects below, this document governs; everything else in Spec A stands.
