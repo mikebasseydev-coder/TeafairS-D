@@ -20,3 +20,14 @@ Deno.test("anything else is rejected", () => {
   assertEquals(normalizePhone("call me"), null);
   assertEquals(normalizePhone(""), null);
 });
+
+Deno.test("a trunk 0 after the 234 country code is dropped", () => {
+  assertEquals(normalizePhone("+234 0803 123 4567"), "+2348031234567");
+  assertEquals(normalizePhone("(+234) (0)803 123 4567"), "+2348031234567");
+  assertEquals(normalizePhone("23408031234567"), "+2348031234567");
+});
+
+Deno.test("234 numbers that are not valid Nigerian numbers are rejected", () => {
+  assertEquals(normalizePhone("+234 123 456 7890"), null);
+  assertEquals(normalizePhone("2341234567890"), null);
+});

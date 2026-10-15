@@ -79,3 +79,14 @@ Deno.test("Initialize status:false is an error", async () => {
     () => init({ reference: "r", amountMinor: 1, currency: "NGN", email: "e@x.com", callbackUrl: "https://t/c", metadata: {} }),
     Error, "Duplicate Transaction Reference");
 });
+
+Deno.test("a hung Initialize call is aborted by the timeout", async () => {
+  const hang: typeof fetch = (_i, init) =>
+    new Promise((_res, rej) => {
+      init?.signal?.addEventListener("abort", () => rej(init.signal!.reason));
+    });
+  const init = paystackInitializer({ secretKey: "sk", fetchFn: hang, timeoutMs: 10 });
+  await assertRejects(() =>
+    init({ reference: "r", amountMinor: 100, currency: "NGN", email: "a@b.co", callbackUrl: "https://x.test/cb", metadata: {} })
+  );
+});

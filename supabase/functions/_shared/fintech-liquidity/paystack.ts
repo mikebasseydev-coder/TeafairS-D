@@ -76,8 +76,10 @@ export function paystackInitializer(opts: {
   secretKey: string;
   baseUrl?: string;
   fetchFn?: typeof fetch;
+  timeoutMs?: number;
 }): InitializeTransaction {
   const fetchFn = opts.fetchFn ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? 15000;
   const baseUrl = opts.baseUrl ?? "https://api.paystack.co";
   return async (req) => {
     const body: Record<string, unknown> = {
@@ -97,6 +99,7 @@ export function paystackInitializer(opts: {
       method: "POST",
       headers: { Authorization: `Bearer ${opts.secretKey}`, "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const payload = await res.json().catch(() => null) as { message?: string } | null;
     const parsed = initializeResponse.safeParse(payload);
