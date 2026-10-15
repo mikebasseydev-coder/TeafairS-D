@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(27);
+select plan(50);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -195,5 +195,154 @@ select throws_ok($$select public.quote_web_order('GRACE-01', '[]')$$,
   'P0001', null, 'an empty cart is refused');
 reset role;
 
+-- ── place_web_order ─────────────────────────────────────────────────────
+select ok(not has_function_privilege('authenticated',
+  'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb)', 'execute'),
+  'the app cannot call place_web_order');
+select ok(has_function_privilege('service_role',
+  'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb)', 'execute'),
+  'the public gateway (service_role) can');
+
+select pg_temp.as_service();
+select lives_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000001', 'grace-01',
+      '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
+      '{"source":"whatsapp","medium":"social","campaign":"easter"}',
+      'PAYSTACK_WEB', 5580.00,
+      '{"reference":"TFW-r1","access_code":"ac_1","authorization_url":"https://checkout.paystack.com/ac_1"}')$$,
+  'a web order is placed for the Paystack route');
+reset role;
+select is(
+  (select channel || '|' || status || '|' || payment_route || '|' || total_amount || '|' || discount_amount
+          || '|' || attributed_terminal_id || '|' || teafair_agent_id || '|' || utm_source
+     from public.orders where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
+  'ONLINE|PENDING|PAYSTACK_WEB|5580.00|620.00|61000000-0000-0000-0000-000000000001|20000000-0000-0000-0000-000000000002|whatsapp',
+  'the order carries attribution, discount, UTM and the territory''s TM as accountable agent');
+select is(
+  (select sum(oi.line_total) from public.order_items oi join public.orders o on o.id = oi.order_id
+    where o.agent_code_id = '62000000-0000-0000-0000-000000000001' and o.payment_route = 'PAYSTACK_WEB'),
+  6200.00::numeric, 'the items are priced on the server');
+select is(
+  (select payment_status || '|' || amount || '|' || paystack_reference || '|' || fintech_partner_id
+     from public.payments where paystack_reference = 'TFW-r1'),
+  'INITIATED|5580.00|TFW-r1|60000000-0000-0000-0000-000000000001', 'an INITIATED payment holds the reference');
+select ok(
+  (select public_reference ~ '^TF-[0-9A-HJKMNP-TV-Z]{6}$' from public.orders
+    where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
+  'the order has a public reference');
+select is(
+  (select count(*)::int from public.audit_logs
+    where operation = 'place_web_order' and source = 'WEB' and actor_id is null
+      and teafair_agent_id = '20000000-0000-0000-0000-000000000002'
+      and idempotency_key = 'cccccccc-0000-0000-0000-000000000001'),
+  1, 'a WEB audit row with no actor names the accountable agent');
+
+select pg_temp.as_service();
+select is(
+  public.place_web_order('cccccccc-0000-0000-0000-000000000001', 'grace-01',
+      '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
+      '{"source":"whatsapp","medium":"social","campaign":"easter"}',
+      'PAYSTACK_WEB', 5580.00,
+      '{"reference":"TFW-r2","access_code":"ac_2","authorization_url":"https://checkout.paystack.com/ac_2"}') ->> 'authorization_url',
+  'https://checkout.paystack.com/ac_1', 'a retry with the same key returns the original checkout URL');
+reset role;
+select is(
+  (select count(*)::int from public.orders
+    where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
+  1, 'a retry writes no second order');
+
+select pg_temp.as_service();
+select lives_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000002', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
+      null, 'POS_AGENT', 1080.00, null)$$,
+  'a pay-at-agent order is placed');
+reset role;
+select is(
+  (select count(*)::int from public.payments p join public.orders o on o.id = p.order_id
+    where o.payment_route = 'POS_AGENT'),
+  0, 'a pay-at-agent order has no payment row yet');
+
+select pg_temp.as_service();
+select lives_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000003', 'HOUSE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Chi","phone":"+2348031234569","delivery_address":"9 Awolowo Way"}',
+      '{}', 'PAYSTACK_WEB', 1200.00,
+      '{"reference":"TFW-r3","access_code":"ac_3","authorization_url":"https://checkout.paystack.com/ac_3"}')$$,
+  'a house code works on the Paystack route');
+reset role;
+select is(
+  (select teafair_agent_id::text || '|' || coalesce(attributed_terminal_id::text, 'none')
+     from public.orders where agent_code_id = '62000000-0000-0000-0000-000000000006'),
+  '20000000-0000-0000-0000-000000000006|none', 'a staff code holder is their own accountable agent');
+
+select pg_temp.as_service();
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000004', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
+      null, 'POS_AGENT', 1200.00, null)$$,
+  'P0001', 'Prices changed — refresh and try again', 'a stale total is refused');
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000005', 'HOUSE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
+      null, 'POS_AGENT', 1200.00, null)$$,
+  'P0001', null, 'pay-at-agent needs a code bound to a terminal');
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000006', 'NOTM-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
+      null, 'POS_AGENT', 1200.00, null)$$,
+  'P0001', 'This link is not active yet', 'no accountable agent means the link is not active');
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000007', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"08031234568","delivery_address":"7 Toyin Street"}',
+      null, 'POS_AGENT', 1080.00, null)$$,
+  'P0001', null, 'the phone must already be E.164');
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000008', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568"}',
+      null, 'POS_AGENT', 1080.00, null)$$,
+  'P0001', null, 'a delivery address is required');
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000009', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
+      null, 'PAYSTACK_WEB', 1080.00, null)$$,
+  'P0001', null, 'the Paystack route needs checkout details');
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-00000000000a', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
+      null, 'CASH', 1080.00, null)$$,
+  'P0001', null, 'an unknown payment route is refused');
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000001', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
+      null, 'POS_AGENT', 1080.00, null)$$,
+  'TF002', null, 'a key reused for a different order is refused');
+reset role;
+
+-- five unpaid web orders in the last hour from one phone
+insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, customer_phone)
+select '10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000002', 100, '+2348099999999'
+  from generate_series(1, 5);
+select pg_temp.as_service();
+select throws_ok(
+  $$select public.place_web_order('cccccccc-0000-0000-0000-00000000000b', 'GRACE-01',
+      '[{"sku_code":"MAGGI-12","qty":1}]',
+      '{"name":"Spam","phone":"+2348099999999","delivery_address":"1 Nowhere"}',
+      null, 'POS_AGENT', 1080.00, null)$$,
+  'P0001', 'Too many unpaid orders for this phone number. Try again later.',
+  'a sixth pending web order within the hour is refused');
+reset role;
 select * from finish();
 rollback;
