@@ -2,14 +2,14 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(65);
+select plan(66);
 
 -- extensions (§14 phase 1)
 select has_extension('pgcrypto');
 select has_extension('postgis');
 select has_extension('pg_cron');
 
--- the 33 tables (§6.1)
+-- the 33 Spec A tables (§6.1) + agent_codes (addendum A1)
 select tables_are('public', array[
   -- tenancy and identity (6)
   'tenants', 'tenant_settings', 'tenant_users', 'profiles',
@@ -20,22 +20,22 @@ select tables_are('public', array[
   -- catalogue and inventory (4)
   'warehouses', 'brand_approval_policies', 'central_products',
   'inventory_batches',
-  -- commerce (6)
+  -- commerce (6) + web storefront (1, addendum A1)
   'requisitions', 'requisition_items', 'orders', 'order_items',
-  'retail_stock_pickups', 'retail_stock_pickup_items',
+  'retail_stock_pickups', 'retail_stock_pickup_items', 'agent_codes',
   -- money and the liquidity engine (6)
   'fintech_partners', 'payments', 'commission_records', 'fintech_terminals',
   'fintech_advances', 'cash_audit_batches',
   -- platform (4)
   'otp_challenges', 'idempotency_logs', 'audit_logs', 'notifications'
-], 'public holds exactly the 33 Spec A tables');
+], 'public holds exactly the 34 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  33, 'RLS is enabled on all 33 tables');
+  34, 'RLS is enabled on all 34 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN']);
@@ -53,7 +53,10 @@ select enum_has_labels('public', 'payment_status_enum',
 select enum_has_labels('public', 'commission_status_enum', array['SPLIT','SETTLED','DISPUTED']);
 select enum_has_labels('public', 'warehouse_kind_enum', array['CENTRAL','REGIONAL','STOCKIST']);
 select enum_has_labels('public', 'order_channel_enum', array['ONLINE','FIELD_DSA','RETAIL']);
-select enum_has_labels('public', 'audit_source_enum', array['USER','SYSTEM','WEBHOOK','CRON']);
+select enum_has_labels('public', 'audit_source_enum', array['USER','SYSTEM','WEBHOOK','CRON','WEB']);
+select enum_has_labels('public', 'venue_channel_enum',
+  array['CHURCH','MOSQUE','HOSPITAL','OFFICE_COMPLEX','RESIDENTIAL_ESTATE',
+        'EDUCATIONAL_INSTITUTION','EVENT_CENTER','TRANSIT_HUB','OPEN_MARKET','OTHER']);
 select enum_has_labels('public', 'otp_purpose_enum', array['PICKUP_CONFIRM','POS_SETTLEMENT']);
 
 -- decision 8: there is no global role column
