@@ -12,6 +12,7 @@ the authority; this file is the working summary.
 | 2. Grants, RLS, write contract, foundation RPCs, brand tiers, escalation cron | done |
 | 3. Edge Function gateway (`supabase/functions/`) | done |
 | A1. Web storefront — agent codes, venues, public gateways | done |
+| A2. Buyer contact privacy — `order_contacts`, till lookup | done |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq` (2026-10-08): all 20
@@ -20,8 +21,10 @@ use the names the code reads (see `functions/.env.example`): `otp-issue`
 needs `SMS_PROVIDER` (+ `KUDISMS_TOKEN`, `KUDISMS_SENDER_ID` for `kudisms`)
 and `auth-verify-claims` needs `AUTH_HOOK_SECRET`, or they fail at boot.
 Never `supabase config push`: the hook URI in `config.toml` is local-only.
-The six addendum A1 migrations and the `storefront-catalogue` / `web-checkout`
-functions are local only until explicitly pushed.
+The nine addendum A1 and A2 migrations and the `storefront-catalogue` /
+`web-checkout` functions are local only until explicitly pushed. **A1 never
+deploys without A2**: A1 alone exposes buyer contact details to every tenant
+member, and audit rows cannot be scrubbed afterwards.
 Nothing is pushed until explicitly asked.
 
 ## Layout
@@ -58,6 +61,12 @@ tracks, and grants are the security core (Spec A §13).
   and `extensions.st_*` — function search paths do not include it.
 - New functions get **no** EXECUTE for PUBLIC/anon/authenticated by default
   (grants migration). Grant explicitly, and only what the API may call.
+- Buyer contact details live only in `order_contacts` (addendum A2), readable
+  by the ZSM and the order's TM. Never put personal data on `orders` or in an
+  audit payload; audit a redacted summary.
+- `payments` and `tenant_users` are granted column by column. A new column on
+  either is invisible to the app until added to the grant, and the app must
+  name columns rather than `select *`.
 
 ## Writing an RPC
 

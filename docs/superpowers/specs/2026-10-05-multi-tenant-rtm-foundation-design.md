@@ -3,7 +3,7 @@
 **Date:** 2026-10-05 (open questions closed 2026-10-06)
 **Status:** approved design — the governing authority for implementation
 **Scope:** Spec A of four (see §12); implementation phases in §14
-**Amended by:** A1 — `2026-10-15-web-storefront-agent-attribution-design.md`
+**Amended by:** A1 — `2026-10-15-web-storefront-agent-attribution-design.md`; A2 — `2026-10-15-buyer-contact-privacy-design.md`
 (public gateways, web orders, agent codes, terminal venues)
 
 ## Executive summary

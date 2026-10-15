@@ -1,5 +1,5 @@
 // Addendum A1 §5.3 step 2 — buyers type numbers the way Nigerians write them.
-// The result must satisfy orders.customer_phone's E.164 check.
+// The result must satisfy order_contacts.customer_phone's E.164 check.
 export function normalizePhone(input: string): string | null {
   const plus = input.trim().replace(/[()]/g, "").startsWith("+");
   let digits = input.replace(/[^0-9]/g, "");

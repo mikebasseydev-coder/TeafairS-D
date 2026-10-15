@@ -29,9 +29,10 @@ integrations. Its implementation runs in four phases (§14).
 
 | Path | Status |
 |---|---|
-| `supabase/` | **Phases 1–3 done**: 26 migrations, 392 pgTAP assertions, 6 Edge Functions; addendum A1 (web storefront) done locally. See `supabase/CLAUDE.md` |
+| `supabase/` | **Phases 1–3 done**: 29 migrations, 427 pgTAP assertions, 6 Edge Functions; addenda A1 (web storefront) and A2 (buyer contact privacy) done locally. See `supabase/CLAUDE.md` |
 | `docs/superpowers/specs/2026-10-05-…` | Spec A — the authority |
-| `docs/superpowers/specs/2026-10-15-…` | Addendum A1 to Spec A — web storefront, agent codes, terminal venues |
+| `docs/superpowers/specs/2026-10-15-web-…` | Addendum A1 to Spec A — web storefront, agent codes, terminal venues |
+| `docs/superpowers/specs/2026-10-15-buyer-…` | Addendum A2 to Spec A — buyer contact privacy |
 | client app | **none yet**: built fresh under Spec B as a flat `src/`. `frontend/`, `apps/` and `docs/features/` were removed (§13) |
 
 Phase 4 (client offline queue) needs the Spec B app shell.
@@ -70,6 +71,7 @@ Android only at launch; the Windows HQ client is deferred.
 - Every mutation takes a client-generated `p_idempotency_key uuid` first,
   generated at enqueue time, not send time.
 - `bvn_nin_hash` lives only in `user_secure_profiles` (owner-only).
+- Buyer contact details live only in `order_contacts` (the ZSM and the order's TM).
 - `teafair_agent_id` is `NOT NULL` on `orders`, `payments`,
   `commission_records`; nullable on `audit_logs` only for cron/webhook rows.
 - Workflow statuses are `text` + `CHECK`; stable sets are enums.

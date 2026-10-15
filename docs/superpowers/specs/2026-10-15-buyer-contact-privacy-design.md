@@ -1,7 +1,7 @@
 # Buyer contact privacy — Spec A addendum A2
 
 **Date:** 2026-10-15
-**Status:** draft for review
+**Status:** approved 2026-10-15 — implementation plan: `docs/superpowers/plans/2026-10-15-buyer-contact-privacy.md`
 **Amends:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) §6.6
 and §8, and addendum A1 (`2026-10-15-web-storefront-agent-attribution-design.md`)
 §3.4 and §4.2. Where this document disagrees with them on the subjects below,
