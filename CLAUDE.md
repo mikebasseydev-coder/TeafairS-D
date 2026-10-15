@@ -29,8 +29,9 @@ integrations. Its implementation runs in four phases (§14).
 
 | Path | Status |
 |---|---|
-| `supabase/` | **Phases 1–3 done**: 20 migrations, 287 pgTAP assertions, 4 Edge Functions. See `supabase/CLAUDE.md` |
+| `supabase/` | **Phases 1–3 done**: 26 migrations, 392 pgTAP assertions, 6 Edge Functions; addendum A1 (web storefront) done locally. See `supabase/CLAUDE.md` |
 | `docs/superpowers/specs/2026-10-05-…` | Spec A — the authority |
+| `docs/superpowers/specs/2026-10-15-…` | Addendum A1 to Spec A — web storefront, agent codes, terminal venues |
 | client app | **none yet**: built fresh under Spec B as a flat `src/`. `frontend/`, `apps/` and `docs/features/` were removed (§13) |
 
 Phase 4 (client offline queue) needs the Spec B app shell.

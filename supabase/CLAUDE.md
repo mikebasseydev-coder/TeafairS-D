@@ -11,6 +11,7 @@ the authority; this file is the working summary.
 | 1. Schema — extensions, enums, 33 tables | done |
 | 2. Grants, RLS, write contract, foundation RPCs, brand tiers, escalation cron | done |
 | 3. Edge Function gateway (`supabase/functions/`) | done |
+| A1. Web storefront — agent codes, venues, public gateways | done |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq` (2026-10-08): all 20
@@ -19,6 +20,8 @@ use the names the code reads (see `functions/.env.example`): `otp-issue`
 needs `SMS_PROVIDER` (+ `KUDISMS_TOKEN`, `KUDISMS_SENDER_ID` for `kudisms`)
 and `auth-verify-claims` needs `AUTH_HOOK_SECRET`, or they fail at boot.
 Never `supabase config push`: the hook URI in `config.toml` is local-only.
+The six addendum A1 migrations and the `storefront-catalogue` / `web-checkout`
+functions are local only until explicitly pushed.
 Nothing is pushed until explicitly asked.
 
 ## Layout
@@ -29,7 +32,7 @@ supabase/
 ├── migrations/        hand-written, ordered — Supabase CLI owns all DDL
 ├── tests/database/    pgTAP, run by `supabase test db`
 └── functions/         Edge Functions — one flat directory per function
-    └── _shared/       core/ (gateway kernel) · auth/ · fintech-liquidity/
+    └── _shared/       core/ (gateway kernel, public-gateway) · auth/ · commerce/ · fintech-liquidity/
 ```
 
 Code is grouped by domain: `auth`, `rtm-core`, `commerce`,
@@ -109,6 +112,11 @@ one responsibility per file. Third-party versions appear only in
   `_shared/auth/pin.ts`) before their RPC.
 - **System functions** (`auth-verify-claims`, `process-payment`)
   authenticate by signature and use `serviceRpc()`.
+- **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1)
+  use `publicGateway(route, handle, deps)` from `_shared/core/public-gateway.ts`.
+  Callers are anonymous, so their RPCs are granted to `service_role` only and
+  resolve the tenant from the agent code. CORS is limited to
+  `WEB_ALLOWED_ORIGINS`; checkout is gated by Turnstile.
 - **`verify_jwt = false`** is set for every function in `config.toml`; each
   one verifies its caller itself.
 
@@ -123,7 +131,9 @@ deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
 **Secrets:** copy `supabase/.env.example` and
 `supabase/functions/.env.example`; `AUTH_HOOK_SECRET` must match in both. Set
 `SMS_PROVIDER=log` locally, and `kudisms` (with `KUDISMS_TOKEN` and
-`KUDISMS_SENDER_ID`) anywhere real.
+`KUDISMS_SENDER_ID`) anywhere real. `web-checkout` also needs `TURNSTILE_SECRET_KEY`,
+`WEB_ALLOWED_ORIGINS` and `WEB_CHECKOUT_CALLBACK_URL` (see
+`functions/.env.example`).
 
 ## Testing
 

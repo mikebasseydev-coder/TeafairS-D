@@ -21,6 +21,8 @@ const ids = {
   dsa: crypto.randomUUID(),
   owner: crypto.randomUUID(),
   order: crypto.randomUUID(),
+  partner: crypto.randomUUID(),
+  terminal: crypto.randomUUID(),
 };
 const phone = (n: number) => `234${String(Date.now()).slice(-7)}${n}`;
 
@@ -54,24 +56,37 @@ async function sign(body: string): Promise<string> {
     (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// a fake Paystack Verify API, reached from the edge runtime via host.docker.internal:54399
+// a fake Paystack (Verify + Initialize) and a fake Turnstile, reached from the
+// edge runtime via host.docker.internal:54399
 const paystackLedger = new Map<string, Record<string, unknown>>();
-const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {} }, (req) => {
-  const reference = decodeURIComponent(new URL(req.url).pathname.split("/").pop()!);
+const initialized: Array<Record<string, unknown>> = [];
+const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {} }, async (req) => {
+  const path = new URL(req.url).pathname;
+  if (path === "/turnstile/v0/siteverify") {
+    const form = await req.formData();
+    return Response.json({ success: form.get("response") === "pass" });
+  }
+  if (path === "/transaction/initialize") {
+    const body = await req.json() as Record<string, unknown>;
+    initialized.push(body);
+    const ref = String(body.reference);
+    return Response.json({ status: true, data: { authorization_url: `https://checkout.paystack.test/${ref}`, access_code: `ac_${ref}`, reference: ref } });
+  }
+  const reference = decodeURIComponent(path.split("/").pop()!);
   const data = paystackLedger.get(reference);
   return data
     ? Response.json({ status: true, message: "Verification successful", data })
     : Response.json({ status: false, message: "Transaction reference not found" }, { status: 400 });
 });
 
-let users: Record<"tm" | "dsm" | "dsa" | "owner", { id: string; email: string }>;
+let users: Record<"tm" | "dsm" | "dsa" | "owner" | "agent", { id: string; email: string }>;
 
 Deno.test({
   name: "fixtures",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    users = { tm: await createUser(1), dsm: await createUser(2), dsa: await createUser(3), owner: await createUser(4) };
+    users = { tm: await createUser(1), dsm: await createUser(2), dsa: await createUser(3), owner: await createUser(4), agent: await createUser(5) };
     await must(admin.from("tenants").insert({ id: ids.tenant, name: `IT ${run}`, code: `IT_${run.toUpperCase().replace(/[^A-Z0-9]/g, "")}`.slice(0, 16) }));
     await must(admin.from("zones").insert({ id: ids.zone, tenant_id: ids.tenant, zone_name: "Lagos" }));
     await must(admin.from("territories").insert({ id: ids.territory, tenant_id: ids.tenant, zone_id: ids.zone, territory_name: "Ikeja" }));
@@ -86,6 +101,23 @@ Deno.test({
       { id: ids.owner, tenant_id: ids.tenant, profile_id: users.owner.id, role: "RETAIL_SHOP_OWNER", status: "ACTIVE", is_primary: true },
     ]));
     await must(admin.from("orders").insert({ id: ids.order, tenant_id: ids.tenant, channel: "FIELD_DSA", teafair_agent_id: users.dsa.id, total_amount: 2500 }));
+    await must(admin.from("tenant_users").insert([
+      { tenant_id: ids.tenant, profile_id: users.agent.id, role: "FINTECH_AGENT", territory_id: ids.territory, status: "ACTIVE", is_primary: true },
+    ]));
+    await must(admin.from("territories").update({ tm_id: users.tm.id }).eq("id", ids.territory));
+    await must(admin.from("fintech_partners").insert({
+      id: ids.partner, tenant_id: ids.tenant, business_name: `IT Moniepoint ${run}`, pos_network: "MONIEPOINT",
+      commission_bps: 150, contact_phone: `+${phone(5)}`, paystack_subaccount_code: "ACCT_it01",
+      status: "ACTIVE", approved_by: users.tm.id, approved_at: new Date().toISOString(),
+    }));
+    await must(admin.from("fintech_terminals").insert({
+      id: ids.terminal, tenant_id: ids.tenant, partner_id: ids.partner, agent_id: users.agent.id,
+      terminal_id: `IT-${run}`, territory_id: ids.territory,
+    }));
+    await must(admin.from("central_products").insert([
+      { tenant_id: ids.tenant, sku_code: "MILO-400", product_name: "Milo 400g", brand: "Milo", category: "Beverages", unit_price: 2500, wholesale_price: 2000 },
+      { tenant_id: ids.tenant, sku_code: "MAGGI-12", product_name: "Maggi 12 cubes", brand: "Maggi", category: "Seasoning", unit_price: 1200, wholesale_price: 1000 },
+    ]));
   },
 });
 
@@ -172,6 +204,105 @@ Deno.test({
     assertEquals(payment.payment_status, "SUCCESS");
     const settled = await must(admin.from("audit_logs").select("id").eq("operation", "settle_paystack_payment").eq("tenant_id", ids.tenant));
     assert(settled?.length === 1, "a redelivery settles nothing twice");
+  },
+});
+
+const CODE = `IT-${run.toUpperCase()}`;
+const WEB = "http://localhost:3000";
+
+Deno.test({
+  name: "upsert_agent_code: a TM issues a 10% code through PostgREST",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const jwt = await signIn(users.tm.email);
+    const tm = createClient(API, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}` } } });
+    const result = await must(tm.rpc("upsert_agent_code", {
+      p_idempotency_key: crypto.randomUUID(), p_code: CODE, p_agent_id: users.agent.id, p_terminal_id: ids.terminal,
+      p_discount_type: "PERCENT", p_discount_value: 10, p_max_redemptions: null, p_expires_at: null, p_is_active: true,
+    })) as { code: string };
+    assertEquals(result.code, CODE);
+  },
+});
+
+Deno.test({
+  name: "storefront-catalogue: products for the code, cacheable, no agent id",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const res = await fetch(`${FN}/storefront-catalogue?code=${CODE.toLowerCase()}`, { headers: { Origin: WEB } });
+    const text = await res.text();
+    assertEquals(res.status, 200, text);
+    // the local Kong gateway runs its own CORS plugin on /functions/v1 and answers "*";
+    // the function's own allowlist is covered by the unit tests
+    assert([WEB, "*"].includes(res.headers.get("access-control-allow-origin") ?? ""));
+    assertEquals(res.headers.get("cache-control"), "public, max-age=60, s-maxage=300");
+    assertEquals(JSON.parse(text).products.length, 2);
+    assert(!text.includes(users.agent.id), "the agent's id never reaches the storefront");
+  },
+});
+
+const checkout = (body: Record<string, unknown>) =>
+  fetch(`${FN}/web-checkout`, { method: "POST", headers: { Origin: WEB, "content-type": "application/json" }, body: JSON.stringify(body) });
+
+const webOrder = (over: Record<string, unknown> = {}) => ({
+  idempotency_key: crypto.randomUUID(),
+  code: CODE,
+  items: [{ sku_code: "MILO-400", qty: 2 }, { sku_code: "MAGGI-12", qty: 1 }],
+  customer: { name: "Ada Obi", phone: `+${phone(7)}`, delivery_address: "5 Opebi Road, Ikeja" },
+  utm: { source: "whatsapp" },
+  payment_route: "PAYSTACK_WEB",
+  turnstile_token: "pass",
+  ...over,
+});
+
+Deno.test({
+  name: "web-checkout: a failed bot check is 403",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const res = await checkout(webOrder({ turnstile_token: "fail" }));
+    assertEquals([res.status, (await res.json()).error.code], [403, "BOT_CHECK_FAILED"]);
+  },
+});
+
+Deno.test({
+  name: "web-checkout: Paystack route initialises with the split and records an INITIATED payment",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const body = webOrder();
+    const res = await checkout(body);
+    const placed = await res.json();
+    assertEquals(res.status, 200, JSON.stringify(placed));
+    assert(/^TF-[0-9A-HJKMNP-TV-Z]{6}$/.test(placed.public_reference));
+    assertEquals(placed.authorization_url, `https://checkout.paystack.test/${placed.paystack_reference}`);
+
+    const init = initialized.find((i) => i.reference === placed.paystack_reference)!;
+    assertEquals([init.amount, init.subaccount, init.transaction_charge], [558000, "ACCT_it01", 558000 - 8370]);
+
+    const [payment] = (await must(admin.from("payments").select("payment_status, amount").eq("paystack_reference", placed.paystack_reference))) ?? [];
+    assertEquals([payment.payment_status, Number(payment.amount)], ["INITIATED", 5580]);
+
+    // a retry with the same key gets the same order and URL back
+    const again = await (await checkout(body)).json();
+    assertEquals([again.order_id, again.authorization_url], [placed.order_id, placed.authorization_url]);
+  },
+});
+
+Deno.test({
+  name: "web-checkout: pay-at-agent route returns a public reference and no payment",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const res = await checkout(webOrder({ payment_route: "POS_AGENT" }));
+    const placed = await res.json();
+    assertEquals(res.status, 200, JSON.stringify(placed));
+    assertEquals(placed.authorization_url, null);
+    const [order] = (await must(admin.from("orders").select("attributed_terminal_id, teafair_agent_id, payment_route").eq("id", placed.order_id))) ?? [];
+    assertEquals([order.attributed_terminal_id, order.teafair_agent_id, order.payment_route], [ids.terminal, users.tm.id, "POS_AGENT"]);
+    const payments = await must(admin.from("payments").select("id").eq("order_id", placed.order_id));
+    assertEquals(payments?.length, 0);
   },
 });
 
