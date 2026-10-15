@@ -20,8 +20,12 @@ export function turnstileVerifier(
     if (remoteIp) form.set("remoteip", remoteIp);
     const res = await fetchFn(url, { method: "POST", body: form, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) {
-      await res.body?.cancel();
-      throw new Error(`Turnstile siteverify failed: HTTP ${res.status}`);
+      // Cloudflare answers 400 for a bad secret; its error codes say why
+      const failed = await res.json().catch(() => null) as { "error-codes"?: unknown } | null;
+      const codes = Array.isArray(failed?.["error-codes"])
+        ? failed["error-codes"].filter((c): c is string => typeof c === "string").join(", ").slice(0, 200)
+        : "";
+      throw new Error(`Turnstile siteverify failed: HTTP ${res.status}${codes ? ` (${codes})` : ""}`);
     }
     const payload: unknown = await res.json().catch(() => {
       throw new Error("Turnstile siteverify returned a non-JSON body");

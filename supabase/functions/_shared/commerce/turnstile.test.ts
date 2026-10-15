@@ -42,6 +42,15 @@ Deno.test("an HTTP error is an outage, not a failed check", async () => {
   await assertRejects(() => verify("t", null), Error, "HTTP 500");
 });
 
+Deno.test("an HTTP error names Cloudflare's error codes, never the secret", async () => {
+  const verify = turnstileVerifier({
+    secretKey: "s3cret-value",
+    fetchFn: rawFetch(JSON.stringify({ success: false, "error-codes": ["invalid-input-secret"] }), 400),
+  });
+  const err = await assertRejects(() => verify("t", null), Error, "HTTP 400 (invalid-input-secret)");
+  assertEquals(err.message.includes("s3cret-value"), false);
+});
+
 Deno.test("operator error codes throw and never leak the secret", async () => {
   for (const code of ["invalid-input-secret", "missing-input-secret", "internal-error"]) {
     const verify = turnstileVerifier({
