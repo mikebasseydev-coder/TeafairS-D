@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(13);
+select plan(30);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -139,6 +139,89 @@ select throws_ok(
       '61000000-0000-0000-0000-000000000001', 'CHURCH', 'Hijack',
       'Nowhere', 'Lagos', null, 6.60, 3.35, null)$$,
   'P0001', 'terminal not found', 'another tenant''s terminal does not exist for the caller');
+reset role;
+
+-- ── upsert_agent_code ───────────────────────────────────────────────────
+select ok(has_function_privilege('authenticated',
+  'public.upsert_agent_code(uuid,text,uuid,uuid,text,numeric,integer,timestamp with time zone,boolean)', 'execute'),
+  'the app may call upsert_agent_code');
+select ok(not has_function_privilege('anon',
+  'public.upsert_agent_code(uuid,text,uuid,uuid,text,numeric,integer,timestamp with time zone,boolean)', 'execute'),
+  'anon may not');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
+select lives_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000001', ' grace-01 ',
+      '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001',
+      'PERCENT', 10, null, null, true)$$,
+  'a TM issues a code for an agent in their territory');
+reset role;
+select is(
+  (select code || '|' || created_by::text from public.agent_codes
+    where agent_id = '20000000-0000-0000-0000-000000000004'),
+  'GRACE-01|20000000-0000-0000-0000-000000000002', 'the code is stored trimmed, upper-case, with its issuer');
+select is(
+  (select count(*)::int from public.audit_logs
+    where operation = 'upsert_agent_code' and idempotency_key = 'bbbbbbbb-0000-0000-0000-000000000001'),
+  1, 'issuing a code is audited');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000002', 'MINE-01',
+      '20000000-0000-0000-0000-000000000004', null, 'PERCENT', 50, null, null, true)$$,
+  '42501', null, 'an agent cannot issue codes, because codes carry discounts');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000003', 'KANO-05',
+      '20000000-0000-0000-0000-000000000005', null, null, null, null, null, true)$$,
+  '42501', null, 'a TM cannot issue codes for agents outside their territory');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select lives_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000004', 'KANO-05',
+      '20000000-0000-0000-0000-000000000005', '61000000-0000-0000-0000-000000000005',
+      null, null, null, null, true)$$,
+  'a ZSM issues codes anywhere in the tenant');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000005', 'GRACE-02',
+      '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000005',
+      null, null, null, null, true)$$,
+  'P0001', null, 'a code can only be bound to the agent''s own terminal');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000006', 'GRACE-03',
+      '20000000-0000-0000-0000-000000000004', null, 'PERCENT', 150, null, null, true)$$,
+  'P0001', null, 'a percentage above 100 is refused');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000007', 'GRACE-04',
+      '20000000-0000-0000-0000-000000000004', null, 'FIXED', null, null, null, true)$$,
+  'P0001', null, 'a discount type needs a value');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000008', 'ab',
+      '20000000-0000-0000-0000-000000000004', null, null, null, null, null, true)$$,
+  'P0001', null, 'a code is 4–32 letters, digits or dashes');
+select lives_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000009', 'GRACE-01',
+      '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001',
+      'PERCENT', 10, null, null, false)$$,
+  'a TM deactivates a code');
+reset role;
+select is((select is_active from public.agent_codes where code = 'GRACE-01'), false,
+  'the code is now inactive');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000a', 'GRACE-01',
+      '20000000-0000-0000-0000-000000000006', null, null, null, null, null, true)$$,
+  'P0001', null, 'a code''s agent never changes');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000002');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000b', 'GRACE-01',
+      '20000000-0000-0000-0000-000000000009', null, null, null, null, null, true)$$,
+  'P0001', 'that code is already taken', 'another tenant cannot take over a code');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select lives_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000c', 'HOUSE-IKEJA',
+      '20000000-0000-0000-0000-000000000006', null, null, null, null, null, true)$$,
+  'a staff member can hold a house code with no terminal');
 reset role;
 
 select * from finish();
