@@ -1,5 +1,6 @@
 // Spec D1 §7 — cron-invoked sweep (unconfirmed payments) and refund pass.
-// Always 200 with counts once listing succeeds; per-item errors are counted.
+// Always 200 with counts once listing succeeds; a failing item (a payment, or a
+// refund inside applyRefunds) is logged, counted in `errors`, and the batch continues.
 import { z } from "../_shared/core/deps.ts";
 import type { Rpc } from "../_shared/core/db.ts";
 import { cronAuthorized } from "../_shared/core/cron.ts";
@@ -35,8 +36,8 @@ export function createReconcileFundsHandler(deps: ReconcileFundsDeps): (req: Req
           from: day(new Date(now.getTime() - 3 * DAY_MS)),
           to: day(new Date(now.getTime() + DAY_MS)),
         });
-        const outcomes = await applyRefunds(deps.rpc, "sweep", refunds);
-        return json(200, { mode, seen: refunds.length, outcomes, errors: 0 });
+        const { error: errors = 0, ...outcomes } = await applyRefunds(deps.rpc, "sweep", refunds);
+        return json(200, { mode, seen: refunds.length, outcomes, errors });
       }
 
       const pending = await deps.rpc<Array<{ paystack_reference: string; created_at: string }>>(
@@ -50,9 +51,9 @@ export function createReconcileFundsHandler(deps: ReconcileFundsDeps): (req: Req
           const tx = await deps.verifyTransaction(reference);
           const result = await settleVerified(deps.rpc, "sweep", tx);
           outcomes[result.outcome] = (outcomes[result.outcome] ?? 0) + 1;
-        } catch {
+        } catch (e) {
           errors++;
-          console.error("reconcile-funds: sweep failed for", reference);
+          console.error("reconcile-funds: sweep failed for", reference, e instanceof Error ? e.name : "error");
         }
       }
       return json(200, { mode, seen: pending.length, outcomes, errors });

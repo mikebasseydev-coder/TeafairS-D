@@ -42,6 +42,20 @@ Deno.test("reversed settles then applies a reversal", async () => {
   });
 });
 
+Deno.test("applyRefunds continues past a failing refund", async () => {
+  const calls: string[] = [];
+  const rpc: Rpc = <T>(_fn: string, args: Record<string, unknown>) => {
+    calls.push(String(args.p_refund_id));
+    if (args.p_refund_id === "1") return Promise.reject(new Error("db down"));
+    return Promise.resolve({ outcome: "refunded" } as T);
+  };
+  const mk = (id: string): PaystackRefund =>
+    ({ id, transactionReference: "r" + id, amountMinor: 100, currency: "NGN", status: "processed", raw: { id } });
+  const counts = await applyRefunds(rpc, "sweep", [mk("1"), mk("2")]);
+  assertEquals(calls, ["1", "2"]);
+  assertEquals(counts, { error: 1, refunded: 1 });
+});
+
 Deno.test("applyRefunds skips non-processed and unreadable", async () => {
   const { rpc, calls } = fakeRpc({ apply_paystack_refund: { outcome: "refunded" } });
   const mk = (id: string, status: string, ref: string | null): PaystackRefund =>

@@ -90,6 +90,22 @@ Deno.test("refunds mode lists the last 3 days", async () => {
   assertEquals(rpcCalls.filter(([fn]) => fn === "apply_paystack_refund").length, 1);
 });
 
+Deno.test("refunds mode counts a failing refund and continues", async () => {
+  const rpc: Rpc = <T>(_fn: string, args: Record<string, unknown>) =>
+    args.p_refund_id === "1" ? Promise.reject(new Error("db down")) : Promise.resolve({ outcome: "refunded" } as T);
+  const handler = createReconcileFundsHandler({
+    cronSecret: SECRET, rpc, now: () => NOW,
+    verifyTransaction: () => Promise.reject(new Error("unused")),
+    listRefunds: () => Promise.resolve([
+      { id: "1", transactionReference: "ref_1", amountMinor: 5, currency: "NGN", status: "processed", raw: {} },
+      { id: "3", transactionReference: "ref_3", amountMinor: 5, currency: "NGN", status: "processed", raw: {} },
+    ]),
+  });
+  const res = await post(handler, { mode: "refunds" });
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { mode: "refunds", seen: 2, outcomes: { refunded: 1 }, errors: 1 });
+});
+
 Deno.test("unknown mode is 400", async () => {
   const { handler, rpcCalls } = setup();
   const res = await post(handler, { mode: "nuke" });

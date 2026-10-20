@@ -63,6 +63,8 @@ export function createProcessPaymentHandler(deps: ProcessPaymentDeps): (req: Req
         const reference = parsed.data.data.transaction_reference;
         const refunds = await deps.listRefunds({ reference });
         const counts = await applyRefunds(deps.rpc, "webhook", refunds, reference);
+        // non-2xx so Paystack retries; the writer is at-most-once per refund id
+        if (counts.error) throw new GatewayError(502, "REFUND_APPLY_FAILED", "A refund could not be applied.");
         return acknowledged(counts.refunded ? "refunded" : "none_processed");
       }
       const { event, data } = parsed.data;

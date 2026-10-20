@@ -13,11 +13,12 @@ async function sign(body: string): Promise<string> {
   return Array.from(new Uint8Array(mac), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function setup(opts: { verify?: VerifyTransaction; rpcResult?: unknown } = {}) {
+function setup(opts: { verify?: VerifyTransaction; rpcResult?: unknown; rpcThrows?: boolean } = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
   const verifyCalls: string[] = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
+    if (opts.rpcThrows) return Promise.reject(new Error("db down"));
     return Promise.resolve((opts.rpcResult ?? { outcome: "updated" }) as T);
   };
   const verified: VerifiedTransaction = { status: "success", reference: "ref_1", amountMinor: 250000, currency: "NGN", transactionId: "9", split: null, raw: { id: 9 } };
@@ -116,6 +117,13 @@ Deno.test("refund.processed re-reads refunds by reference and applies them", asy
   assertEquals(rpcCalls[0][1].p_refund_id, "747680");
   assertEquals(rpcCalls[0][1].p_transaction_reference, "TFW-1");
   assertEquals(rpcCalls[0][1].p_source, "webhook");
+});
+
+Deno.test("refund.processed returns 502 when a refund fails to apply", async () => {
+  const { handler } = setup({ rpcThrows: true });
+  const res = await deliver(handler, refundEvent);
+  assertEquals(res.status, 502);
+  assertEquals((await res.json()).error.code, "REFUND_APPLY_FAILED");
 });
 
 Deno.test("refund.processed has no replay window", async () => {

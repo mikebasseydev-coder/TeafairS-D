@@ -44,16 +44,21 @@ export async function applyRefunds(
       bump("unreadable");
       continue;
     }
-    const r = await rpc<{ outcome: string }>("apply_paystack_refund", {
-      p_source: source,
-      p_refund_id: refund.id,
-      p_transaction_reference: txRef,
-      p_amount_minor: refund.amountMinor,
-      p_currency: refund.currency,
-      p_reason: "REFUND",
-      p_verified: refund.raw,
-    });
-    bump(r.outcome);
+    try {
+      const r = await rpc<{ outcome: string }>("apply_paystack_refund", {
+        p_source: source,
+        p_refund_id: refund.id,
+        p_transaction_reference: txRef,
+        p_amount_minor: refund.amountMinor,
+        p_currency: refund.currency,
+        p_reason: "REFUND",
+        p_verified: refund.raw,
+      });
+      bump(r.outcome);
+    } catch (e) {
+      console.error("apply_paystack_refund failed", refund.id, e instanceof Error ? e.name : "error");
+      bump("error");
+    }
   }
   return counts;
 }
