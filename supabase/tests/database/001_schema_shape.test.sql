@@ -23,21 +23,21 @@ select tables_are('public', array[
   -- commerce (6) + web storefront (1, addendum A1) + buyer contacts (1, addendum A2)
   'requisitions', 'requisition_items', 'orders', 'order_items',
   'retail_stock_pickups', 'retail_stock_pickup_items', 'agent_codes', 'order_contacts',
-  -- Nigerian locations (2, Spec D1 §3.1)
-  'ng_states', 'ng_lgas',
+  -- Nigerian locations (2, Spec D1 §3.1) + territory coverage (1, §3.2)
+  'ng_states', 'ng_lgas', 'territory_coverage',
   -- money and the liquidity engine (6)
   'fintech_partners', 'payments', 'commission_records', 'fintech_terminals',
   'fintech_advances', 'cash_audit_batches',
   -- platform (4)
   'otp_challenges', 'idempotency_logs', 'audit_logs', 'notifications'
-], 'public holds exactly the 37 tables');
+], 'public holds exactly the 38 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  37, 'RLS is enabled on all 37 tables');
+  38, 'RLS is enabled on all 38 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN']);

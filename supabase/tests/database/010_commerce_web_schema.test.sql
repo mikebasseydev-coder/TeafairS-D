@@ -24,6 +24,9 @@ insert into public.territories (id, tenant_id, zone_id, territory_name) values
    '30000000-0000-0000-0000-000000000001', 'Ikeja'),
   ('40000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002',
    '30000000-0000-0000-0000-000000000002', 'Ikeja');
+insert into public.warehouses (id, tenant_id, name, kind, territory_id) values
+  ('71000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'REG-IKEJA', 'REGIONAL',
+   '40000000-0000-0000-0000-000000000001');
 
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
@@ -111,28 +114,34 @@ select throws_ok(
 -- ── orders: web attribution ─────────────────────────────────────────────
 select throws_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, agent_code_id,
-                               attributed_agent_id, payment_route)
+                               attributed_agent_id, payment_route, delivery_lga_id, territory_id, fulfilment_warehouse_id)
     values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100,
             '62000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-            'POS_AGENT')$$,
+            'POS_AGENT', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000001')$$,
   '23514', null, 'an attributed web order needs a public reference');
 select throws_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, agent_code_id,
-                               attributed_agent_id, payment_route, public_reference)
+                               attributed_agent_id, payment_route, public_reference,
+                               delivery_lga_id, territory_id, fulfilment_warehouse_id)
     values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100,
             '62000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-            'POS_AGENT', 'TF-OOOOOO')$$,
+            'POS_AGENT', 'TF-OOOOOO',
+            md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000001')$$,
   '23514', null, 'a public reference uses Crockford base-32 (no O)');
 select lives_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, agent_code_id,
-                               attributed_agent_id, payment_route, public_reference)
+                               attributed_agent_id, payment_route, public_reference,
+                               delivery_lga_id, territory_id, fulfilment_warehouse_id)
     values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100,
             '62000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-            'POS_AGENT', 'TF-7K3Q9X')$$,
+            'POS_AGENT', 'TF-7K3Q9X',
+            md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000001')$$,
   'a complete attributed web order is accepted');
 select throws_ok(
-  $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, discount_amount)
-    values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100, -1)$$,
+  $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, discount_amount,
+                               delivery_lga_id, territory_id, fulfilment_warehouse_id, payment_route)
+    values ('10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000001', 100, -1,
+            md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000001', 'PAYSTACK_WEB')$$,
   '23514', null, 'a discount is never negative');
 
 -- ── RLS and privileges ──────────────────────────────────────────────────
