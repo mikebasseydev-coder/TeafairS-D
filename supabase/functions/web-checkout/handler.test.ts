@@ -10,6 +10,7 @@ const QUOTE = {
   total: 5580, currency: "NGN",
   split: { fintech_partner_id: "p1", subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 },
 };
+const LGA = "d0000000-0000-0000-0000-000000000009";
 const PLACED = { order_id: "o1", public_reference: "TF-7K3Q9X", total: 5580 };
 
 type Opts = {
@@ -50,6 +51,7 @@ function setup(opts: Opts = {}) {
 const order = (over: Record<string, unknown> = {}) => ({
   idempotency_key: KEY,
   code: "grace-01",
+  lga_id: LGA,
   items: [{ sku_code: "MILO-400", qty: 2 }, { sku_code: "MAGGI-12", qty: 1 }],
   customer: { name: "Ada Obi", phone: "0803 123 4567", email: "Ada@Example.com", delivery_address: "5 Opebi Road, Ikeja" },
   utm: { source: "whatsapp", medium: "social" },
@@ -81,12 +83,15 @@ Deno.test("Paystack route: verify, quote, initialize with split, then place", as
   assertEquals(rpcCalls[1][1], {
     p_idempotency_key: KEY,
     p_code: "grace-01",
+    p_lga_id: LGA,
     p_items: [{ sku_code: "MILO-400", qty: 2 }, { sku_code: "MAGGI-12", qty: 1 }],
     p_customer: { name: "Ada Obi", phone: "+2348031234567", email: "ada@example.com", delivery_address: "5 Opebi Road, Ikeja" },
     p_utm: { source: "whatsapp", medium: "social" },
     p_payment_route: "PAYSTACK_WEB",
     p_expected_total: 5580,
-    p_checkout: { reference: "TFW-FIXED", access_code: "ac_1", authorization_url: "https://checkout.paystack.com/ac_1" },
+    p_checkout: { reference: "TFW-FIXED", access_code: "ac_1", authorization_url: "https://checkout.paystack.com/ac_1",
+      split: { subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 },
+    },
   });
 });
 
@@ -151,5 +156,44 @@ Deno.test("an unknown payment route is 400", async () => {
   const { handler, rpcCalls } = setup();
   const res = await post(handler, order({ payment_route: "CASH" }));
   assertEquals([res.status, rpcCalls.length], [400, 0]);
+  await res.body?.cancel();
+});
+
+Deno.test("codeless checkout initialises without a split", async () => {
+  const { handler, rpcCalls, inits } = setup({ quote: { total: 1200, currency: "NGN", split: null } });
+  const o = order();
+  delete (o as Record<string, unknown>).code;
+  const res = await post(handler, o);
+  assertEquals(res.status, 200);
+  assertEquals(inits[0].metadata.agent_code, null);
+  assertEquals(inits[0].split, undefined);
+  assertEquals(rpcCalls[0][1].p_code, null);
+  assertEquals((rpcCalls[1][1].p_checkout as Record<string, unknown>).split, null);
+  assertEquals(rpcCalls[1][1].p_lga_id, LGA);
+  await res.body?.cancel();
+});
+
+Deno.test("lga_id is required", async () => {
+  const { handler, rpcCalls } = setup();
+  const o = order();
+  delete (o as Record<string, unknown>).lga_id;
+  const res = await post(handler, o);
+  assertEquals([res.status, rpcCalls.length], [400, 0]);
+  await res.body?.cancel();
+});
+
+Deno.test("codeless POS_AGENT is 400", async () => {
+  const { handler, rpcCalls } = setup();
+  const o = order({ payment_route: "POS_AGENT" });
+  delete (o as Record<string, unknown>).code;
+  const res = await post(handler, o);
+  assertEquals([res.status, (await res.json()).error.code, rpcCalls.length], [400, "VALIDATION_FAILED", 0]);
+});
+
+Deno.test("the quote's split travels to place_web_order", async () => {
+  const { handler, rpcCalls } = setup();
+  const res = await post(handler, order());
+  const checkout = rpcCalls[1][1].p_checkout as Record<string, unknown>;
+  assertEquals(checkout.split, { subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 });
   await res.body?.cancel();
 });

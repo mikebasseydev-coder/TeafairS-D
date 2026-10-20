@@ -445,3 +445,9 @@ verify_jwt = false
 
 [functions.fintech-commission-release]
 verify_jwt = false
+
+[functions.storefront-locations]
+verify_jwt = false
+
+[functions.web-order-status]
+verify_jwt = false

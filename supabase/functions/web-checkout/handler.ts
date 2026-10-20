@@ -23,7 +23,8 @@ export type WebCheckoutDeps = PublicGatewayDeps & {
 
 const schema = z.object({
   idempotency_key: idempotencyKey,
-  code: z.string().trim().min(4).max(32),
+  code: z.string().trim().min(4).max(32).optional(),
+  lga_id: z.string().uuid(),
   items: z.array(z.object({
     sku_code: z.string().min(1).max(64),
     qty: z.number().int().min(1).max(1000),
@@ -41,12 +42,15 @@ const schema = z.object({
   }).optional(),
   payment_route: z.enum(["PAYSTACK_WEB", "POS_AGENT"]),
   turnstile_token: z.string().min(1).max(2048),
+}).refine((b) => b.code !== undefined || b.payment_route === "PAYSTACK_WEB", {
+  message: "A link is required to pay an agent.",
+  path: ["payment_route"],
 });
 
 type Quote = {
   total: number | string;
   currency: string;
-  split: { subaccount_code: string; partner_share: number | string } | null;
+  split: { subaccount_code: string; commission_bps: number | string; partner_share: number | string } | null;
 };
 
 const toMinor = (amount: number | string) => Math.round(Number(amount) * 100);
@@ -70,7 +74,7 @@ export function createWebCheckoutHandler(deps: WebCheckoutDeps): (req: Request) 
     if (!phone) throw new GatewayError(400, "VALIDATION_FAILED", "Enter a valid phone number.");
     const customer = { ...body.customer, phone };
 
-    const quote = await rpc<Quote>("quote_web_order", { p_code: body.code, p_items: body.items });
+    const quote = await rpc<Quote>("quote_web_order", { p_code: body.code ?? null, p_items: body.items, p_lga_id: body.lga_id });
 
     let checkout: { reference: string; access_code: string; authorization_url: string } | null = null;
     if (body.payment_route === "PAYSTACK_WEB") {
@@ -83,7 +87,7 @@ export function createWebCheckoutHandler(deps: WebCheckoutDeps): (req: Request) 
           currency: quote.currency,
           email: customer.email ?? `order-${reference.toLowerCase()}@pay.teafairweb.com`,
           callbackUrl: deps.callbackUrl,
-          metadata: { agent_code: body.code.toUpperCase(), payment_route: body.payment_route },
+          metadata: { agent_code: body.code?.toUpperCase() ?? null, payment_route: body.payment_route },
           split: quote.split
             ? { subaccount: quote.split.subaccount_code, transactionChargeMinor: amountMinor - toMinor(quote.split.partner_share) }
             : undefined,
@@ -95,15 +99,25 @@ export function createWebCheckoutHandler(deps: WebCheckoutDeps): (req: Request) 
       }
     }
 
+    // Exactly the three keys the database compares; values copied unchanged.
+    const split = quote.split
+      ? {
+        subaccount_code: quote.split.subaccount_code,
+        commission_bps: quote.split.commission_bps,
+        partner_share: quote.split.partner_share,
+      }
+      : null;
+
     return await rpc("place_web_order", {
       p_idempotency_key: body.idempotency_key,
-      p_code: body.code,
+      p_code: body.code ?? null,
+      p_lga_id: body.lga_id,
       p_items: body.items,
       p_customer: customer,
       p_utm: body.utm ?? {},
       p_payment_route: body.payment_route,
       p_expected_total: quote.total,
-      p_checkout: checkout,
+      p_checkout: checkout && { ...checkout, split },
     });
   }, deps);
 }

@@ -26,10 +26,11 @@ Deno.test("the code goes to storefront_catalogue and the reply is CDN-cacheable"
   assertEquals(await res.json(), { code: "GRACE-01", products: [] });
 });
 
-Deno.test("a missing code is 400 and calls nothing", async () => {
+Deno.test("no code is the codeless catalogue", async () => {
   const { handler, calls } = setup();
   const res = await get(handler, "");
-  assertEquals([res.status, calls.length], [400, 0]);
+  assertEquals(res.status, 200);
+  assertEquals(calls, [["storefront_catalogue", { p_code: null }]]);
   await res.body?.cancel();
 });
 
