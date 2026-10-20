@@ -23,7 +23,9 @@ export async function paystackGet<T>(
   const payload = await res.json().catch(() => null) as { message?: string } | null;
   const parsed = schema.safeParse(payload);
   if (!res.ok || !parsed.success) {
-    throw new Error(`Paystack ${path} failed: ${payload?.message ?? `HTTP ${res.status}`}`);
+    const issue = !parsed.success ? parsed.error.issues[0] : undefined;
+    const shape = issue ? `unexpected response shape at ${issue.path.join(".") || "(root)"}` : undefined;
+    throw new Error(`Paystack ${path} failed: ${payload?.message ?? shape ?? `HTTP ${res.status}`}`);
   }
   return parsed.data;
 }
@@ -41,8 +43,11 @@ export async function paystackPages<T>(
   });
   const out: T[] = [];
   let pageCount = 1;
-  for (let page = 1; page <= pageCount && page <= MAX_PAGES; page++) {
+  for (let page = 1; page <= pageCount; page++) {
     const r = await paystackGet(opts, path, { ...query, perPage: PER_PAGE, page }, schema);
+    if (r.meta.pageCount > MAX_PAGES) {
+      throw new Error(`Paystack ${path} failed: more than ${MAX_PAGES * PER_PAGE} results`);
+    }
     out.push(...r.data);
     pageCount = r.meta.pageCount;
   }

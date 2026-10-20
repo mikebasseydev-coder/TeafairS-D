@@ -35,3 +35,27 @@ Deno.test("paystackGet sends the bearer key and skips undefined query values", a
   assertEquals(seen[0].url, "http://h/p?a=1");
   assertEquals(seen[0].headers.get("Authorization"), "Bearer sk");
 });
+
+Deno.test("paystackPages refuses more than 50 pages", async () => {
+  let calls = 0;
+  const fetchFn: typeof fetch = () => {
+    calls++;
+    return Promise.resolve(new Response(JSON.stringify({ status: true, data: [{ n: 1 }], meta: { pageCount: 51 } })));
+  };
+  await assertRejects(
+    () => paystackPages({ secretKey: "k", fetchFn }, "/refund", {}, z.object({ n: z.number() })),
+    Error,
+    "Paystack /refund failed: more than 5000 results",
+  );
+  assertEquals(calls, 1);
+});
+
+Deno.test("a bad shape names the field path but not its value", async () => {
+  const fetchFn: typeof fetch = () => Promise.resolve(new Response(JSON.stringify({ status: true, data: { id: "secret-value" } })));
+  const err = await assertRejects(
+    () => paystackGet({ secretKey: "k", fetchFn }, "/p", {}, z.object({ data: z.object({ id: z.number() }) })),
+    Error,
+    "data.id",
+  );
+  assertEquals(err.message.includes("secret-value"), false);
+});
