@@ -442,3 +442,6 @@ enabled = true
 
 [functions.reconcile-funds]
 verify_jwt = false
+
+[functions.fintech-commission-release]
+verify_jwt = false
