@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
 import type { VerifiedTransaction, VerifyTransaction } from "../_shared/fintech-liquidity/paystack.ts";
+import type { ListRefunds } from "../_shared/fintech-liquidity/paystack-refunds.ts";
 import { createProcessPaymentHandler } from "./handler.ts";
 
 const SECRET = "sk_test_secret";
@@ -24,8 +25,13 @@ function setup(opts: { verify?: VerifyTransaction; rpcResult?: unknown } = {}) {
     verifyCalls.push(ref);
     return Promise.resolve(verified);
   });
-  const handler = createProcessPaymentHandler({ secretKey: SECRET, verifyTransaction, rpc, now: () => NOW });
-  return { handler, rpcCalls, verifyCalls };
+  const listCalls: Array<{ reference?: string }> = [];
+  const listRefunds: ListRefunds = (q) => {
+    listCalls.push(q);
+    return Promise.resolve([{ id: "747680", transactionReference: null, amountMinor: 5000, currency: "NGN", status: "processed", raw: { id: 747680 } }]);
+  };
+  const handler = createProcessPaymentHandler({ secretKey: SECRET, verifyTransaction, listRefunds, rpc, now: () => NOW });
+  return { handler, rpcCalls, verifyCalls, listCalls };
 }
 
 async function deliver(handler: (r: Request) => Promise<Response>, payload: unknown, signature?: string) {
@@ -71,6 +77,7 @@ Deno.test("a fresh event settles with the Verify API's values, not the webhook's
   assertEquals(rpcCalls, [["settle_paystack_payment", {
     p_event: "charge.success", p_reference: "ref_1", p_status: "success",
     p_amount_minor: 250000, p_currency: "NGN", p_verified: { id: 9 },
+    p_transaction_id: "9", p_split_subaccount: null, p_split_share_minor: null,
   }]]);
 });
 
@@ -95,4 +102,38 @@ Deno.test("a signed body that is not JSON is acknowledged and ignored", async ()
   const body = "not json";
   const res = await handler(new Request("http://x", { method: "POST", body, headers: { "x-paystack-signature": await sign(body) } }));
   assertEquals([res.status, rpcCalls.length], [200, 0]);
+});
+
+const refundEvent = { event: "refund.processed", data: { transaction_reference: "TFW-1", status: "processed" } };
+
+Deno.test("refund.processed re-reads refunds by reference and applies them", async () => {
+  const { handler, rpcCalls, listCalls } = setup({ rpcResult: { outcome: "refunded" } });
+  const res = await deliver(handler, { ...refundEvent, data: { ...refundEvent.data, created_at: "2026-10-07T11:59:00Z" } });
+  assertEquals([res.status, (await res.json()).outcome], [200, "refunded"]);
+  assertEquals(listCalls, [{ reference: "TFW-1" }]);
+  assertEquals(rpcCalls.length, 1);
+  assertEquals(rpcCalls[0][0], "apply_paystack_refund");
+  assertEquals(rpcCalls[0][1].p_refund_id, "747680");
+  assertEquals(rpcCalls[0][1].p_transaction_reference, "TFW-1");
+  assertEquals(rpcCalls[0][1].p_source, "webhook");
+});
+
+Deno.test("refund.processed has no replay window", async () => {
+  const { handler, rpcCalls } = setup({ rpcResult: { outcome: "refunded" } });
+  const res = await deliver(handler, refundEvent);
+  assertEquals((await res.json()).outcome, "refunded");
+  assertEquals(rpcCalls.length, 1);
+});
+
+Deno.test("refund.processed with a bad signature is 401", async () => {
+  const { handler, rpcCalls, listCalls } = setup();
+  const res = await deliver(handler, refundEvent, "00");
+  assertEquals(res.status, 401);
+  assertEquals([rpcCalls.length, listCalls.length], [0, 0]);
+});
+
+Deno.test("refund.processed without transaction_reference is ignored", async () => {
+  const { handler, listCalls } = setup();
+  const res = await deliver(handler, { event: "refund.processed", data: {} });
+  assertEquals([res.status, (await res.json()).outcome, listCalls.length], [200, "ignored", 0]);
 });

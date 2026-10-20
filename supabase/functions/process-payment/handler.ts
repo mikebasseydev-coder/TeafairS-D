@@ -6,24 +6,32 @@ import type { Rpc } from "../_shared/core/db.ts";
 import { errorResponse, GatewayError } from "../_shared/core/errors.ts";
 import { json } from "../_shared/core/http.ts";
 import type { VerifyTransaction } from "../_shared/fintech-liquidity/paystack.ts";
+import { applyRefunds, settleVerified } from "../_shared/fintech-liquidity/settle.ts";
+import type { ListRefunds } from "../_shared/fintech-liquidity/paystack-refunds.ts";
 import { eventTime, withinReplayWindow } from "./replay-window.ts";
 import { paystackSignatureValid } from "./signature.ts";
 
 export type ProcessPaymentDeps = {
   secretKey: string;
   verifyTransaction: VerifyTransaction;
+  listRefunds: ListRefunds;
   rpc: Rpc;
   now: () => Date;
 };
 
-const webhook = z.object({
-  event: z.string().min(1),
+const chargeEvent = z.object({
+  event: z.literal("charge.success"),
   data: z.object({
     reference: z.string().min(1),
     paid_at: z.string().nullish(),
     created_at: z.string().nullish(),
   }).passthrough(),
 });
+const refundEvent = z.object({
+  event: z.literal("refund.processed"),
+  data: z.object({ transaction_reference: z.string().min(1) }).passthrough(),
+});
+const webhook = z.discriminatedUnion("event", [chargeEvent, refundEvent]);
 
 const acknowledged = (outcome: string) => json(200, { received: true, outcome });
 
@@ -47,7 +55,16 @@ export function createProcessPaymentHandler(deps: ProcessPaymentDeps): (req: Req
       }
 
       const parsed = parseWebhook(raw);
-      if (!parsed?.success || parsed.data.event !== "charge.success") return acknowledged("ignored");
+      if (!parsed?.success) return acknowledged("ignored");
+
+      // refund.processed carries no refund id and has no replay window: re-read
+      // the refunds from Paystack by transaction reference; the RPC is idempotent.
+      if (parsed.data.event === "refund.processed") {
+        const reference = parsed.data.data.transaction_reference;
+        const refunds = await deps.listRefunds({ reference });
+        const counts = await applyRefunds(deps.rpc, "webhook", refunds, reference);
+        return acknowledged(counts.refunded ? "refunded" : "none_processed");
+      }
       const { event, data } = parsed.data;
 
       // 2. replay window; stale events are recorded and left for the sweep
@@ -68,14 +85,7 @@ export function createProcessPaymentHandler(deps: ProcessPaymentDeps): (req: Req
       }
 
       // 4. at most once, inside the RPC
-      const result = await deps.rpc<{ outcome: string }>("settle_paystack_payment", {
-        p_event: event,
-        p_reference: tx.reference,
-        p_status: tx.status,
-        p_amount_minor: tx.amountMinor,
-        p_currency: tx.currency,
-        p_verified: tx.raw,
-      });
+      const result = await settleVerified(deps.rpc, event, tx);
       return acknowledged(result.outcome);
     } catch (e) {
       return errorResponse(e);
