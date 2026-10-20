@@ -1,7 +1,7 @@
 # Web money loop — Spec D1
 
 **Date:** 2026-10-20
-**Status:** design approved in conversation 2026-10-20; written spec awaiting review
+**Status:** written spec approved 2026-10-20; plan `docs/superpowers/plans/2026-10-20-spec-d1-web-money-loop.md`
 **Amends:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) §3.4,
 §3.6 and §12; addendum A1 (`2026-10-15-web-storefront-agent-attribution-design.md`)
 §4.2, §5.2, §5.3, §6 and §8. Where this document disagrees with them on the
