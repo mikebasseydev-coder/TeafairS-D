@@ -11,7 +11,7 @@ function fakeFetch(body: unknown, status = 200, seen: Request[] = []): typeof fe
 const verified = {
   status: true,
   message: "Verification successful",
-  data: { status: "success", reference: "ref/1", amount: 250000, currency: "NGN", paid_at: "2026-10-07T12:00:00.000Z" },
+  data: { id: 2009945086, status: "success", reference: "ref/1", amount: 250000, currency: "NGN", paid_at: "2026-10-07T12:00:00.000Z" },
 };
 
 Deno.test("the Verify API is called with the secret key and an encoded reference", async () => {
@@ -33,6 +33,31 @@ Deno.test("a base URL override is honoured (local fake Paystack)", async () => {
 Deno.test("status:false is an error, never a settlement", async () => {
   const verify = paystackVerifier({ secretKey: "k", fetchFn: fakeFetch({ status: false, message: "Transaction reference not found" }, 400) });
   await assertRejects(() => verify("r"), Error, "Transaction reference not found");
+});
+
+const splitData = (extra: Record<string, unknown>) => ({
+  status: true,
+  data: {
+    id: 2009945086, status: "success", reference: "TFW-1", amount: 250000, currency: "NGN",
+    customer: { email: "buyer@example.com" }, authorization: { last4: "4081" }, ...extra,
+  },
+});
+
+Deno.test("verify returns the transaction id and split", async () => {
+  const body = splitData({
+    subaccount: { subaccount_code: "ACCT_grace01" },
+    fees_split: { paystack: 100, integration: 0, subaccount: 3750, params: { bearer: "account", transaction_charge: "1000", percentage_charge: "0" } },
+  });
+  const tx = await paystackVerifier({ secretKey: "k", fetchFn: fakeFetch(body) })("TFW-1");
+  assertEquals(tx.transactionId, "2009945086");
+  assertEquals(tx.split, { subaccountCode: "ACCT_grace01", shareMinor: 3750 });
+});
+
+Deno.test("verify without a split has split null", async () => {
+  const body = splitData({ subaccount: {}, fees_split: null });
+  const tx = await paystackVerifier({ secretKey: "k", fetchFn: fakeFetch(body) })("TFW-1");
+  assertEquals(tx.transactionId, "2009945086");
+  assertEquals(tx.split, null);
 });
 
 Deno.test("a malformed data block is an error", async () => {

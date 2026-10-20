@@ -19,7 +19,7 @@ function setup(opts: { verify?: VerifyTransaction; rpcResult?: unknown } = {}) {
     rpcCalls.push([fn, args]);
     return Promise.resolve((opts.rpcResult ?? { outcome: "updated" }) as T);
   };
-  const verified: VerifiedTransaction = { status: "success", reference: "ref_1", amountMinor: 250000, currency: "NGN", raw: { id: 9 } };
+  const verified: VerifiedTransaction = { status: "success", reference: "ref_1", amountMinor: 250000, currency: "NGN", transactionId: "9", split: null, raw: { id: 9 } };
   const verifyTransaction: VerifyTransaction = opts.verify ?? ((ref) => {
     verifyCalls.push(ref);
     return Promise.resolve(verified);
@@ -83,7 +83,7 @@ Deno.test("a Verify API outage is a 500, so Paystack retries", async () => {
 
 Deno.test("a Verify API answer for a different reference is refused", async () => {
   const { handler, rpcCalls } = setup({
-    verify: () => Promise.resolve({ status: "success", reference: "other", amountMinor: 1, currency: "NGN", raw: {} }),
+    verify: () => Promise.resolve({ status: "success", reference: "other", amountMinor: 1, currency: "NGN", transactionId: "1", split: null, raw: {} }),
   });
   const res = await deliver(handler, fresh);
   assertEquals([res.status, (await res.json()).error.code], [502, "PAYSTACK_MISMATCH"]);

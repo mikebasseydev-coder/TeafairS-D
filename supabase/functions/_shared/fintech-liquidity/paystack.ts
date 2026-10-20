@@ -7,6 +7,10 @@ export type VerifiedTransaction = {
   reference: string;
   amountMinor: number;
   currency: string;
+  // Paystack's id is an unsigned 64-bit integer, kept as text.
+  transactionId: string;
+  // null when the charge carried no subaccount split.
+  split: { subaccountCode: string; shareMinor: number | null } | null;
   raw: Record<string, unknown>;
 };
 export type VerifyTransaction = (reference: string) => Promise<VerifiedTransaction>;
@@ -14,6 +18,9 @@ export type VerifyTransaction = (reference: string) => Promise<VerifiedTransacti
 const verifyResponse = z.object({
   status: z.literal(true),
   data: z.object({
+    id: z.union([z.number().int(), z.string().min(1)]),
+    subaccount: z.object({ subaccount_code: z.string().optional() }).passthrough().nullish(),
+    fees_split: z.object({ subaccount: z.number().int().nullish() }).passthrough().nullish(),
     status: z.string(),
     reference: z.string(),
     amount: z.number().int(),
@@ -38,11 +45,14 @@ export function paystackVerifier(opts: {
       throw new Error(`Paystack verify failed: ${payload?.message ?? `HTTP ${res.status}`}`);
     }
     const { data } = parsed.data;
+    const code = data.subaccount?.subaccount_code;
     return {
       status: data.status,
       reference: data.reference,
       amountMinor: data.amount,
       currency: data.currency,
+      transactionId: String(data.id),
+      split: code ? { subaccountCode: code, shareMinor: data.fees_split?.subaccount ?? null } : null,
       raw: data,
     };
   };
