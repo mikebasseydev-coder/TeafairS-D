@@ -32,7 +32,9 @@ insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja'),
   ('40000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001',
-   '30000000-0000-0000-0000-000000000001', 'Epe');
+   '30000000-0000-0000-0000-000000000001', 'Epe'),
+  ('40000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001',
+   '30000000-0000-0000-0000-000000000001', 'Ikoyi');
 
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
@@ -57,6 +59,26 @@ update public.territories set tm_id = '20000000-0000-0000-0000-000000000002'
  where id = '40000000-0000-0000-0000-000000000001';
 update public.territories set tm_id = '20000000-0000-0000-0000-000000000003'
  where id = '40000000-0000-0000-0000-000000000003';
+
+-- D1 routing: each used territory ships web orders from its own REGIONAL
+-- warehouse. Ikoyi has no TM and serves Lagos/Eti-Osa: a ZSM's code, which
+-- has no territory of its own, takes the covered territory of the LGA.
+insert into public.warehouses (id, tenant_id, name, kind, territory_id) values
+  ('71000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'REG-IKEJA', 'REGIONAL',
+   '40000000-0000-0000-0000-000000000001'),
+  ('71000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'REG-EPE', 'REGIONAL',
+   '40000000-0000-0000-0000-000000000003'),
+  ('71000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001', 'REG-IKOYI', 'REGIONAL',
+   '40000000-0000-0000-0000-000000000004');
+update public.territories set web_fulfilment_warehouse_id = '71000000-0000-0000-0000-000000000001'
+ where id = '40000000-0000-0000-0000-000000000001';
+update public.territories set web_fulfilment_warehouse_id = '71000000-0000-0000-0000-000000000003'
+ where id = '40000000-0000-0000-0000-000000000003';
+update public.territories set web_fulfilment_warehouse_id = '71000000-0000-0000-0000-000000000004'
+ where id = '40000000-0000-0000-0000-000000000004';
+insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id) values
+  ('10000000-0000-0000-0000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001'),
+  ('10000000-0000-0000-0000-000000000001', 'LA', md5('ng_lga:LA:Eti-Osa')::uuid, '40000000-0000-0000-0000-000000000004');
 
 insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
@@ -115,28 +137,30 @@ select lives_ok(
   $$select public.place_web_order('dddddddd-0000-0000-0000-000000000001', 'GRACE-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
-      null, 'POS_AGENT', 2250.00, null)$$,
+      null, 'POS_AGENT', 2250.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'a pay-at-agent order is placed');
 select lives_ok(
   $$select public.place_web_order('dddddddd-0000-0000-0000-000000000002', 'EPE-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street, Epe"}',
       null, 'PAYSTACK_WEB', 2500.00,
-      '{"reference":"TFW-e1","access_code":"ac_e1","authorization_url":"https://checkout.paystack.com/ac_e1"}')$$,
+      '{"reference":"TFW-e1","access_code":"ac_e1","authorization_url":"https://checkout.paystack.com/ac_e1",
+        "split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":37.50}}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'a Paystack order in Epe is placed');
 select lives_ok(
   $$select public.place_web_order('dddddddd-0000-0000-0000-000000000003', 'ZSM-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Chi","phone":"+2348031234569","delivery_address":"9 Awolowo Way"}',
       null, 'PAYSTACK_WEB', 2500.00,
-      '{"reference":"TFW-z1","access_code":"ac_z1","authorization_url":"https://checkout.paystack.com/ac_z1"}')$$,
+      '{"reference":"TFW-z1","access_code":"ac_z1","authorization_url":"https://checkout.paystack.com/ac_z1","split":null}', md5('ng_lga:LA:Eti-Osa')::uuid)$$,
   'an order on a ZSM''s code is placed');
 select lives_ok(
   $$select public.place_web_order('dddddddd-0000-0000-0000-000000000004', 'GRACE-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Dayo","phone":"+2348031234570","delivery_address":"3 Allen Avenue"}',
       null, 'PAYSTACK_WEB', 2250.00,
-      '{"reference":"TFW-g2","access_code":"ac_g2","authorization_url":"https://checkout.paystack.com/ac_g2"}')$$,
+      '{"reference":"TFW-g2","access_code":"ac_g2","authorization_url":"https://checkout.paystack.com/ac_g2",
+        "split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":33.75}}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'a Paystack order on the agent''s code is placed');
 reset role;
 
@@ -158,7 +182,8 @@ select is(
 select is(
   (select c.territory_id from public.order_contacts c join refs r on r.order_id = c.order_id
     where r.key = 'dddddddd-0000-0000-0000-000000000003'),
-  null::uuid, 'a ZSM''s code gives no territory');
+  '40000000-0000-0000-0000-000000000004'::uuid,
+  'a ZSM''s code gives no territory of its own: the delivery LGA''s covered territory (no TM) is stamped');
 select is(
   (select count(*)::int from public.audit_logs
     where operation = 'place_web_order'
@@ -191,8 +216,10 @@ reset role;
 
 -- ── the throttle reads order_contacts ───────────────────────────────────
 with o as (
-  insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount)
-  select '10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000002', 100
+  insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, payment_route,
+                             delivery_lga_id, territory_id, fulfilment_warehouse_id)
+  select '10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000002', 100, 'PAYSTACK_WEB',
+         md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000001'
     from generate_series(1, 5)
   returning id, tenant_id)
 insert into public.order_contacts (order_id, tenant_id, customer_phone)
@@ -202,7 +229,7 @@ select throws_ok(
   $$select public.place_web_order('dddddddd-0000-0000-0000-000000000009', 'GRACE-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Spam","phone":"+2348099999999","delivery_address":"1 Nowhere"}',
-      null, 'POS_AGENT', 2250.00, null)$$,
+      null, 'POS_AGENT', 2250.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Too many unpaid orders for this phone number. Try again later.',
   'a sixth pending web order within the hour is still refused');
 reset role;

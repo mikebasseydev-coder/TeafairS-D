@@ -1,8 +1,8 @@
--- Spec D1 — locations and routing. Task 1: Nigerian states and LGAs (§3.1).
+-- Spec D1 — locations and routing (§3–§5), and the public storefront RPCs (§5.2, §8.3, §8.4).
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(62);
+select plan(110);
 
 -- ── Task 1: ng_states / ng_lgas (§3.1) ──────────────────────────────────
 select is((select count(*)::int from public.ng_states), 37, 'exactly 37 states (FCT included)');
@@ -256,6 +256,224 @@ select ok(has_function_privilege('authenticated', 'public.set_territory_coverage
       and has_function_privilege('authenticated', 'public.set_territory_web_warehouse(uuid,uuid,uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.set_web_defaults(uuid,uuid,uuid)', 'execute')
       and not has_function_privilege('anon', 'public.set_web_defaults(uuid,uuid,uuid)', 'execute'), 'management RPCs are for the app');
+
+
+-- ── Task 4: public storefront RPCs (§5.2, §8.3, §8.4) ───────────────────
+-- TEAFAIR: zone, territory with TM 11, REGIONAL warehouse, coverage LA/Ikeja,
+-- one active product. T1: a 0-bps ACTIVE partner with a code on its terminal.
+insert into auth.users (id, phone) values
+  ('20000000-0000-0000-0000-000000000011', '2348000000011');
+insert into public.zones (id, tenant_id, zone_name) values
+  ('30000000-0000-0000-0000-000000000011', '7eaf0000-0000-4000-8000-000000000001', 'TF Lagos');
+insert into public.territories (id, tenant_id, zone_id, territory_name) values
+  ('40000000-0000-0000-0000-000000000011', '7eaf0000-0000-4000-8000-000000000001',
+   '30000000-0000-0000-0000-000000000011', 'TF Ikeja');
+insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values
+  ('50000000-0000-0000-0000-000000000011', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000011',
+   'TM', null, '40000000-0000-0000-0000-000000000011', null, 'ACTIVE', true);
+update public.territories set tm_id = '20000000-0000-0000-0000-000000000011'
+ where id = '40000000-0000-0000-0000-000000000011';
+insert into public.warehouses (id, tenant_id, name, kind, territory_id) values
+  ('70000000-0000-0000-0000-000000000011', '7eaf0000-0000-4000-8000-000000000001', 'TF-REG-IKEJA', 'REGIONAL',
+   '40000000-0000-0000-0000-000000000011');
+update public.territories set web_fulfilment_warehouse_id = '70000000-0000-0000-0000-000000000011'
+ where id = '40000000-0000-0000-0000-000000000011';
+insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id) values
+  ('7eaf0000-0000-4000-8000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000011');
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, is_active) values
+  ('7eaf0000-0000-4000-8000-000000000001', 'TF-TEA-50', 'Teafair Tea 50 bags', 'Teafair', 'Beverages', 1000, 800, true),
+  ('10000000-0000-0000-0000-000000000001', 'T1-SKU', 'T1 product', 'T1', 'Beverages', 1000, 800, true);
+
+insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+                                     paystack_subaccount_code, status, approved_by, approved_at) values
+  ('60000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'Zero OPay', 'OPAY',
+   0, '+2348000000005', 'ACCT_zero01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, terminal_id, territory_id) values
+  ('61000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000002',
+   '20000000-0000-0000-0000-000000000005', 'OP-0007', '40000000-0000-0000-0000-000000000001');
+insert into public.agent_codes (tenant_id, code, agent_id, terminal_id, created_by) values
+  ('10000000-0000-0000-0000-000000000001', 'ZERO-BPS', '20000000-0000-0000-0000-000000000005',
+   '61000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000001');
+
+create function pg_temp.order_of(p_key uuid) returns uuid language sql as $$
+  select (response ->> 'order_id')::uuid from public.idempotency_logs where key = p_key;
+$$;
+create function pg_temp.ref_of(p_key uuid) returns text language sql as $$
+  select response ->> 'public_reference' from public.idempotency_logs where key = p_key;
+$$;
+create function pg_temp.lga_deliverable(p_locations jsonb, p_state text, p_lga text) returns boolean language sql as $$
+  select (l ->> 'deliverable')::boolean
+    from jsonb_array_elements(p_locations -> 'states') s, jsonb_array_elements(s -> 'lgas') l
+   where s ->> 'code' = p_state and l ->> 'name' = p_lga;
+$$;
+
+-- catalogue
+select is(public.storefront_catalogue(null) -> 'tenant' ->> 'name', 'Teafair', 'codeless catalogue is TEAFAIR');
+select is(public.storefront_catalogue('  ') -> 'tenant' ->> 'name', 'Teafair', 'blank code is codeless');
+select is(public.storefront_catalogue() -> 'code', 'null'::jsonb, 'code is null when codeless');
+select is(jsonb_array_length(public.storefront_catalogue(null) -> 'products'), 1, 'codeless sees TEAFAIR''s products');
+select throws_ok($$select public.storefront_catalogue('NOPE-99')$$, 'P0001', 'This link is no longer valid',
+  'an unknown code is still refused, not treated as codeless');
+
+-- quote
+select throws_ok($$select public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5('ng_lga:KN:Fagge')::uuid)$$,
+  'P0001', 'We don''t deliver to this area yet.', 'quote refuses before Paystack');
+select throws_ok($$select public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', null)$$,
+  'P0001', 'choose a delivery area from the list', 'quote needs a delivery area');
+select is(public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
+  'null'::jsonb, 'codeless has no split');
+select is(public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) ->> 'total',
+  '1000.00', 'codeless quote prices TEAFAIR''s catalogue');
+select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
+  'null'::jsonb, 'a 0-bps partner gets no split');
+select is(public.quote_web_order('POSIKEJA', '[{"sku_code":"T1-SKU","qty":2}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
+  '{"fintech_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":30.00}'::jsonb,
+  'a terminal-bound code of an ACTIVE partner keeps its split shape');
+select throws_ok($$select public.quote_web_order('POSEPE01', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'P0001', 'This link is not active yet', 'a coded link with nobody accountable is not active');
+
+-- a 100 % partner would take everything: no split (Decision 4: 0 < share < total)
+update public.fintech_partners set commission_bps = 10000 where id = '60000000-0000-0000-0000-000000000002';
+select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
+  'null'::jsonb, 'a share equal to the total gives no split');
+update public.fintech_partners set commission_bps = 0 where id = '60000000-0000-0000-0000-000000000002';
+
+-- codeless PAYSTACK_WEB order
+select lives_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000001', null,
+    '[{"sku_code":"TF-TEA-50","qty":1}]',
+    '{"name":"Ada Obi","phone":"+2348030000001","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
+    '{}', 'PAYSTACK_WEB', 1000.00,
+    '{"reference":"TFW-cl1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'codeless order placed');
+select is((select coalesce(agent_code_id::text, 'none') || '|' || territory_id || '|' || fulfilment_warehouse_id
+                  || '|' || teafair_agent_id || '|' || delivery_lga_id || '|' || tenant_id
+             from public.orders where id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000001')),
+  'none|40000000-0000-0000-0000-000000000011|70000000-0000-0000-0000-000000000011|20000000-0000-0000-0000-000000000011|'
+    || md5('ng_lga:LA:Ikeja')::uuid || '|7eaf0000-0000-4000-8000-000000000001',
+  'codeless order routed and stamped');
+select is((select territory_id from public.order_contacts where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000001')),
+  '40000000-0000-0000-0000-000000000011'::uuid, 'contacts territory = orders territory');
+select is((select num_nulls(split_subaccount_code, split_bps, split_amount) from public.payments
+            where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000001')),
+  3, 'a codeless payment has no split snapshot');
+select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000002', null,
+    '[{"sku_code":"TF-TEA-50","qty":1}]',
+    '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
+    null, 'POS_AGENT', 1000.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'P0001', 'paying at an agent needs a link from a POS agent', 'codeless must pay online');
+select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000003', null,
+    '[{"sku_code":"TF-TEA-50","qty":1}]',
+    '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
+    null, 'PAYSTACK_WEB', 1000.00,
+    '{"reference":"TFW-cl3","authorization_url":"https://x","split":null}', md5('ng_lga:KN:Fagge')::uuid)$$,
+  'P0001', 'We don''t deliver to this area yet.', 'an unshippable order is refused at placement too');
+select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000004', null,
+    '[{"sku_code":"TF-TEA-50","qty":1}]',
+    '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
+    null, 'PAYSTACK_WEB', 1000.00,
+    '{"reference":"TFW-cl4","authorization_url":"https://x"}', md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'P0001', 'Prices changed — refresh and try again', 'a missing split key is not JSON null');
+
+-- coded orders: the split snapshot
+select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000005', 'POSIKEJA',
+    '[{"sku_code":"T1-SKU","qty":2}]',
+    '{"name":"Chi","phone":"+2348030000003","delivery_address":"9 Awolowo Way"}',
+    null, 'PAYSTACK_WEB', 2000.00,
+    '{"reference":"TFW-g1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'P0001', 'Prices changed — refresh and try again', 'split snapshot must match the quote');
+select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000006', 'POSIKEJA',
+    '[{"sku_code":"T1-SKU","qty":2}]',
+    '{"name":"Chi","phone":"+2348030000003","delivery_address":"9 Awolowo Way"}',
+    null, 'PAYSTACK_WEB', 2000.00,
+    '{"reference":"TFW-g1","authorization_url":"https://x","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":31.00}}',
+    md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'P0001', 'Prices changed — refresh and try again', 'a different partner share is refused');
+select lives_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000007', 'POSIKEJA',
+    '[{"sku_code":"T1-SKU","qty":2}]',
+    '{"name":"Chi","phone":"+2348030000003","delivery_address":"9 Awolowo Way"}',
+    null, 'PAYSTACK_WEB', 2000.00,
+    '{"reference":"TFW-g1","authorization_url":"https://x","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":30}}',
+    md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'the matching split is accepted');
+select is((select split_amount || '|' || split_bps || '|' || split_subaccount_code || '|' || fintech_partner_id
+             from public.payments where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000007')),
+  '30.00|150|ACCT_grace01|60000000-0000-0000-0000-000000000001', 'payment carries the split snapshot');
+select is((select territory_id || '|' || fulfilment_warehouse_id || '|' || teafair_agent_id
+             from public.orders where id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000007')),
+  '40000000-0000-0000-0000-000000000001|70000000-0000-0000-0000-000000000001|20000000-0000-0000-0000-000000000003',
+  'a coded order is routed through its terminal''s territory and TM');
+select lives_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000008', 'ZERO-BPS',
+    '[{"sku_code":"T1-SKU","qty":1}]',
+    '{"name":"Dayo","phone":"+2348030000004","delivery_address":"3 Allen Avenue"}',
+    null, 'PAYSTACK_WEB', 1000.00,
+    '{"reference":"TFW-z1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Ikeja')::uuid)$$,
+  'a 0-bps partner''s order is placed without a split');
+select is((select num_nulls(split_subaccount_code, split_bps, split_amount) from public.payments
+            where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000008')),
+  3, 'and its payment has no split snapshot');
+
+select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000001', null,
+    '[{"sku_code":"TF-TEA-50","qty":1}]',
+    '{"name":"Ada Obi","phone":"+2348030000001","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
+    '{}', 'PAYSTACK_WEB', 1000.00,
+    '{"reference":"TFW-cl1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Epe')::uuid)$$,
+  'TF002', null, 'lga_id is in the idempotency hash');
+
+-- locations
+select is(jsonb_array_length(public.storefront_locations(null) -> 'states'), 37, '37 states');
+select is((select sum(jsonb_array_length(s -> 'lgas'))::int
+             from jsonb_array_elements(public.storefront_locations(null) -> 'states') s), 774, '774 LGAs');
+select is(public.storefront_locations(null) -> 'states' -> 0 ->> 'code', 'AB', 'states ordered by name');
+select is(pg_temp.lga_deliverable(public.storefront_locations(null), 'LA', 'Ikeja'), true, 'covered LGA deliverable');
+select is(pg_temp.lga_deliverable(public.storefront_locations(null), 'KN', 'Fagge'), false, 'uncovered LGA not deliverable');
+select is(pg_temp.lga_deliverable(public.storefront_locations(null), 'LA', 'Epe'), false,
+  'another tenant''s coverage does not count');
+select ok(position('40000000-0000-0000-0000-000000000011' in public.storefront_locations(null)::text) = 0
+      and position('70000000-0000-0000-0000-000000000011' in public.storefront_locations(null)::text) = 0
+      and position('20000000-0000-0000-0000-000000000011' in public.storefront_locations(null)::text) = 0,
+  'no territory, warehouse or person ids exposed');
+select is((select count(*)::int from jsonb_array_elements(public.storefront_locations('POSEPE01') -> 'states') s,
+                  jsonb_array_elements(s -> 'lgas') l where (l ->> 'deliverable')::boolean), 0,
+  'a coded link with nobody accountable delivers nowhere');
+select is(pg_temp.lga_deliverable(public.storefront_locations('POSIKEJA'), 'KN', 'Fagge'), true,
+  'a coded link routes through its own territory, whatever the LGA');
+
+-- status
+select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-cl1') ->> 'order_status',
+  'PENDING', 'status read by the pair');
+select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-cl1') - 'public_reference',
+  '{"order_status":"PENDING","payment_status":"INITIATED","total":1000.00,"currency":"NGN",
+    "lines":[{"name":"Teafair Tea 50 bags","qty":1,"unit_price":1000.00}]}'::jsonb,
+  'status carries order and payment status, total, currency and lines only');
+select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-other'), null,
+  'mismatched pair is null');
+select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-g1'), null,
+  'another order''s payment reference is null');
+select is(public.web_order_status('TF-000000', 'TFW-cl1'), null, 'an unknown order is null');
+select ok(position('+234' in public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-cl1')::text) = 0,
+  'no contact details in status');
+
+-- grants
+select ok(not has_function_privilege('anon', 'public.web_order_status(text,text)', 'execute')
+      and not has_function_privilege('authenticated', 'public.web_order_status(text,text)', 'execute')
+      and has_function_privilege('service_role', 'public.web_order_status(text,text)', 'execute'),
+  'status is service_role only');
+select ok(not has_function_privilege('anon', 'public.storefront_locations(text)', 'execute')
+      and not has_function_privilege('authenticated', 'public.storefront_locations(text)', 'execute')
+      and has_function_privilege('service_role', 'public.storefront_locations(text)', 'execute'),
+  'locations is service_role only');
+select ok(not has_function_privilege('authenticated', 'public.quote_web_order(text,jsonb,uuid)', 'execute')
+      and has_function_privilege('service_role', 'public.quote_web_order(text,jsonb,uuid)', 'execute')
+      and not has_function_privilege('authenticated', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute')
+      and has_function_privilege('service_role', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute')
+      and has_function_privilege('service_role', 'public.storefront_catalogue(text)', 'execute'),
+  'quote, place and catalogue are service_role only');
+select ok(not has_function_privilege('service_role', 'public.web_storefront_code(text)', 'execute')
+      and not has_function_privilege('authenticated', 'public.web_storefront_code(text)', 'execute'),
+  'web_storefront_code is internal');
+select ok(to_regprocedure('public.quote_web_order(text,jsonb)') is null
+      and to_regprocedure('public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb)') is null,
+  'the old signatures are dropped');
 
 select * from finish();
 rollback;
