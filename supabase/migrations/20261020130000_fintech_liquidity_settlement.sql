@@ -5,6 +5,20 @@
 -- sweep (§7), both passing data from Paystack's Verify API (decision 8).
 -- Alerts are notifications rows in the same transaction (decision 12).
 
+-- ── payments: sweep bookkeeping and the split/partner pairing ───────────
+-- last_swept_at is internal (not in the authenticated column grant): a
+-- not-final sweep result stamps it, so the sweep visits the least recently
+-- checked payment first and fresh abandoned checkouts cannot starve it.
+alter table public.payments
+  add column last_swept_at timestamptz,
+  -- a snapshot without a partner could never become a commission row and
+  -- would roll back every settlement (decision 10: real money wins)
+  add constraint payments_split_has_partner
+    check (split_subaccount_code is null or fintech_partner_id is not null);
+drop index public.idx_payments_unconfirmed;
+create index idx_payments_unconfirmed on public.payments ((coalesce(last_swept_at, created_at)))
+  where payment_status in ('INITIATED', 'PROCESSING');
+
 -- ── internal: tell every ACTIVE ZSM of a tenant ─────────────────────────
 create or replace function public.notify_tenant_zsms(
   p_tenant_id uuid,
@@ -95,7 +109,10 @@ begin
                      and v_age > interval '72 hours' then 'FAILED'
               end;
   if v_target is null then
-    -- the reconcile-funds sweep asks again later
+    -- the reconcile-funds sweep asks again later, after the others it owes
+    if p_event = 'sweep' then
+      update public.payments set last_swept_at = now() where id = v_payment.id;
+    end if;
     return jsonb_build_object('outcome', 'not_final', 'status', p_status);
   end if;
   v_expired := p_status in ('ongoing', 'pending', 'processing', 'queued');
@@ -164,9 +181,13 @@ begin
         v_key, v_source, v_payment.teafair_agent_id);
     end if;
 
-    -- step 3: the order. Real money wins (decision 10): an order that cannot
-    -- become PAID is left as it is and escalated, never dropped.
-    if v_order.status = 'PENDING' then
+    -- step 3: the order, ONLINE only (D1 is the web loop; field-order
+    -- transitions are Spec C / D2, so a field order is left untouched).
+    -- Real money wins (decision 10): a web order that cannot become PAID is
+    -- left as it is and escalated, never dropped.
+    if v_order.channel <> 'ONLINE' then
+      null;
+    elsif v_order.status = 'PENDING' then
       update public.orders set status = 'PAID' where id = v_order.id;
       v_order_out := 'PAID';
       perform public.write_audit(v_payment.tenant_id, 'settle_paystack_payment', 'orders', v_order.id::text,
@@ -175,18 +196,16 @@ begin
         v_key, v_source, v_payment.teafair_agent_id);
 
       -- step 5: the warehouse's to-ship signal (decision 11: stock is not touched)
-      if v_order.channel = 'ONLINE' then
-        insert into public.notifications (tenant_id, user_id, kind, title, body, payload)
-        select v_order.tenant_id, r.user_id, 'WEB_ORDER_PAID', 'Web order paid',
-               'Order ' || v_order.public_reference || ' is paid and ready to ship.',
-               jsonb_build_object('order_id', v_order.id, 'public_reference', v_order.public_reference)
-          from (select w.manager_id as user_id from public.warehouses w
-                 where w.tenant_id = v_order.tenant_id and w.id = v_order.fulfilment_warehouse_id
-                union
-                select t.tm_id from public.territories t
-                 where t.tenant_id = v_order.tenant_id and t.id = v_order.territory_id) r
-         where r.user_id is not null;
-      end if;
+      insert into public.notifications (tenant_id, user_id, kind, title, body, payload)
+      select v_order.tenant_id, r.user_id, 'WEB_ORDER_PAID', 'Web order paid',
+             'Order ' || v_order.public_reference || ' is paid and ready to ship.',
+             jsonb_build_object('order_id', v_order.id, 'public_reference', v_order.public_reference)
+        from (select w.manager_id as user_id from public.warehouses w
+               where w.tenant_id = v_order.tenant_id and w.id = v_order.fulfilment_warehouse_id
+              union
+              select t.tm_id from public.territories t
+               where t.tenant_id = v_order.tenant_id and t.id = v_order.territory_id) r
+       where r.user_id is not null;
     else
       perform public.write_audit(v_payment.tenant_id, 'PAID_AFTER_CANCEL', 'orders', v_order.id::text,
         jsonb_build_object('status', v_order.status),
@@ -245,8 +264,9 @@ end;
 $$;
 
 -- ── the reconcile-funds confirmation sweep (§7) ─────────────────────────
--- Unconfirmed payments older than 5 minutes, oldest first, minus those the
--- sweep has already decided (a mismatch, say), which a human now owns.
+-- Unconfirmed payments older than 5 minutes, least recently checked first
+-- (coalesce(last_swept_at, created_at)), minus those the sweep has already
+-- decided (a mismatch, say), which a human now owns.
 create or replace function public.list_unconfirmed_payments(p_limit integer)
 returns table (paystack_reference text, created_at timestamptz)
 language sql
@@ -262,7 +282,7 @@ as $$
        select 1 from public.idempotency_logs l
         where l.key = md5('paystack:sweep:' || p.paystack_reference)::uuid
           and l.status = 'COMPLETED')
-   order by p.created_at, p.id
+   order by coalesce(p.last_swept_at, p.created_at), p.id
    limit least(greatest(coalesce(p_limit, 50), 0), 500);
 $$;
 

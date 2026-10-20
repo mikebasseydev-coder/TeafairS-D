@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(47);
+select plan(65);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
 -- 01, 02 ACTIVE ZSMs · 05 DISABLED ZSM · 03 TM (Ikeja and Epe)
@@ -98,6 +98,32 @@ select pg_temp.mk(11, 'r_fresh',      1, '1 minute');
 select pg_temp.mk(12, 'r_code',       1, '10 minutes', p_code => true);
 select pg_temp.mk(13, 'r_wait_a',     1, '50 minutes');
 select pg_temp.mk(14, 'r_wait_b',     1, '20 minutes', p_pay_status => 'PROCESSING');
+select pg_temp.mk(15, 'r_ong10',      1, '10 hours');
+select pg_temp.mk(16, 'r_split_share', 1, '10 minutes', p_split => true);
+select pg_temp.mk(17, 'r_fail_old',   1, '73 hours');
+select pg_temp.mk(18, 'r_q_a',        1, '40 minutes');
+select pg_temp.mk(19, 'r_q_b',        1, '35 minutes');
+select pg_temp.mk(20, 'r_q_c',        1, '32 minutes');
+-- a field order with a split snapshot: D1 settles its payment, not its status
+insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, created_at) values
+  ('90000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', 'FIELD_DSA',
+   '20000000-0000-0000-0000-000000000006', 2500, now() - interval '10 minutes');
+insert into public.payments (id, tenant_id, order_id, teafair_agent_id, fintech_partner_id, amount, paystack_reference,
+                             split_subaccount_code, split_bps, split_amount, created_at) values
+  ('91000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000021',
+   '20000000-0000-0000-0000-000000000006', '60000000-0000-0000-0000-000000000001', 2500.00, 'r_field',
+   'ACCT_grace01', 150, 37.50, now() - interval '10 minutes');
+
+select throws_ok($$insert into public.payments (tenant_id, order_id, teafair_agent_id, amount, paystack_reference,
+                                               split_subaccount_code, split_bps, split_amount)
+  values ('10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000021',
+          '20000000-0000-0000-0000-000000000006', 100, 'r_nopartner', 'ACCT_grace01', 150, 1.50)$$,
+  '23514', null, 'a split snapshot needs its partner');
+select ok(not has_column_privilege('authenticated', 'public.payments', 'last_swept_at', 'select'),
+  'last_swept_at is internal');
+select is((select indexdef ~ 'COALESCE\(last_swept_at, created_at\)' from pg_indexes
+            where schemaname = 'public' and indexname = 'idx_payments_unconfirmed'),
+  true, 'the sweep index follows the sweep order');
 
 create function pg_temp.notes(p_kind text, p_order integer) returns integer language sql as $$
   select count(*)::int from public.notifications
@@ -202,6 +228,20 @@ select ok(exists (select 1 from public.notifications n
                     and n.payload = jsonb_build_object('commission_id', c.id, 'order_id', c.order_id,
                                                        'reason', 'SPLIT_MISMATCH')),
   'the dispute notification names the commission and the order');
+select is(public.settle_paystack_payment('charge.success', 'r_split_share', 'success', 250000, 'NGN', '{}',
+  '9013', 'ACCT_grace01', 3700) ->> 'commission_status', 'DISPUTED', 'right subaccount, wrong share → DISPUTED');
+select is((select dispute_reason from public.commission_records where payment_id = '91000000-0000-0000-0000-000000000016'),
+  'SPLIT_MISMATCH', 'reason SPLIT_MISMATCH for the share');
+
+-- ── field orders: the payment settles, the order is Spec C's ────────────
+select is(public.settle_paystack_payment('charge.success', 'r_field', 'success', 250000, 'NGN', '{}',
+  '9014', 'ACCT_grace01', 3750) ->> 'commission_status', 'SPLIT', 'a field payment still gets its commission row');
+select is((select row(p.payment_status::text, o.status)::text from public.payments p join public.orders o on o.id = p.order_id
+            where p.paystack_reference = 'r_field'),
+  row('SUCCESS', 'PENDING')::text, 'the FIELD_DSA order stays PENDING');
+select ok(not exists (select 1 from public.audit_logs
+                       where entity_type = 'orders' and entity_id = '90000000-0000-0000-0000-000000000021'),
+  'and is neither transitioned nor escalated');
 
 -- ── age rules ───────────────────────────────────────────────────────────
 select is(public.settle_paystack_payment('sweep', 'r_aband_new', 'abandoned', 250000, 'NGN', '{}',
@@ -218,6 +258,33 @@ select is(public.settle_paystack_payment('sweep', 'r_pend_old', 'ongoing', 25000
 select is((select count(*)::int from public.audit_logs
             where operation = 'SWEEP_EXPIRED' and entity_id = '91000000-0000-0000-0000-000000000007' and source = 'CRON'),
   1, 'audited SWEEP_EXPIRED');
+select is(public.settle_paystack_payment('sweep', 'r_ong10', 'ongoing', 250000, 'NGN', '{}',
+  '9015', null, null) ->> 'outcome', 'not_final', 'ongoing at 10 h is not final');
+select ok(not exists (select 1 from public.idempotency_logs where key = md5('paystack:sweep:r_ong10')::uuid),
+  'and takes no key');
+select is(public.settle_paystack_payment('sweep', 'r_fail_old', 'failed', 250000, 'NGN', '{}',
+  '9016', null, null) ->> 'payment_status', 'FAILED', 'failed at 73 h is FAILED');
+select ok(not exists (select 1 from public.audit_logs
+                       where operation = 'SWEEP_EXPIRED' and entity_id = '91000000-0000-0000-0000-000000000017'),
+  'a verified failure is not an expiry');
+
+-- ── the sweep visits the least recently checked first ───────────────────
+select ok((select array_position(l, 'r_q_a') < array_position(l, 'r_q_b')
+              and array_position(l, 'r_q_b') < array_position(l, 'r_q_c')
+             from (select array_agg(paystack_reference) l from public.list_unconfirmed_payments(50)) s),
+  'unchecked payments are listed oldest first');
+select is(public.settle_paystack_payment('sweep', 'r_q_a', 'pending', 250000, 'NGN', '{}',
+  '9017', null, null) ->> 'outcome', 'not_final', 'A is not final yet');
+select ok((select array_position(l, 'r_q_a') > array_position(l, 'r_q_c')
+              and array_position(l, 'r_q_b') < array_position(l, 'r_q_c')
+             from (select array_agg(paystack_reference) l from public.list_unconfirmed_payments(50)) s),
+  'a not-final sweep moves A behind B and C');
+select ok((select last_swept_at = now() from public.payments where paystack_reference = 'r_q_a'),
+  'the sweep stamps last_swept_at');
+select is(public.settle_paystack_payment('charge.success', 'r_q_b', 'pending', 250000, 'NGN', '{}',
+  '9018', null, null) ->> 'outcome', 'not_final', 'a webhook not-final result');
+select ok((select last_swept_at is null from public.payments where paystack_reference = 'r_q_b'),
+  'does not count as a sweep');
 
 -- ── real money wins ─────────────────────────────────────────────────────
 select is(public.settle_paystack_payment('charge.success', 'r_late', 'success', 250000, 'NGN', '{}',
@@ -247,7 +314,8 @@ select is((select row(p.payment_status::text, o.status)::text from public.paymen
 select ok(not ('r_mismatch' in (select paystack_reference from public.list_unconfirmed_payments(50))),
   'a decided payment leaves the sweep');
 select is((select array_agg(paystack_reference) from public.list_unconfirmed_payments(50)),
-  array['r_aband_new', 'r_wait_a', 'r_wait_b', 'r_code'], 'oldest first, >5 min only');
+  array['r_wait_a', 'r_q_b', 'r_q_c', 'r_wait_b', 'r_code', 'r_aband_new', 'r_ong10', 'r_q_a'],
+  'least recently checked first, >5 min only');
 select throws_ok($$select public.settle_paystack_payment('sweep', 'r_wait_a', 'reversed', 250000, 'NGN', '{}',
   '9011', null, null)$$, 'P0001', 'reversed is applied by apply_paystack_refund', 'reversed is not settled here');
 select is(public.settle_paystack_payment('sweep', 'r_nowhere', 'success', 100, 'NGN', '{}', '1', null, null) ->> 'outcome',
