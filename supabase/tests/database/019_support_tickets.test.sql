@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(35);
+select plan(41);
 
 -- users: ZSM1, TM_A, TM_B, DSA, DEF (DSM default agent), GONE (disabled DSM), ZSM2
 insert into public.tenants (id, name, code) values
@@ -97,6 +97,11 @@ select ok(not has_table_privilege('authenticated', 'public.support_ticket_secret
 select ok(not has_table_privilege('anon', 'public.support_messages', 'select'), 'anon reads no messages');
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'insert'), 'no client writes');
 select ok(not has_function_privilege('anon', 'public.my_support_ticket_ids()', 'execute'), 'anon cannot list handler tickets');
+select ok(not has_function_privilege('service_role', 'public.my_support_ticket_ids()', 'execute'), 'service_role cannot list handler tickets');
+select ok(to_regprocedure('public.my_support_history_ticket_ids()') is not null
+          and not has_function_privilege('anon', 'public.my_support_history_ticket_ids()', 'execute'), 'anon cannot list handler history');
+select ok(to_regprocedure('public.my_support_history_ticket_ids()') is not null
+          and not has_function_privilege('service_role', 'public.my_support_history_ticket_ids()', 'execute'), 'service_role cannot list handler history');
 select ok(not has_function_privilege('authenticated', 'public.new_crockford_reference(text)', 'execute'), 'generator is internal');
 select ok(not has_function_privilege('service_role', 'public.new_crockford_reference(text)', 'execute'), 'generator is not callable by service_role');
 select ok(not has_table_privilege('service_role', 'public.support_ticket_secrets', 'select'), 'service_role cannot read secrets');
@@ -144,10 +149,31 @@ insert into public.support_messages (tenant_id, ticket_id, sender_type, territor
   ('10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000010', 'CUSTOMER', null, 'first time'),
   ('10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000010', 'CUSTOMER', null, 'still waiting'),
   ('10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000011', 'CUSTOMER', null, 'back again');
+insert into public.support_ticket_contacts (ticket_id, tenant_id, territory_id, customer_name, customer_phone) values
+  ('60000000-0000-0000-0000-000000000010', '10000000-0000-0000-0000-000000000001', null, 'Chidi', '+2348012345670');
+-- a chain C0 <- C1 <- C2: C1 is CLOSED too; TM_B handles only C2
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, territory_id, accountable_id,
+                                    status, previous_ticket_id) values
+  ('60000000-0000-0000-0000-000000000012', '10000000-0000-0000-0000-000000000001', 'TK-AAAAC1', 'PRE_PURCHASE', 'OTHER',
+   null, null, 'CLOSED', '60000000-0000-0000-0000-000000000010');
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, territory_id, accountable_id,
+                                    previous_ticket_id) values
+  ('60000000-0000-0000-0000-000000000013', '10000000-0000-0000-0000-000000000001', 'TK-AAAAC2', 'PRE_PURCHASE', 'OTHER',
+   null, '20000000-0000-0000-0000-000000000003', '60000000-0000-0000-0000-000000000012');
 
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
 select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000010'),
           2, 'handler reads the linked closed ticket');
+reset role;
+select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.support_ticket_contacts where ticket_id = '60000000-0000-0000-0000-000000000010'),
+          0, 'a direct link does not expose earlier contacts');
+reset role;
+select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000010'),
+          2, 'handler reads the whole chain');
+select is((select count(*)::int from public.support_ticket_contacts where ticket_id = '60000000-0000-0000-0000-000000000010'),
+          0, 'linked history does not expose earlier contacts');
 reset role;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
 select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000010'),

@@ -124,8 +124,8 @@ create index idx_support_messages_sender_id on public.support_messages (sender_i
 -- ── handler lookup (Spec A §9: a helper, never a per-row subquery) ──────
 -- Tickets the caller is accountable for or assigned to, while they remain an
 -- ACTIVE member of the ticket's tenant. Lets a non-TM fallback handler read
--- the ticket routed to them, and the CLOSED ticket it follows up
--- (previous_ticket_id), under the same membership check.
+-- the ticket routed to them. Gates contacts and messages; read-only, no RPC
+-- uses it for write access.
 create or replace function public.my_support_ticket_ids()
 returns setof uuid
 language sql
@@ -133,20 +133,42 @@ security definer
 stable
 set search_path = public, pg_temp
 as $$
-  with mine as (
+  select t.id
+    from public.support_tickets t
+   where (t.accountable_id = (select auth.uid()) or t.assigned_to = (select auth.uid()))
+     and exists (select 1 from public.tenant_users tu
+                  where tu.tenant_id = t.tenant_id
+                    and tu.profile_id = (select auth.uid())
+                    and tu.status = 'ACTIVE');
+$$;
+revoke all on function public.my_support_ticket_ids() from public, anon, service_role;
+grant execute on function public.my_support_ticket_ids() to authenticated;
+
+-- The caller's own tickets plus every ticket they follow up, through the
+-- whole previous_ticket_id chain. Membership is checked at the root (via
+-- my_support_ticket_ids); the composite FK keeps every link in one tenant;
+-- UNION dedupes, so a cycle terminates. Widens MESSAGES only: earlier
+-- tickets' contacts stay with their own handlers (A2 contact privacy).
+create or replace function public.my_support_history_ticket_ids()
+returns setof uuid
+language sql
+security definer
+stable
+set search_path = public, pg_temp
+as $$
+  with recursive chain (id, previous_ticket_id) as (
     select t.id, t.previous_ticket_id
       from public.support_tickets t
-     where (t.accountable_id = (select auth.uid()) or t.assigned_to = (select auth.uid()))
-       and exists (select 1 from public.tenant_users tu
-                    where tu.tenant_id = t.tenant_id
-                      and tu.profile_id = (select auth.uid())
-                      and tu.status = 'ACTIVE'))
-  select id from mine
-  union
-  select previous_ticket_id from mine where previous_ticket_id is not null;
+     where t.id in (select public.my_support_ticket_ids())
+    union
+    select p.id, p.previous_ticket_id
+      from chain c
+      join public.support_tickets p on p.id = c.previous_ticket_id
+  )
+  select id from chain;
 $$;
-revoke all on function public.my_support_ticket_ids() from public, anon;
-grant execute on function public.my_support_ticket_ids() to authenticated;
+revoke all on function public.my_support_history_ticket_ids() from public, anon, service_role;
+grant execute on function public.my_support_history_ticket_ids() to authenticated;
 
 -- ── RLS and grants: SELECT only ─────────────────────────────────────────
 grant select on public.support_tickets, public.support_ticket_contacts, public.support_messages
@@ -166,7 +188,7 @@ create policy support_messages_select_handler on public.support_messages
   for select to authenticated
   using (tenant_id in (select public.my_tenant_ids_with_role(array['ZSM']::public.tenant_role_enum[]))
          or territory_id in (select public.my_tm_territory_ids())
-         or ticket_id in (select public.my_support_ticket_ids()));
+         or ticket_id in (select public.my_support_history_ticket_ids()));
 
 -- ── Realtime: staff subscribe, RLS filters per subscriber ───────────────
 alter publication supabase_realtime add table public.support_tickets, public.support_messages;
