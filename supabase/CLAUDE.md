@@ -14,6 +14,7 @@ the authority; this file is the working summary.
 | A1. Web storefront — agent codes, venues, public gateways | done |
 | A2. Buyer contact privacy — `order_contacts`, till lookup | done |
 | D1. Web money loop — routing, settlement, sweeps, refunds, commission release | done (local) |
+| A3. Web chat & ticketing — support tables, buyer gateways, staff RPCs, system tickets | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -72,6 +73,48 @@ A ZSM of each tenant sets these with:
 Until Spec B exists there is no client: call them through PostgREST
 (`POST /rest/v1/rpc/<name>`) with a ZSM's JWT whose active tenant is the one
 being set up.
+
+### Addendum A3 (web chat and ticketing)
+
+Four migrations (`20261021120000`–`20261021120300`) and the functions
+`support-ticket-open`, `support-ticket-read` and `support-ticket-message` are
+local only. **A3 deploys after D1**: it depends on D1's routing (a ticket goes
+to the territory's TM, else the zone's ZSM, else `web_default_agent_id`), and
+its triggers watch D1's tables to raise system tickets from payment exceptions.
+
+- **Public gateways** (`publicGateway`, service-role RPCs): `support-ticket-open`
+  (Turnstile, then `open_support_ticket`; the reply carries a one-time secret,
+  only its hash is stored), `support-ticket-read` (`read_support_ticket`) and
+  `support-ticket-message` (`add_ticket_message`). The pair
+  `(public_reference, secret)` is the buyer's capability; any miss is 404.
+  A closed conversation or a throttled buyer gets 422 with the database copy.
+  `support-ticket-open` needs `TURNSTILE_SECRET_KEY` (the same secret as
+  `web-checkout`; locally with `TURNSTILE_VERIFY_URL` pointing at the fake) and
+  `WEB_ALLOWED_ORIGINS`.
+- **Staff RPCs** (through PostgREST, `authenticated`): `claim_ticket`,
+  `reply_ticket`, `update_ticket_status`, `set_ticket_priority`, and the
+  ZSM-only `assign_ticket` (pre-purchase tickets) and
+  `redact_ticket_customer_data`. `close_resolved_support_tickets` is the cron
+  sweep. System tickets come from `raise_system_ticket`, called by triggers on
+  D1's disputed commissions and payment exceptions.
+- **Handler RLS rule.** The tables are `SELECT`-only. Contacts and messages
+  are readable by a ZSM of the tenant, the TM of the ticket's territory, and
+  the ticket's accountable or assigned person (`my_support_ticket_ids()` for
+  contacts; messages use the history helper below). Buyer contact details stay
+  with each ticket's own handlers.
+- **Claimed tickets are locked.** Once `assigned_to` is set, only the assignee
+  or a ZSM can claim, reply, change status or change priority. Everyone else
+  gets 42501. A TM's reply claims the ticket.
+- **Repeat system facts.** A repeat on a RESOLVED system ticket reopens it. A
+  repeat on a CLOSED one opens a new SYSTEM ticket whose `previous_ticket_id`
+  points at the closed one. `system_key` is unique only among non-CLOSED
+  tickets (partial index `support_tickets_open_system_key`).
+- **Linked buyer tickets.** A buyer ORDER ticket links to the most recent CLOSED
+  ORDER ticket on the same order.
+- **Linked history.** Handlers read linked history through
+  `my_support_history_ticket_ids()`, which covers the whole chain and gives
+  messages only. Contacts stay with each ticket's own handlers through
+  `my_support_ticket_ids()`.
 
 ## Layout
 
@@ -174,7 +217,8 @@ one responsibility per file. Third-party versions appear only in
   `claim_unconfirmed_payments(50)`, which stamps `last_swept_at` on every row
   it hands out, so a row whose Verify fails still moves to the back. Paystack
   GETs time out after 15 s; `pg_net` waits up to 120 s for a cron call.
-- **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1;
+- **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1; `support-ticket-open`,
+  `support-ticket-read`, `support-ticket-message`; addendum A3;
   `storefront-locations`, `web-order-status`; Spec D1) use
   `publicGateway(route, handle, deps)` from `_shared/core/public-gateway.ts`.
   Callers are anonymous, so their RPCs are granted to `service_role` only and

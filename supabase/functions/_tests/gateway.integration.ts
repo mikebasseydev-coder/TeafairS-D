@@ -550,6 +550,66 @@ Deno.test({
   },
 });
 
+const support = (fn: string, body: unknown) =>
+  fetch(`${FN}/${fn}`, { method: "POST", headers: { Origin: WEB, "content-type": "application/json" }, body: JSON.stringify(body) });
+
+Deno.test({
+  name: "support: open → staff reply → buyer read → buyer message → resolve → close",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    // 1. a pre-purchase ticket for the TEAFAIR territory covering Ikeja
+    const opened = await support("support-ticket-open", {
+      idempotency_key: crypto.randomUUID(), turnstile_token: "pass", category: "DELIVERY",
+      message: "Do you deliver to Ikeja?",
+      customer: { name: "Ada Obi", phone: `+23480${String(Date.now()).slice(-6)}87` },
+      location: { lga_id: IKEJA },
+    });
+    const ticket = await opened.json();
+    assertEquals(opened.status, 200, JSON.stringify(ticket));
+    assert(/^TK-[0-9A-HJKMNP-TV-Z]{6}$/.test(ticket.public_reference));
+    const secret: string = ticket.secret;
+    const ref: string = ticket.public_reference;
+    const [row] = (await must(admin.from("support_tickets").select("id, tenant_id").eq("public_reference", ref))) ?? [];
+    assertEquals(row.tenant_id, TEAFAIR);
+
+    // 2. the territory's TM replies through PostgREST (which claims the ticket)
+    const tmJwt = await signIn(users.tfTm.email);
+    const tm = createClient(API, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${tmJwt}` } } });
+    await must(tm.rpc("reply_ticket", { p_idempotency_key: crypto.randomUUID(), p_ticket_id: row.id, p_body: "Yes, we deliver to Ikeja." }));
+
+    // 3. the buyer reads it back as "teafair"
+    const readRes = await support("support-ticket-read", { public_reference: ref, secret });
+    const read = await readRes.json();
+    assertEquals(readRes.status, 200, JSON.stringify(read));
+    const mine = (read.messages as Array<{ sender: string; body: string }>).map((m) => [m.sender, m.body]);
+    assert(mine.some(([s, b]) => s === "teafair" && b === "Yes, we deliver to Ikeja."), JSON.stringify(read));
+
+    // 4. the buyer follows up
+    const followUp = await support("support-ticket-message", {
+      idempotency_key: crypto.randomUUID(), public_reference: ref, secret, message: "Great, thank you.",
+    });
+    assertEquals(followUp.status, 200, await followUp.text());
+
+    // 5. the same TM (the assignee) resolves and closes it
+    for (const status of ["RESOLVED", "CLOSED"]) {
+      await must(tm.rpc("update_ticket_status", { p_idempotency_key: crypto.randomUUID(), p_ticket_id: row.id, p_status: status }));
+    }
+
+    // 6. a closed conversation takes no more messages
+    const late = await support("support-ticket-message", {
+      idempotency_key: crypto.randomUUID(), public_reference: ref, secret, message: "One more thing.",
+    });
+    const lateBody = await late.json();
+    assertEquals(late.status, 422, JSON.stringify(lateBody));
+    assertEquals(lateBody.error.message, "This conversation is closed. Open a new ticket if you still need help.");
+
+    // 7. a wrong secret is a 404
+    const wrong = await support("support-ticket-read", { public_reference: ref, secret: "A".repeat(43) });
+    assertEquals([wrong.status, (await wrong.json()).error.code], [404, "NOT_FOUND"]);
+  },
+});
+
 Deno.test({
   name: "teardown",
   sanitizeOps: false,
