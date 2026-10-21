@@ -15,7 +15,7 @@ as $$
                                                        1 + get_byte(extensions.gen_random_bytes(1), 0) % 32, 1), '')
                                from generate_series(1, 6));
 $$;
-revoke all on function public.new_crockford_reference(text) from public, anon, authenticated;
+revoke all on function public.new_crockford_reference(text) from public, anon, authenticated, service_role;
 
 -- ── support_tickets ─────────────────────────────────────────────────────
 create table public.support_tickets (
@@ -62,7 +62,7 @@ create table public.support_ticket_secrets (
 );
 alter table public.support_ticket_secrets enable row level security;
 -- default privileges grant SELECT on new tables to authenticated; withdraw it
-revoke all on public.support_ticket_secrets from anon, authenticated;
+revoke all on public.support_ticket_secrets from anon, authenticated, service_role;
 create index idx_support_ticket_secrets_tenant on public.support_ticket_secrets (tenant_id, ticket_id);
 
 -- ── support_ticket_contacts (restricted) ────────────────────────────────

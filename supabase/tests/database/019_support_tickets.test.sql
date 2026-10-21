@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(26);
+select plan(29);
 
 -- users: ZSM1, TM_A, TM_B, DSA, DEF (DSM default agent), GONE (disabled DSM), ZSM2
 insert into public.tenants (id, name, code) values
@@ -98,6 +98,9 @@ select ok(not has_table_privilege('anon', 'public.support_messages', 'select'), 
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'insert'), 'no client writes');
 select ok(not has_function_privilege('anon', 'public.my_support_ticket_ids()', 'execute'), 'anon cannot list handler tickets');
 select ok(not has_function_privilege('authenticated', 'public.new_crockford_reference(text)', 'execute'), 'generator is internal');
+select ok(not has_function_privilege('service_role', 'public.new_crockford_reference(text)', 'execute'), 'generator is not callable by service_role');
+select ok(not has_table_privilege('service_role', 'public.support_ticket_secrets', 'select'), 'service_role cannot read secrets');
+select ok(not has_table_privilege('anon', 'public.support_ticket_secrets', 'select'), 'anon cannot read secrets');
 
 -- RLS
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
