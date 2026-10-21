@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(41);
+select plan(44);
 
 -- users: ZSM1, TM_A, TM_B, DSA, DEF (DSM default agent), GONE (disabled DSM), ZSM2
 insert into public.tenants (id, name, code) values
@@ -183,6 +183,32 @@ update public.tenant_users set status = 'DISABLED' where id = '50000000-0000-000
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
 select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000010'),
           0, 'disabled handler loses the history too');
+reset role;
+
+-- ORDER tickets follow A2 (user decision 2026-10-21): the ZSM and the
+-- territory TM only, never the accountable selling agent. O1 is an Ikeja
+-- ORDER ticket whose accountable is the DSA.
+insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount) values
+  ('80000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'FIELD_DSA',
+   '20000000-0000-0000-0000-000000000004', 5000);
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, order_id, territory_id, accountable_id) values
+  ('60000000-0000-0000-0000-000000000020', '10000000-0000-0000-0000-000000000001', 'TK-AAAAD1', 'ORDER', 'PAYMENT',
+   '80000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004');
+insert into public.support_ticket_contacts (ticket_id, tenant_id, territory_id, customer_name, customer_phone) values
+  ('60000000-0000-0000-0000-000000000020', '10000000-0000-0000-0000-000000000001',
+   '40000000-0000-0000-0000-000000000001', 'Dayo', '+2348012345671');
+insert into public.support_messages (tenant_id, ticket_id, sender_type, territory_id, body) values
+  ('10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000020', 'CUSTOMER', '40000000-0000-0000-0000-000000000001', 'where is my order');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.support_ticket_contacts where ticket_id = '60000000-0000-0000-0000-000000000020'),
+          0, 'on an ORDER ticket the accountable DSA reads no contacts');
+select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000020'),
+          0, '…and no messages');
+reset role;
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.support_ticket_contacts where ticket_id = '60000000-0000-0000-0000-000000000020')
+        + (select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000020'),
+          2, 'the territory TM still reads them');
 reset role;
 
 select throws_ok($$update public.support_tickets set previous_ticket_id = id

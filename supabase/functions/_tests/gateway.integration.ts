@@ -559,17 +559,25 @@ Deno.test({
   sanitizeResources: false,
   fn: async () => {
     // 1. a pre-purchase ticket for the TEAFAIR territory covering Ikeja
-    const opened = await support("support-ticket-open", {
+    const openBody = {
       idempotency_key: crypto.randomUUID(), turnstile_token: "pass", category: "DELIVERY",
       message: "Do you deliver to Ikeja?",
       customer: { name: "Ada Obi", phone: `+23480${String(Date.now()).slice(-6)}87` },
       location: { lga_id: IKEJA },
-    });
+    };
+    const opened = await support("support-ticket-open", openBody);
     const ticket = await opened.json();
     assertEquals(opened.status, 200, JSON.stringify(ticket));
     assert(/^TK-[0-9A-HJKMNP-TV-Z]{6}$/.test(ticket.public_reference));
     const secret: string = ticket.secret;
     const ref: string = ticket.public_reference;
+
+    // 1b. a retry with the same idempotency key (the first reply was lost)
+    // returns the same ticket and the same, working, secret
+    const retried = await support("support-ticket-open", openBody);
+    const again = await retried.json();
+    assertEquals(retried.status, 200, JSON.stringify(again));
+    assertEquals([again.public_reference, again.secret], [ref, secret]);
     const [row] = (await must(admin.from("support_tickets").select("id, tenant_id").eq("public_reference", ref))) ?? [];
     assertEquals(row.tenant_id, TEAFAIR);
 

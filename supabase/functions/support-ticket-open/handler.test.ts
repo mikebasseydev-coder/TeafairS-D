@@ -1,18 +1,19 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
-import { sha256Hex } from "../_shared/support/secret.ts";
+import { sha256Hex, ticketSecretFor } from "../_shared/support/secret.ts";
 import { createSupportTicketOpenHandler } from "./handler.ts";
 
 const ORIGIN = "https://teafairweb.com";
 const KEY = "c0000000-0000-0000-0000-000000000001";
 const LGA = "d0000000-0000-0000-0000-000000000009";
-const SECRET = "s".repeat(43);
+const SERVER_KEY = "test-server-key";
 const PAYSTACK = "TFW-123e4567-e89b-12d3-a456-426614174000";
 const OPENED = { ticket_id: "t1", public_reference: "TK-7K3Q9X", status: "OPEN" };
 
-function setup(opts: { human?: boolean; rpcError?: Error } = {}) {
+function setup(opts: { human?: boolean; rpcError?: Error; secretError?: Error } = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
+  const turnstileCalls: string[] = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
     return opts.rpcError ? Promise.reject(opts.rpcError) : Promise.resolve(OPENED as T);
@@ -20,10 +21,13 @@ function setup(opts: { human?: boolean; rpcError?: Error } = {}) {
   const handler = createSupportTicketOpenHandler({
     rpc,
     allowedOrigins: [ORIGIN],
-    verifyTurnstile: () => Promise.resolve(opts.human ?? true),
-    newSecret: () => SECRET,
+    verifyTurnstile: (token: string) => {
+      turnstileCalls.push(token);
+      return Promise.resolve(opts.human ?? true);
+    },
+    secretFor: (k: string) => opts.secretError ? Promise.reject(opts.secretError) : ticketSecretFor(SERVER_KEY, k),
   });
-  return { handler, rpcCalls };
+  return { handler, rpcCalls, turnstileCalls };
 }
 
 const body = (over: Record<string, unknown> = {}) => ({
@@ -66,9 +70,9 @@ Deno.test("order ticket sends the pair and only the secret's hash", async () => 
     p_order_public_reference: "TF-7K3Q9X",
     p_order_paystack_reference: PAYSTACK,
     p_lga_id: null,
-    p_secret_hash: await sha256Hex(SECRET),
+    p_secret_hash: await sha256Hex(await ticketSecretFor(SERVER_KEY, KEY)),
   });
-  assertEquals(JSON.stringify(args).includes(SECRET), false);
+  assertEquals(JSON.stringify(args).includes(await ticketSecretFor(SERVER_KEY, KEY)), false);
 });
 
 Deno.test("location ticket is PRE_PURCHASE", async () => {
@@ -84,8 +88,26 @@ Deno.test("location ticket is PRE_PURCHASE", async () => {
 Deno.test("reply includes the secret once", async () => {
   const { handler } = setup();
   const res = await post(handler, body());
-  assertEquals(await res.json(), { public_reference: "TK-7K3Q9X", secret: SECRET, status: "OPEN" });
+  assertEquals(await res.json(), {
+    public_reference: "TK-7K3Q9X", secret: await ticketSecretFor(SERVER_KEY, KEY), status: "OPEN",
+  });
   assertEquals(res.headers.get("cache-control"), "no-store");
+});
+
+Deno.test("a retry with the same idempotency key returns the same secret", async () => {
+  const { handler, rpcCalls } = setup();
+  const first = await (await post(handler, body())).json();
+  const retry = await (await post(handler, body())).json();
+  assertEquals(retry.secret, first.secret);
+  assertEquals(rpcCalls[1][1].p_secret_hash, rpcCalls[0][1].p_secret_hash);
+  const other = await (await post(handler, body({ idempotency_key: "c0000000-0000-0000-0000-000000000002" }))).json();
+  assertEquals(other.secret === first.secret, false);
+});
+
+Deno.test("an unusable ticket secret key is 503 and calls nothing", async () => {
+  const { handler, rpcCalls, turnstileCalls } = setup({ secretError: new Error("SUPPORT_TICKET_SECRET_KEY is not usable") });
+  const res = await post(handler, body());
+  assertEquals([res.status, (await res.json()).error.code, rpcCalls.length, turnstileCalls.length], [503, "RETRY", 0, 0]);
 });
 
 Deno.test("both order and location is 400", async () => {

@@ -7,7 +7,12 @@
 -- ── support_lock_ticket (internal) ──────────────────────────────────────
 -- Lock the ticket and check the caller may act on it. A ticket outside the
 -- caller's tenant is "not found"; everyone else who may not act is 42501.
--- Once claimed (assigned_to set), only the assignee and ZSMs may act.
+-- Who may act: a ZSM; the TM of the ticket's territory; and, on PRE_PURCHASE
+-- and SYSTEM tickets only, the accountable or assigned person. ORDER tickets
+-- follow A2 (user decision 2026-10-21): never the order's selling agent.
+-- Once claimed (assigned_to set), only the assignee and ZSMs may act. The
+-- hold lapses when the assignee is no longer an ACTIVE member of the tenant:
+-- the ticket is then treated as unassigned, and a permitted claim takes it.
 create or replace function public.support_lock_ticket(
   p_ticket_id uuid,
   p_me        public.tenant_users,
@@ -19,7 +24,8 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_t public.support_tickets;
+  v_t        public.support_tickets;
+  v_assignee uuid;
 begin
   select * into v_t
     from public.support_tickets t
@@ -32,13 +38,17 @@ begin
   if p_me.role = 'ZSM' then
     return v_t;
   end if;
+  -- the live holder: the assignee while still an ACTIVE member, else nobody
+  select tu.profile_id into v_assignee
+    from public.tenant_users tu
+   where tu.tenant_id = v_t.tenant_id and tu.profile_id = v_t.assigned_to and tu.status = 'ACTIVE';
   -- a claimed ticket is locked to its assignee and the ZSMs
-  if v_t.assigned_to is not null and v_t.assigned_to <> p_me.profile_id then
+  if v_assignee is not null and v_assignee <> p_me.profile_id then
     raise exception 'this ticket is held by someone else' using errcode = '42501';
   end if;
   if not p_zsm_only
      and ((p_me.role = 'TM' and p_me.territory_id is not null and p_me.territory_id is not distinct from v_t.territory_id)
-          or p_me.profile_id in (v_t.accountable_id, v_t.assigned_to)) then
+          or (v_t.kind <> 'ORDER' and p_me.profile_id in (v_t.accountable_id, v_assignee))) then
     return v_t;
   end if;
   raise exception 'you may not act on this ticket' using errcode = '42501';
@@ -70,10 +80,8 @@ begin
   if v_t.status = 'CLOSED' then
     raise exception 'this ticket is closed' using errcode = 'P0001';
   end if;
-  -- only a ZSM may take a ticket another person holds
-  if v_t.assigned_to is not null and v_t.assigned_to <> v_me.profile_id and v_me.role <> 'ZSM' then
-    raise exception 'this ticket is held by someone else' using errcode = '42501';
-  end if;
+  -- support_lock_ticket already refuses a non-ZSM on a ticket someone else
+  -- holds; a ZSM takeover is audited below with before.assigned_to
 
   v_before := jsonb_build_object('status', v_t.status, 'assigned_to', v_t.assigned_to);
   update public.support_tickets
@@ -246,6 +254,9 @@ begin
   end if;
 
   v_t := public.support_lock_ticket(p_ticket_id, v_me, true);
+  if v_t.status = 'CLOSED' then
+    raise exception 'that ticket is closed' using errcode = 'P0001';
+  end if;
   if v_t.kind <> 'PRE_PURCHASE' then
     raise exception 'only pre-purchase tickets can be re-routed' using errcode = 'P0001';
   end if;
@@ -274,9 +285,11 @@ begin
   end if;
 
   v_before := jsonb_build_object('territory_id', v_t.territory_id, 'accountable_id', v_t.accountable_id,
-                                 'assigned_to', v_t.assigned_to);
+                                 'assigned_to', v_t.assigned_to, 'status', v_t.status);
+  -- assigned_to is cleared, so an IN_PROGRESS ticket goes back to OPEN
   update public.support_tickets
-     set territory_id = p_territory_id, accountable_id = v_accountable, assigned_to = null
+     set territory_id = p_territory_id, accountable_id = v_accountable, assigned_to = null,
+         status = case when status = 'IN_PROGRESS' then 'OPEN' else status end
    where id = v_t.id
   returning * into v_t;
   update public.support_ticket_contacts set territory_id = p_territory_id where ticket_id = v_t.id;
@@ -284,7 +297,7 @@ begin
 
   perform public.write_audit(v_t.tenant_id, 'assign_ticket', 'support_tickets', v_t.id::text, v_before,
                              jsonb_build_object('territory_id', v_t.territory_id, 'accountable_id', v_t.accountable_id,
-                                                'assigned_to', v_t.assigned_to),
+                                                'assigned_to', v_t.assigned_to, 'status', v_t.status),
                              p_idempotency_key);
 
   return public.idempotency_complete(p_idempotency_key, jsonb_build_object(
@@ -294,8 +307,9 @@ $$;
 
 -- ── redact_ticket_customer_data (ZSM) ───────────────────────────────────
 -- Blank the contact record and every buyer message body. Staff replies,
--- SYSTEM messages and the ticket's structure stay. Repeating it redacts
--- nothing new. The audit row is a summary.
+-- SYSTEM messages and the ticket's structure stay. The audit row is a
+-- summary. Repeating it on an already redacted contact with no new buyer
+-- message is a no-op: no audit row, the normal reply.
 create or replace function public.redact_ticket_customer_data(p_idempotency_key uuid, p_ticket_id uuid)
 returns jsonb
 language plpgsql
@@ -307,6 +321,7 @@ declare
   v_prior     jsonb;
   v_t         public.support_tickets;
   v_had_email boolean;
+  v_already   boolean;
   v_count     integer;
 begin
   v_prior := public.idempotency_begin(p_idempotency_key, 'redact_ticket_customer_data',
@@ -317,9 +332,10 @@ begin
 
   v_t := public.support_lock_ticket(p_ticket_id, v_me, true);
 
-  select coalesce(c.customer_email is not null, false) into v_had_email
+  select coalesce(c.customer_email is not null, false), c.redacted_at is not null into v_had_email, v_already
     from public.support_ticket_contacts c where c.ticket_id = v_t.id;
   v_had_email := coalesce(v_had_email, false);
+  v_already := coalesce(v_already, false);
 
   update public.support_ticket_contacts
      set customer_name = null, customer_phone = null, customer_email = null,
@@ -331,10 +347,12 @@ begin
    where ticket_id = v_t.id and sender_type = 'CUSTOMER' and redacted_at is null;
   get diagnostics v_count = row_count;
 
-  perform public.write_audit(v_t.tenant_id, 'TICKET_DATA_REDACTED', 'support_tickets', v_t.id::text, null,
-                             jsonb_build_object('ticket_id', v_t.id, 'had_email', v_had_email,
-                                                'messages_redacted', v_count),
-                             p_idempotency_key);
+  if not (v_already and v_count = 0) then
+    perform public.write_audit(v_t.tenant_id, 'TICKET_DATA_REDACTED', 'support_tickets', v_t.id::text, null,
+                               jsonb_build_object('ticket_id', v_t.id, 'had_email', v_had_email,
+                                                  'messages_redacted', v_count),
+                               p_idempotency_key);
+  end if;
 
   return public.idempotency_complete(p_idempotency_key, jsonb_build_object(
     'ticket_id', v_t.id, 'status', v_t.status, 'priority', v_t.priority, 'assigned_to', v_t.assigned_to));

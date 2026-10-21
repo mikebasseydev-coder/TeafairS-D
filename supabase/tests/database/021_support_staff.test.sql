@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(46);
+select plan(58);
 
 -- ── fixtures: TEAFAIR with Ikeja (TM_A) and Epe (TM_B), a ZSM, a DSA, a ──────
 -- non-TM default agent DEF, and a second Ikeja TM (TM2)
@@ -75,6 +75,24 @@ insert into public.support_tickets (id, tenant_id, public_reference, kind, categ
   ('60000000-0000-0000-0000-000000000006', '7eaf0000-0000-4000-8000-000000000001', 'TK-AAAAA6', 'ORDER', 'PAYMENT',
    '90000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000002', 'RESOLVED', now() - interval '1 day');
+-- K7: an ORDER ticket whose accountable is the selling DSA (A2-strict: no access)
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, order_id, territory_id,
+                                    accountable_id) values
+  ('60000000-0000-0000-0000-000000000007', '7eaf0000-0000-4000-8000-000000000001', 'TK-AAAAA7', 'ORDER', 'PAYMENT',
+   '90000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001',
+   '20000000-0000-0000-0000-000000000004');
+-- pre-purchase: P3 accountable DEF but held by TM_A; P4 held by TM2 (disabled
+-- later), nobody accountable; P2 CLOSED
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, territory_id,
+                                    accountable_id, assigned_to, status) values
+  ('60000000-0000-0000-0000-000000000008', '7eaf0000-0000-4000-8000-000000000001', 'TK-AAAAP3', 'PRE_PURCHASE', 'PRODUCT',
+   '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
+   '20000000-0000-0000-0000-000000000002', 'IN_PROGRESS'),
+  ('60000000-0000-0000-0000-000000000009', '7eaf0000-0000-4000-8000-000000000001', 'TK-AAAAP4', 'PRE_PURCHASE', 'PRODUCT',
+   '40000000-0000-0000-0000-000000000001', null,
+   '20000000-0000-0000-0000-000000000006', 'IN_PROGRESS'),
+  ('60000000-0000-0000-0000-00000000000a', '7eaf0000-0000-4000-8000-000000000001', 'TK-AAAAP2', 'PRE_PURCHASE', 'PRODUCT',
+   null, null, null, 'CLOSED');
 
 -- P1: a buyer-opened pre-purchase ticket in an uncovered area, so it routes to DEF
 do $$
@@ -155,6 +173,18 @@ reset role;
 call pg_temp.as_user(4);
 select throws_ok($$select public.reply_ticket('b0000000-0000-0000-0000-000000000008', '60000000-0000-0000-0000-000000000001', 'x')$$,
   '42501', null, 'DSA refused');
+select throws_ok($$select public.claim_ticket('b2000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000007')$$,
+  '42501', null, 'the accountable DSA cannot claim on an ORDER ticket');
+select throws_ok($$select public.reply_ticket('b2000000-0000-0000-0000-000000000002', '60000000-0000-0000-0000-000000000007', 'x')$$,
+  '42501', null, 'the accountable DSA cannot reply on an ORDER ticket');
+select throws_ok($$select public.update_ticket_status('b2000000-0000-0000-0000-000000000003', '60000000-0000-0000-0000-000000000007', 'CLOSED')$$,
+  '42501', null, 'the accountable DSA cannot change status on an ORDER ticket');
+select throws_ok($$select public.set_ticket_priority('b2000000-0000-0000-0000-000000000004', '60000000-0000-0000-0000-000000000007', 'HIGH')$$,
+  '42501', null, 'the accountable DSA cannot change priority on an ORDER ticket');
+reset role;
+call pg_temp.as_user(5);
+select throws_ok($$select public.reply_ticket('b2000000-0000-0000-0000-000000000005', '60000000-0000-0000-0000-000000000008', 'x')$$,
+  '42501', null, 'the accountable default agent is locked out of a PRE_PURCHASE ticket someone else holds');
 reset role;
 call pg_temp.as_user(2);
 select is(public.reply_ticket('b0000000-0000-0000-0000-000000000009', '60000000-0000-0000-0000-000000000002',
@@ -213,6 +243,13 @@ select is((select row(t.territory_id, t.accountable_id, t.assigned_to)::text
              from public.support_tickets t where t.id = current_setting('t.p1')::uuid),
           row('40000000-0000-0000-0000-000000000001'::uuid, '20000000-0000-0000-0000-000000000002'::uuid, null::uuid)::text,
           'assign re-routes');
+select is((select t.status from public.support_tickets t where t.id = current_setting('t.p1')::uuid),
+          'OPEN', 're-routing an IN_PROGRESS ticket sets it back to OPEN');
+call pg_temp.as_user(1);
+select throws_ok($$select public.assign_ticket('b2000000-0000-0000-0000-000000000006', '60000000-0000-0000-0000-00000000000a',
+                     '40000000-0000-0000-0000-000000000001')$$,
+  'P0001', 'that ticket is closed', 'a CLOSED ticket cannot be re-routed');
+reset role;
 call pg_temp.as_user(2);
 select is((select count(*)::int from public.support_messages where ticket_id = current_setting('t.p1')::uuid),
           3, 'Ikeja TM gains access');
@@ -257,6 +294,13 @@ select is((select a.after from public.audit_logs a
             where a.operation = 'TICKET_DATA_REDACTED' and a.entity_id = current_setting('t.p1')),
           jsonb_build_object('ticket_id', current_setting('t.p1'), 'had_email', true, 'messages_redacted', 2),
           'audit summary only');
+call pg_temp.as_user(1);
+select is(public.redact_ticket_customer_data('b2000000-0000-0000-0000-000000000007', current_setting('t.p1')::uuid) ->> 'ticket_id',
+          current_setting('t.p1'), 'a second redaction still replies');
+reset role;
+select is((select count(*)::int from public.audit_logs a
+            where a.operation = 'TICKET_DATA_REDACTED' and a.entity_id = current_setting('t.p1')),
+          1, 'a second redaction with a new key writes no second audit row');
 select is((select count(*)::int from jsonb_array_elements(public.read_support_ticket(
              (select public_reference from public.support_tickets where id = current_setting('t.p1')::uuid), 's3cret') -> 'messages') e
             where e ->> 'sender' = 'you' and e ->> 'body' <> '[redacted]'),
@@ -271,6 +315,29 @@ select is((select count(*)::int from public.support_messages m
 select is((select count(*)::int from public.audit_logs a
             where (coalesce(a.before::text, '') || coalesce(a.after::text, '')) ~ 'Secret reply body|A fresh question|Do you sell|My number is'),
           0, 'no bodies in audit');
+
+-- ── inactive targets ─────────────────────────────────────────────────────
+-- P4 is held by TM2; TM2 is disabled
+update public.tenant_users set status = 'DISABLED' where id = '50000000-0000-0000-0000-000000000006';
+do $$ begin
+  perform public.support_notify_activity(t) from public.support_tickets t
+   where t.id = '60000000-0000-0000-0000-000000000009';
+end $$;
+select is((select count(*)::int from public.notifications n
+            where n.payload ->> 'ticket_id' = '60000000-0000-0000-0000-000000000009'
+              and n.user_id = '20000000-0000-0000-0000-000000000001')
+        - (select count(*)::int from public.notifications n
+            where n.payload ->> 'ticket_id' = '60000000-0000-0000-0000-000000000009'
+              and n.user_id = '20000000-0000-0000-0000-000000000006'),
+          1, 'a notification for a disabled assignee falls back to the ZSMs');
+call pg_temp.as_user(2);
+select is(public.claim_ticket('b2000000-0000-0000-0000-000000000008', '60000000-0000-0000-0000-000000000009') ->> 'assigned_to',
+          '20000000-0000-0000-0000-000000000002', 'a ticket held by a disabled TM can be claimed by the territory TM');
+reset role;
+select ok(exists(select 1 from public.audit_logs
+                  where operation = 'claim_ticket' and entity_id = '60000000-0000-0000-0000-000000000009'
+                    and before ->> 'assigned_to' = '20000000-0000-0000-0000-000000000006'),
+          'that claim is audited with the old assignee');
 
 -- ── auto-close ───────────────────────────────────────────────────────────
 select is(public.close_resolved_support_tickets(), 1, 'one RESOLVED ticket older than 7 days closes');

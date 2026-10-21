@@ -1,6 +1,7 @@
 // Addendum A3 §4 — open a support ticket. Turnstile, normalise the phone,
-// mint a secret, then open_support_ticket with only the secret's hash. The
-// secret is in the reply once and never logged.
+// derive the secret from the idempotency key, then open_support_ticket with
+// only the secret's hash. A retry with the same key gets the same secret. The
+// secret is in the reply and never logged.
 import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { publicGateway, type PublicGatewayDeps } from "../_shared/core/public-gateway.ts";
@@ -12,7 +13,8 @@ import { sha256Hex } from "../_shared/support/secret.ts";
 
 export type SupportTicketOpenDeps = PublicGatewayDeps & {
   verifyTurnstile: VerifyTurnstile;
-  newSecret: () => string;
+  // HMAC of the idempotency key under SUPPORT_TICKET_SECRET_KEY (see secret.ts)
+  secretFor: (idempotencyKey: string) => Promise<string>;
 };
 
 const schema = z.object({
@@ -41,6 +43,15 @@ function clientIp(req: Request): string | null {
 
 export function createSupportTicketOpenHandler(deps: SupportTicketOpenDeps): (req: Request) => Promise<Response> {
   return publicGateway({ method: "POST", schema }, async ({ body, rpc, req }) => {
+    // first, so a misconfigured key fails closed before Turnstile is spent
+    let secret: string;
+    try {
+      secret = await deps.secretFor(body.idempotency_key);
+    } catch (e) {
+      console.error("Ticket secret derivation failed", e);
+      throw new GatewayError(503, "RETRY", "Support is unavailable. Please try again.");
+    }
+
     let human: boolean;
     try {
       human = await deps.verifyTurnstile(body.turnstile_token, clientIp(req));
@@ -53,7 +64,6 @@ export function createSupportTicketOpenHandler(deps: SupportTicketOpenDeps): (re
     const phone = normalizePhone(body.customer.phone);
     if (!phone) throw new GatewayError(400, "VALIDATION_FAILED", "Enter a valid phone number.");
 
-    const secret = deps.newSecret();
     let opened: { public_reference: string; status: string };
     try {
       opened = await rpc("open_support_ticket", {

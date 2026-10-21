@@ -82,35 +82,57 @@ local only. **A3 deploys after D1**: it depends on D1's routing (a ticket goes
 to the territory's TM, else the zone's ZSM, else `web_default_agent_id`), and
 its triggers watch D1's tables to raise system tickets from payment exceptions.
 
-- **Public gateways** (`publicGateway`, service-role RPCs): `support-ticket-open`
-  (Turnstile, then `open_support_ticket`; the reply carries a one-time secret,
-  only its hash is stored), `support-ticket-read` (`read_support_ticket`) and
+- **Public gateways** (`publicGateway`, service-role RPCs):
+  `support-ticket-open` (Turnstile, then `open_support_ticket`; only the
+  secret's hash is stored), `support-ticket-read` (`read_support_ticket`) and
   `support-ticket-message` (`add_ticket_message`). The pair
   `(public_reference, secret)` is the buyer's capability; any miss is 404.
   A closed conversation or a throttled buyer gets 422 with the database copy.
-  `support-ticket-open` needs `TURNSTILE_SECRET_KEY` (the same secret as
-  `web-checkout`; locally with `TURNSTILE_VERIFY_URL` pointing at the fake) and
-  `WEB_ALLOWED_ORIGINS`.
+  All three need `verify_jwt = false`, already set in `config.toml`.
+- **The ticket secret** is HMAC-SHA256(`SUPPORT_TICKET_SECRET_KEY`,
+  idempotency key), base64url, so a retried open returns the same secret as
+  the lost first reply. `support-ticket-open` needs `SUPPORT_TICKET_SECRET_KEY`
+  (32+ random bytes, base64url), `TURNSTILE_SECRET_KEY` (the same secret as
+  `web-checkout`; locally with `TURNSTILE_VERIFY_URL` pointing at the fake)
+  and `WEB_ALLOWED_ORIGINS`. Without a usable key every open is 503. **Set
+  `SUPPORT_TICKET_SECRET_KEY` as a remote Edge Function secret before
+  deploying the open gateway.** Rotating it only breaks replays of opens
+  still in flight; existing tickets keep their stored hashes.
 - **Staff RPCs** (through PostgREST, `authenticated`): `claim_ticket`,
   `reply_ticket`, `update_ticket_status`, `set_ticket_priority`, and the
-  ZSM-only `assign_ticket` (pre-purchase tickets) and
-  `redact_ticket_customer_data`. `close_resolved_support_tickets` is the cron
-  sweep. System tickets come from `raise_system_ticket`, called by triggers on
-  D1's disputed commissions and payment exceptions.
+  ZSM-only `assign_ticket` (pre-purchase tickets that are not CLOSED; an
+  IN_PROGRESS ticket goes back to OPEN) and `redact_ticket_customer_data`
+  (repeating it with nothing new to redact writes no audit row).
+  `close_resolved_support_tickets` is the cron sweep: pure SQL, so it needs
+  no Vault secret. System tickets come from `raise_system_ticket`, called by
+  triggers on D1's disputed commissions and payment exceptions; they do not
+  count toward a buyer's three open tickets per order.
+- **Ticket headers are visible to every tenant member**, and so are their
+  Realtime events. They carry structure only, no personal data.
 - **Handler RLS rule.** The tables are `SELECT`-only. Contacts and messages
-  are readable by a ZSM of the tenant, the TM of the ticket's territory, and
-  the ticket's accountable or assigned person (`my_support_ticket_ids()` for
-  contacts; messages use the history helper below). Buyer contact details stay
-  with each ticket's own handlers.
+  are readable by a ZSM of the tenant, the TM of the ticket's territory, and,
+  on PRE_PURCHASE and SYSTEM tickets only, the ticket's accountable or
+  assigned person (`my_support_ticket_ids()` for contacts; messages use the
+  history helper below). Buyer contact details stay with each ticket's own
+  handlers.
+- **ORDER tickets follow A2** (user decision 2026-10-21): only the ZSM and the
+  territory TM read or act on them. The order's selling agent stays
+  `accountable_id` and gets the notification (`{ticket_id,
+  public_reference}` only), but cannot read contacts or messages, claim,
+  reply, or change status or priority.
 - **Claimed tickets are locked.** Once `assigned_to` is set, only the assignee
   or a ZSM can claim, reply, change status or change priority. Everyone else
-  gets 42501. A TM's reply claims the ticket.
+  gets 42501. Any permitted replier claims an unassigned ticket. The hold
+  lapses when the assignee is no longer an ACTIVE member: the ticket is then
+  treated as unassigned, and a permitted claim takes it (audited with
+  `before.assigned_to`). Notifications likewise skip an inactive assignee or
+  accountable person and fall back to every ZSM.
 - **Repeat system facts.** A repeat on a RESOLVED system ticket reopens it. A
   repeat on a CLOSED one opens a new SYSTEM ticket whose `previous_ticket_id`
   points at the closed one. `system_key` is unique only among non-CLOSED
   tickets (partial index `support_tickets_open_system_key`).
-- **Linked buyer tickets.** A buyer ORDER ticket links to the most recent CLOSED
-  ORDER ticket on the same order.
+- **Linked buyer tickets.** A buyer ORDER ticket links to the most recent
+  CLOSED ORDER ticket on the same order.
 - **Linked history.** Handlers read linked history through
   `my_support_history_ticket_ids()`, which covers the whole chain and gives
   messages only. Contacts stay with each ticket's own handlers through
@@ -217,9 +239,9 @@ one responsibility per file. Third-party versions appear only in
   `claim_unconfirmed_payments(50)`, which stamps `last_swept_at` on every row
   it hands out, so a row whose Verify fails still moves to the back. Paystack
   GETs time out after 15 s; `pg_net` waits up to 120 s for a cron call.
-- **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1; `support-ticket-open`,
-  `support-ticket-read`, `support-ticket-message`; addendum A3;
-  `storefront-locations`, `web-order-status`; Spec D1) use
+- **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1;
+  `support-ticket-open`, `support-ticket-read`, `support-ticket-message`;
+  addendum A3; `storefront-locations`, `web-order-status`; Spec D1) use
   `publicGateway(route, handle, deps)` from `_shared/core/public-gateway.ts`.
   Callers are anonymous, so their RPCs are granted to `service_role` only and
   resolve the tenant from the agent code, or TEAFAIR when there is none
@@ -240,10 +262,11 @@ deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
 **Secrets:** copy `supabase/.env.example` and
 `supabase/functions/.env.example`; `AUTH_HOOK_SECRET` must match in both. Set
 `SMS_PROVIDER=log` locally, and `kudisms` (with `KUDISMS_TOKEN` and
-`KUDISMS_SENDER_ID`) anywhere real. `web-checkout` also needs `TURNSTILE_SECRET_KEY`,
-`WEB_ALLOWED_ORIGINS` and `WEB_CHECKOUT_CALLBACK_URL` (see
-`functions/.env.example`). `reconcile-funds` and `fintech-commission-release`
-need `CRON_SECRET` or they fail at boot.
+`KUDISMS_SENDER_ID`) anywhere real. `web-checkout` also needs
+`TURNSTILE_SECRET_KEY`, `WEB_ALLOWED_ORIGINS` and `WEB_CHECKOUT_CALLBACK_URL`
+(see `functions/.env.example`). `reconcile-funds` and
+`fintech-commission-release` need `CRON_SECRET` or they fail at boot.
+`support-ticket-open` needs `SUPPORT_TICKET_SECRET_KEY` (addendum A3, above).
 
 The integration test runs its own fake Paystack (Initialize, Verify, List
 Refunds, Fetch Subaccount, List Settlements, Settlement Transactions) and

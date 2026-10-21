@@ -51,6 +51,8 @@ These were decided in conversation on 2026-10-21.
    into chat, so message bodies get the same protection as contacts. Other
    tenant members can see that a ticket exists, its status and its order,
    not what was said.
+   ORDER tickets follow A2: handler access via accountable/assigned applies
+   to PRE_PURCHASE and SYSTEM tickets only (user decision 2026-10-21).
 5. **Redaction on request.** A ZSM-only RPC blanks a ticket's contact record
    **and replaces every buyer (`CUSTOMER`) message body with `[redacted]`**,
    keeping staff replies, SYSTEM messages and the ticket's structure. It
@@ -192,12 +194,14 @@ paystack_reference }, location?: { lga_id } }`.
   about it. Kind `ORDER`.
 - **`location`** is a pre-purchase ticket. Kind `PRE_PURCHASE`, tenant
   `web_codeless_tenant()`.
-- The gateway generates the secret (32 random bytes, base64url) and passes
-  only its sha256 to the RPC. The reply is
+- The gateway derives the secret as HMAC-SHA256(`SUPPORT_TICKET_SECRET_KEY`,
+  idempotency key), base64url (43 characters), and passes only its sha256 to
+  the RPC. The reply is
   `{ public_reference, secret, status }`; the secret is shown once and never
   stored in plain text.
 - Throttle: at most 3 tickets per phone per hour, and at most 3 open
-  (`OPEN` or `IN_PROGRESS`) tickets per order. Throttles count existing rows
+  (`OPEN` or `IN_PROGRESS`) buyer (`ORDER`) tickets per order; SYSTEM tickets
+  do not count. Throttles count existing rows
   (contacts by phone and `created_at`, tickets by order and status), checked
   after the idempotency replay so a replay never counts. A redacted ticket no
   longer counts toward its phone's limit; that is accepted.
@@ -205,9 +209,9 @@ paystack_reference }, location?: { lga_id } }`.
 
 RPC `open_support_ticket(p_idempotency_key, p_kind, p_category, p_message,
 p_customer, p_order_public_reference?, p_order_paystack_reference?, p_lga_id?,
-p_secret_hash)` — `service_role` only. The idempotency hash excludes the
-secret hash (a retry generates a new secret; the replay returns the first
-reply, and the first secret is what the buyer kept).
+p_secret_hash)` — `service_role` only. The secret is deterministic per
+idempotency key, so a retry (say, after a lost reply) re-derives the same
+secret and the replayed reply still pairs with the stored hash.
 
 ### 4.2 `support-ticket-read` — `POST`
 
@@ -249,7 +253,8 @@ ZSM. Payload `{ ticket_id, public_reference }` — no message text.
 
 Standard write contract. Who may act: the tenant's ZSMs on any ticket; a TM
 on tickets whose `territory_id` is theirs; and the ticket's `accountable_id`
-or `assigned_to` (decision 4) for claim, reply, status and priority. Assign
+or `assigned_to` (decision 4; PRE_PURCHASE and SYSTEM tickets only) for
+claim, reply, status and priority. Assign
 and redact stay ZSM-only. Anyone else is `42501`.
 
 | RPC | Does |

@@ -122,10 +122,12 @@ create index idx_support_messages_territory on public.support_messages (tenant_i
 create index idx_support_messages_sender_id on public.support_messages (sender_id);
 
 -- ── handler lookup (Spec A §9: a helper, never a per-row subquery) ──────
--- Tickets the caller is accountable for or assigned to, while they remain an
--- ACTIVE member of the ticket's tenant. Lets a non-TM fallback handler read
--- the ticket routed to them. Gates contacts and messages; read-only, no RPC
--- uses it for write access.
+-- PRE_PURCHASE and SYSTEM tickets the caller is accountable for or assigned
+-- to, while they remain an ACTIVE member of the ticket's tenant. Lets a non-TM
+-- fallback handler read the ticket routed to them. Gates contacts and
+-- messages; read-only, no RPC uses it for write access. ORDER tickets follow
+-- A2 (user decision 2026-10-21): only the ZSM and the territory TM read them,
+-- through their own policy paths, never the order's selling agent.
 create or replace function public.my_support_ticket_ids()
 returns setof uuid
 language sql
@@ -135,7 +137,8 @@ set search_path = public, pg_temp
 as $$
   select t.id
     from public.support_tickets t
-   where (t.accountable_id = (select auth.uid()) or t.assigned_to = (select auth.uid()))
+   where t.kind <> 'ORDER'
+     and (t.accountable_id = (select auth.uid()) or t.assigned_to = (select auth.uid()))
      and exists (select 1 from public.tenant_users tu
                   where tu.tenant_id = t.tenant_id
                     and tu.profile_id = (select auth.uid())
@@ -149,6 +152,8 @@ grant execute on function public.my_support_ticket_ids() to authenticated;
 -- my_support_ticket_ids); the composite FK keeps every link in one tenant;
 -- UNION dedupes, so a cycle terminates. Widens MESSAGES only: earlier
 -- tickets' contacts stay with their own handlers (A2 contact privacy).
+-- ORDER chains never root here: linked ORDER tickets share an order, so the
+-- territory TM and the ZSM already read them through their own paths.
 create or replace function public.my_support_history_ticket_ids()
 returns setof uuid
 language sql

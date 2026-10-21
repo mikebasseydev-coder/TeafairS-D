@@ -51,18 +51,25 @@ as $$
 $$;
 
 -- ── support_notify_activity ─────────────────────────────────────────────
--- Tell whoever holds the ticket: assigned_to, else accountable_id, else every
--- ZSM of the tenant. No message text, ever.
+-- Tell whoever holds the ticket: assigned_to, else accountable_id, each only
+-- while an ACTIVE member of the ticket's tenant, else every ZSM of the tenant.
+-- No message text, ever.
 create or replace function public.support_notify_activity(p_ticket public.support_tickets)
 returns void
 language plpgsql
 set search_path = public, pg_temp
 as $$
 declare
-  v_to      uuid := coalesce(p_ticket.assigned_to, p_ticket.accountable_id);
+  v_to      uuid;
   v_payload jsonb := jsonb_build_object('ticket_id', p_ticket.id, 'public_reference', p_ticket.public_reference);
   v_body    text := 'Ticket ' || p_ticket.public_reference || ' needs a reply.';
 begin
+  select c.profile_id into v_to
+    from (values (1, p_ticket.assigned_to), (2, p_ticket.accountable_id)) as c (rank, profile_id)
+    join public.tenant_users tu on tu.tenant_id = p_ticket.tenant_id and tu.profile_id = c.profile_id
+                               and tu.status = 'ACTIVE'
+   order by c.rank
+   limit 1;
   if v_to is not null then
     insert into public.notifications (tenant_id, user_id, kind, title, body, payload)
     values (p_ticket.tenant_id, v_to, 'SUPPORT_TICKET_ACTIVITY', 'New support message', v_body, v_payload);
@@ -191,6 +198,7 @@ begin
        where c.customer_phone = v_phone and c.created_at > now() - interval '1 hour') >= 3
      or (v_order.id is not null and (select count(*) from public.support_tickets t
                                       where t.tenant_id = v_tenant and t.order_id = v_order.id
+                                        and t.kind = 'ORDER'
                                         and t.status in ('OPEN', 'IN_PROGRESS')) >= 3) then
     raise exception 'Too many messages. Please wait a few minutes.' using errcode = 'P0001';
   end if;

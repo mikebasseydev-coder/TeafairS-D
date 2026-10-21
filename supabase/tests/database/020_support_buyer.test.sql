@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(44);
+select plan(45);
 
 -- ── fixtures: TEAFAIR with Ikeja, TM, ZSM, a default agent, one routed order ──
 insert into auth.users (id, phone) values
@@ -145,6 +145,15 @@ select lives_ok($$select pg_temp.op(24, 'ORDER', '+2348044444441', 'TF-AAAAAA',
 select throws_ok($$select pg_temp.op(25, 'ORDER', '+2348044444442', 'TF-AAAAAA',
                      'TFW-00000000-0000-0000-0000-00000000000a', null)$$,
   'P0001', 'Too many messages. Please wait a few minutes.', 'order throttle');
+-- TF-AAAAAB has one open buyer ticket (key 4); three live SYSTEM tickets on it
+-- do not use up the buyer's per-order limit
+insert into public.support_tickets (tenant_id, public_reference, kind, category, order_id, system_key) values
+  ('7eaf0000-0000-4000-8000-000000000001', 'TK-SYSAA1', 'SYSTEM', 'SYSTEM', '90000000-0000-0000-0000-000000000002', 'TEST:S1'),
+  ('7eaf0000-0000-4000-8000-000000000001', 'TK-SYSAA2', 'SYSTEM', 'SYSTEM', '90000000-0000-0000-0000-000000000002', 'TEST:S2'),
+  ('7eaf0000-0000-4000-8000-000000000001', 'TK-SYSAA3', 'SYSTEM', 'SYSTEM', '90000000-0000-0000-0000-000000000002', 'TEST:S3');
+select lives_ok($$select pg_temp.op(26, 'ORDER', '+2348044444443', 'TF-AAAAAB',
+                    'TFW-00000000-0000-0000-0000-00000000000b', null)$$,
+  'SYSTEM tickets on an order don''t count toward the buyer''s limit');
 
 -- ── audit and notification privacy ──────────────────────────────────────
 select ok((select not (a.after ? 'message') and a.after::text !~ '2348011111111' and a.after::text !~ 'Hello there'
@@ -180,11 +189,16 @@ select is(public.read_support_ticket((select public_reference from t1), 's3cret'
           'TF-AAAAAA', 'order reference included');
 
 -- ── post ────────────────────────────────────────────────────────────────
+do $$ begin
+  perform set_config('t.last_message_at',
+                     (select t.last_message_at::text from public.support_tickets t where t.id = (select id from t1)), false);
+end $$;
 select is(public.add_ticket_message(pg_temp.k(30), (select public_reference from t1), 's3cret', 'More info') ->> 'status',
           'OPEN', 'buyer posts');
 select throws_ok($$select public.add_ticket_message(pg_temp.k(31), (select public_reference from t1), 'wrong', 'x')$$,
   'P0001', 'NOT_FOUND', 'wrong secret refused');
-select ok((select t.last_message_at > t.created_at from public.support_tickets t where t.id = (select id from t1)),
+select ok((select t.last_message_at > current_setting('t.last_message_at')::timestamptz
+             from public.support_tickets t where t.id = (select id from t1)),
   'queue bumped');
 update public.support_tickets set status = 'RESOLVED', resolved_at = now() where id = (select id from t1);
 select is(public.add_ticket_message(pg_temp.k(32), (select public_reference from t1), 's3cret', 'Still broken') ->> 'status',
