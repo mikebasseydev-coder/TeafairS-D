@@ -40,7 +40,7 @@ These were checked against Paystack's API reference (docs-v2.paystack.com API pa
 
 The hand-off reports these to the user.
 
-1. **`reversed` from Verify on a payment that is still `INITIATED`/`PROCESSING`.** The gateway first settles it as `success` (Paystack only reverses a charge that succeeded), then applies the full reversal. The spec says "instead". Taken literally, that leaves the payment unconfirmed forever and blocks the sweep.
+1. **`reversed` from Verify on a payment that is still `INITIATED`/`PROCESSING` (or `FAILED`).** The gateway calls only `apply_paystack_refund` (refund id `'reversal:' || reference`, reason `REVERSAL`, the verified amount and currency). In one transaction it moves the payment straight to `REFUNDED`, audited with the prior status, and takes the key; the order stays `PENDING`, is never marked `PAID`, and no `WEB_ORDER_PAID` notification is sent. The amount must equal the payment amount, else `REFUND_CONFLICT` (`amount_mismatch`). (Final review: the earlier settle-then-refund was two transactions and told the warehouse to ship a reversed order.)
 2. **Refund conflicts while the payment is not yet `SUCCESS`** (refund webhook before the charge settles) do **not** take the at-most-once key. The daily refund pass then re-applies the refund once the charge has settled. Every other outcome takes the key.
 3. **The sweep skips payments it has already decided.** `list_unconfirmed_payments` excludes any payment whose `(sweep, reference)` key is `COMPLETED` (for example a mismatch). Otherwise, fifty such rows would fill every batch.
 4. **No split when the partner's share would be 0 or the whole total** (`commission_bps` 0, or 10000, or a total too small). `web_price_cart` returns `split: null`, so the `payments_split_*` constraints can never make checkout fail with a 500.
@@ -54,7 +54,7 @@ The hand-off reports these to the user.
 2. **Sweep starvation.** Fifty `mismatch` payments must not stop newer payments from being swept (Task 5, `list_unconfirmed_payments` excludes decided rows).
 3. **A refund that arrives before its charge settles.** The refund must still land later (Task 6, conflict-then-retry test).
 4. **A bad `lga_id`.** An unknown uuid, or an LGA from a state with no coverage, must give the clean `P0001` refusal, never an FK 500 (Task 3, Task 4).
-5. **A `reversed` status from the sweep on an unconfirmed payment.** The payment must end `REFUNDED` and drop out of the sweep (Task 10, `settleVerified` reversed branch).
+5. **A `reversed` status from the sweep on an unconfirmed payment.** One `apply_paystack_refund` call: the payment ends `REFUNDED` and drops out of the sweep, the order stays `PENDING` (never `PAID`) and no `WEB_ORDER_PAID` notification is sent (Task 10, `settleVerified` reversed branch; `017` reversal tests).
 
 ---
 

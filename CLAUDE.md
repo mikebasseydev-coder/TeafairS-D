@@ -29,7 +29,7 @@ integrations. Its implementation runs in four phases (§14).
 
 | Path | Status |
 |---|---|
-| `supabase/` | **Phases 1–3 done**: 37 migrations, 703 pgTAP assertions, 10 Edge Functions; addenda A1 (web storefront) and A2 (buyer contact privacy) and Spec D1 (web money loop) done locally. See `supabase/CLAUDE.md` |
+| `supabase/` | **Phases 1–3 done**: 37 migrations, 718 pgTAP assertions, 10 Edge Functions; addenda A1 (web storefront) and A2 (buyer contact privacy) pushed to the remote on 2026-10-15; Spec D1 (web money loop) done locally. See `supabase/CLAUDE.md` |
 | `docs/superpowers/specs/2026-10-05-…` | Spec A — the authority |
 | `docs/superpowers/specs/2026-10-15-web-…` | Addendum A1 to Spec A — web storefront, agent codes, terminal venues |
 | `docs/superpowers/specs/2026-10-15-buyer-…` | Addendum A2 to Spec A — buyer contact privacy |
@@ -87,6 +87,8 @@ supabase migration up   # apply only new migrations
 supabase test db        # run all pgTAP tests — look for "Result: PASS"
 ```
 
-Linked to remote project `vwmjyfjdwrohfizljxrq`; all 20 migrations and the
-four Edge Functions are deployed there (2026-10-08). See `supabase/CLAUDE.md`
-for the remote secrets. Nothing else is pushed until explicitly asked.
+Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
+(GitHub `main` at `42dd15b`), it has the 29 migrations through A1 and A2 and
+six Edge Functions; Spec D1 is not deployed. See `supabase/CLAUDE.md` for the
+remote secrets and the D1 deploy steps. Nothing else is pushed until
+explicitly asked.

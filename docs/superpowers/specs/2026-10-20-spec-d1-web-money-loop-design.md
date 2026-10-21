@@ -243,7 +243,7 @@ applies to codeless orders unchanged.
 |---|---|
 | `settle_paystack_payment(…)` | `process-payment`, `reconcile-funds` (§6) |
 | `record_stale_paystack_webhook(…)` | `process-payment` (unchanged) |
-| `list_unconfirmed_payments(p_limit)` | `reconcile-funds` (§7) |
+| `claim_unconfirmed_payments(p_limit)` | `reconcile-funds` (§7) |
 | `apply_paystack_refund(…)` | `process-payment`, `reconcile-funds` (§9) |
 | `list_unsettled_subaccounts()` | `fintech-commission-release` (§8) |
 | `release_commission(…)`, `expire_unsettled_commissions()` | `fintech-commission-release` (§8) |
@@ -268,14 +268,17 @@ settle_paystack_payment(p_event, p_reference, p_status, p_amount_minor,
 | Verified status | Payment younger than 2 h | 2 h – 72 h | Older than 72 h |
 |---|---|---|---|
 | `success` | `SUCCESS` | `SUCCESS` | `SUCCESS` |
-| `failed` | `FAILED` | `FAILED` | `FAILED` |
+| `failed` | not final | `FAILED` | `FAILED` |
 | `abandoned` | not final | `FAILED` | `FAILED` |
 | `ongoing`, `pending`, `processing`, `queued` | not final | not final | `FAILED`, audit `SWEEP_EXPIRED` |
 | `reversed` | the gateway calls `apply_paystack_refund` as a full reversal instead (§9) | | |
 
 Paystack reports an initialised-but-unpaid transaction as `abandoned`; the
 current code makes that `FAILED` at once, which would fail a buyer still on
-the payment page when the sweep runs. The two-hour hold fixes it. A non-final
+the payment page when the sweep runs. The two-hour hold fixes it. `failed`
+gets the same hold because Paystack Checkout lets a buyer retry a declined
+payment on the same reference: a payment already marked `FAILED` whose later
+`charge.success` webhook is lost would never record the money. A non-final
 result returns before the idempotency key is taken, so the next sweep retries.
 
 ### 6.2 On `SUCCESS`, in one transaction
@@ -316,9 +319,10 @@ On `FAILED` the order stays `PENDING`; cancelling it is Spec C.
 A system gateway (Spec A §3.4), run by `pg_cron`.
 
 **Every 5 minutes — the confirmation sweep.**
-`list_unconfirmed_payments(50)` returns `INITIATED`/`PROCESSING` payments
-older than 5 minutes, oldest first (the existing `idx_payments_unconfirmed`
-serves it). For each: Verify, then `settle_paystack_payment(p_event =>
+`claim_unconfirmed_payments(50)` returns `INITIATED`/`PROCESSING` payments
+older than 5 minutes, least recently checked first (`idx_payments_unconfirmed`
+serves it), and stamps `last_swept_at` on each one it returns, so a payment
+whose Verify fails cannot hold the head of the queue. For each: Verify, then `settle_paystack_payment(p_event =>
 'sweep', …)`. One payment's error is logged and does not stop the batch. A
 webhook and a sweep racing on one reference serialise on the payment row; the
 second sees `unchanged`.
@@ -367,7 +371,8 @@ This changes A1's request contract. No client consumes it yet.
 
 ### 8.3 `storefront-locations` (new, public)
 
-`POST { code? }`. Returns the 37 states, each with its LGAs, and for each LGA
+`GET ?code=` (code optional; GET because CDNs do not cache POST responses,
+so the hour's cache would be inert). Returns the 37 states, each with its LGAs, and for each LGA
 `deliverable: boolean` — true when §4 would route it for the resolved tenant.
 No territory, warehouse or person is named. `Cache-Control: public,
 max-age=3600`. The website greys out undeliverable LGAs.
@@ -410,6 +415,8 @@ p_amount_minor, p_currency, p_reason, p_verified)`** — at most once per
 | refunded amount = payment amount, payment `SUCCESS` | payment → `REFUNDED`; order → `REFUNDED` from `PAID`, `IN_TRANSIT` or `DELIVERED`; audit reason `REFUND` or `REVERSAL` |
 | refunded amount < payment amount | no status change; audit `PARTIAL_REFUND` with the amount; ZSMs notified |
 | payment not `SUCCESS`, unknown reference, currency mismatch | audit `REFUND_CONFLICT`; nothing changes |
+
+A reversal on a payment not yet confirmed moves it straight to REFUNDED; the order is not marked PAID.
 
 A commission row in `SPLIT` or `SETTLED` on a fully refunded payment →
 `DISPUTED`, `ORDER_REFUNDED`; ZSMs notified. Paystack does not claw the share

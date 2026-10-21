@@ -16,31 +16,62 @@ the authority; this file is the working summary.
 | D1. Web money loop — routing, settlement, sweeps, refunds, commission release | done (local) |
 | 4. Client offline queue | needs Spec B |
 
-Linked to remote project `vwmjyfjdwrohfizljxrq` (2026-10-08): all 20
-migrations applied and all four Edge Functions deployed. Remote secrets must
-use the names the code reads (see `functions/.env.example`): `otp-issue`
-needs `SMS_PROVIDER` (+ `KUDISMS_TOKEN`, `KUDISMS_SENDER_ID` for `kudisms`)
-and `auth-verify-claims` needs `AUTH_HOOK_SECRET`, or they fail at boot.
-Never `supabase config push`: the hook URI in `config.toml` is local-only.
-The nine addendum A1 and A2 migrations and the `storefront-catalogue` /
-`web-checkout` functions are local only until explicitly pushed. **A1 never
-deploys without A2**: A1 alone exposes buyer contact details to every tenant
-member, and audit rows cannot be scrubbed afterwards.
+Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
+(GitHub `main` at `42dd15b`), the remote has the 29 migrations up to
+`20261015130200` (Spec A plus addenda A1 and A2) and six Edge Functions:
+`auth-verify-claims`, `otp-issue`, `otp-verify`, `process-payment`,
+`storefront-catalogue` and `web-checkout`. Remote secrets must use the names
+the code reads (see `functions/.env.example`): `otp-issue` needs
+`SMS_PROVIDER` (+ `KUDISMS_TOKEN`, `KUDISMS_SENDER_ID` for `kudisms`) and
+`auth-verify-claims` needs `AUTH_HOOK_SECRET`, or they fail at boot. Never
+`supabase config push`: the hook URI in `config.toml` is local-only. **A1
+never deploys without A2**: A1 alone exposes buyer contact details to every
+tenant member, and audit rows cannot be scrubbed afterwards.
+
+### Deploying Spec D1
+
 The eight Spec D1 migrations (`20261020120000`–`20261020130300`) and the
 functions `reconcile-funds`, `fintech-commission-release`,
 `storefront-locations` and `web-order-status` (plus the changed
 `process-payment`, `storefront-catalogue` and `web-checkout`) are local only.
-**D1 never deploys without A1 and A2.**
-**D1's migrations and functions deploy together.** The D1 settlement and
-storefront migrations drop RPC signatures that the deployed `process-payment`
-and `web-checkout` call, so never push them without the matching functions,
-and never push D1 without A1 and A2. Before pushing, count ONLINE orders that
-are not PENDING and lack routing on the remote (the legacy cancel only covers
-PENDING). Before D1 the routing columns do not exist, so every such order
-lacks routing, and any count above zero makes the `orders_online_routed`
-constraint fail the push:
-`select count(*) from public.orders where channel = 'ONLINE' and status not in ('PENDING', 'CANCELLED');`
-Nothing is pushed until explicitly asked.
+**D1 never deploys without A1 and A2.** Nothing is pushed until explicitly
+asked.
+
+**Pre-push checks** (run on the remote first):
+
+1. ONLINE orders that are not PENDING. The legacy cancel only covers PENDING,
+   and before D1 the routing columns do not exist, so every such order lacks
+   routing and any count above zero makes the `orders_online_routed`
+   constraint fail the push:
+   `select count(*) from public.orders where channel = 'ONLINE' and status not in ('PENDING', 'CANCELLED');`
+2. Web orders already paid under A1 (v1) but still PENDING. The legacy cancel
+   will cancel them even though the money was taken, so each needs a decision
+   (ship, or refund in Paystack) before the push:
+   `select count(*) from public.payments p join public.orders o on o.tenant_id = p.tenant_id and o.id = p.order_id where p.payment_status = 'SUCCESS' and o.channel = 'ONLINE' and o.status = 'PENDING';`
+
+**Order.** Push the D1 migrations, then deploy the D1 functions immediately.
+The D1 settlement and storefront migrations drop RPC signatures that the
+deployed `process-payment` and `web-checkout` call, so checkout and webhooks
+fail in between. Paystack retries webhooks, so a gap of a few minutes is
+acceptable; a long one is not. Then create the Vault secrets (Cron jobs,
+below).
+
+**Post-deploy setup.** D1 routes every web order (§4). A coded link that works
+under A1 refuses with "We don't deliver to this area yet." until its territory
+has a `web_fulfilment_warehouse_id` (its own REGIONAL warehouse) or the tenant
+has a CENTRAL `web_default_warehouse_id`. Codeless sales go to TEAFAIR and
+need its coverage (state or LGA → territory), a warehouse, and an accountable
+person: the territory's TM (else the zone's ZSM, else `web_default_agent_id`).
+A ZSM of each tenant sets these with:
+
+- `set_territory_web_warehouse(p_idempotency_key, p_territory_id, p_warehouse_id)`
+- `set_web_defaults(p_idempotency_key, p_warehouse_id, p_agent_id)` (CENTRAL warehouse)
+- `set_territory_coverage(p_idempotency_key, p_state_code, p_lga_id, p_territory_id)`
+  (`p_lga_id` null covers the whole state)
+
+Until Spec B exists there is no client: call them through PostgREST
+(`POST /rest/v1/rpc/<name>`) with a ZSM's JWT whose active tenant is the one
+being set up.
 
 ## Layout
 
@@ -139,7 +170,10 @@ one responsibility per file. Third-party versions appear only in
   `refund.processed`) by signature; the cron-invoked `reconcile-funds`
   (`{mode: "sweep" | "refunds"}`) and `fintech-commission-release` (`{}`;
   Spec D1) by the `x-cron-secret` header, compared in constant time against
-  `CRON_SECRET` (`_shared/core/cron.ts`).
+  `CRON_SECRET` (`_shared/core/cron.ts`). The sweep takes its batch from
+  `claim_unconfirmed_payments(50)`, which stamps `last_swept_at` on every row
+  it hands out, so a row whose Verify fails still moves to the back. Paystack
+  GETs time out after 15 s; `pg_net` waits up to 120 s for a cron call.
 - **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1;
   `storefront-locations`, `web-order-status`; Spec D1) use
   `publicGateway(route, handle, deps)` from `_shared/core/public-gateway.ts`.
