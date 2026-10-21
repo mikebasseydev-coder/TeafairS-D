@@ -7,6 +7,7 @@
 -- ── support_lock_ticket (internal) ──────────────────────────────────────
 -- Lock the ticket and check the caller may act on it. A ticket outside the
 -- caller's tenant is "not found"; everyone else who may not act is 42501.
+-- Once claimed (assigned_to set), only the assignee and ZSMs may act.
 create or replace function public.support_lock_ticket(
   p_ticket_id uuid,
   p_me        public.tenant_users,
@@ -30,6 +31,10 @@ begin
 
   if p_me.role = 'ZSM' then
     return v_t;
+  end if;
+  -- a claimed ticket is locked to its assignee and the ZSMs
+  if v_t.assigned_to is not null and v_t.assigned_to <> p_me.profile_id then
+    raise exception 'this ticket is held by someone else' using errcode = '42501';
   end if;
   if not p_zsm_only
      and ((p_me.role = 'TM' and p_me.territory_id is not null and p_me.territory_id is not distinct from v_t.territory_id)

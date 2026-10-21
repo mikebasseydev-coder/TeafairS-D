@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(40);
+select plan(46);
 
 -- ── fixtures: TEAFAIR with Ikeja (TM_A) and Epe (TM_B), a ZSM, a DSA, a ──────
 -- non-TM default agent DEF, and a second Ikeja TM (TM2)
@@ -110,6 +110,26 @@ reset role;
 call pg_temp.as_user(6);
 select throws_ok($$select public.claim_ticket('b0000000-0000-0000-0000-000000000003', '60000000-0000-0000-0000-000000000001')$$,
   '42501', null, 'TM cannot take a held ticket');
+reset role;
+-- claimed tickets are locked to the assignee and ZSMs (Amendment 1): TM_A holds K1
+call pg_temp.as_user(6);
+select throws_ok($$select public.reply_ticket('b1000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001', 'x')$$,
+  '42501', null, 'second TM cannot reply to a claimed ticket');
+select throws_ok($$select public.update_ticket_status('b1000000-0000-0000-0000-000000000002', '60000000-0000-0000-0000-000000000001', 'RESOLVED')$$,
+  '42501', null, 'second TM cannot resolve a claimed ticket');
+select throws_ok($$select public.set_ticket_priority('b1000000-0000-0000-0000-000000000003', '60000000-0000-0000-0000-000000000001', 'HIGH')$$,
+  '42501', null, 'second TM cannot reprioritise a claimed ticket');
+select is((select count(*)::int from public.support_tickets where id = '60000000-0000-0000-0000-000000000001'),
+          1, 'second TM still sees it in the queue');
+reset role;
+call pg_temp.as_user(2);
+select is(public.reply_ticket('b1000000-0000-0000-0000-000000000004', '60000000-0000-0000-0000-000000000001',
+            'Assignee reply') ->> 'status',
+          'IN_PROGRESS', 'assignee can still reply');
+reset role;
+call pg_temp.as_user(1);
+select lives_ok($$select public.reply_ticket('b1000000-0000-0000-0000-000000000005', '60000000-0000-0000-0000-000000000001', 'ZSM reply')$$,
+  'ZSM can still write to a claimed ticket');
 reset role;
 call pg_temp.as_user(1);
 select is(public.claim_ticket('b0000000-0000-0000-0000-000000000004', '60000000-0000-0000-0000-000000000001') ->> 'assigned_to',
