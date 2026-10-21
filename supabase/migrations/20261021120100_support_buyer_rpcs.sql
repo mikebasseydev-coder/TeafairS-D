@@ -105,6 +105,7 @@ declare
   v_territory   uuid;
   v_accountable uuid;
   v_ref         text;
+  v_prev        uuid;
   v_ticket      public.support_tickets;
 begin
   v_prior := public.idempotency_begin(p_idempotency_key, 'open_support_ticket',
@@ -157,6 +158,13 @@ begin
     v_tenant := v_order.tenant_id;
     v_territory := v_order.territory_id;
     v_accountable := v_order.teafair_agent_id;
+    -- a follow-up links to the order's latest CLOSED ticket; its handler reads that history
+    select t.id into v_prev
+      from public.support_tickets t
+     where t.tenant_id = v_tenant and t.order_id = v_order.id
+       and t.kind = 'ORDER' and t.status = 'CLOSED'
+     order by t.created_at desc, t.id desc
+     limit 1;
   else
     if not exists (select 1 from public.ng_lgas where id = p_lga_id) then
       raise exception 'that delivery area is not valid' using errcode = 'P0001';
@@ -193,8 +201,8 @@ begin
   end loop;
 
   insert into public.support_tickets (tenant_id, public_reference, kind, category, order_id, territory_id,
-                                      accountable_id, last_message_at)
-  values (v_tenant, v_ref, p_kind, p_category, v_order.id, v_territory, v_accountable, clock_timestamp())
+                                      accountable_id, previous_ticket_id, last_message_at)
+  values (v_tenant, v_ref, p_kind, p_category, v_order.id, v_territory, v_accountable, v_prev, clock_timestamp())
   returning * into v_ticket;
 
   insert into public.support_ticket_secrets (ticket_id, tenant_id, secret_hash)

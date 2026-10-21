@@ -8,8 +8,11 @@
 -- from p_verified or contact data.
 
 -- ── raise_system_ticket (internal) ──────────────────────────────────────
--- At most one ticket per system_key. A repeat adds a SYSTEM message to the
--- existing ticket instead. Returns the ticket id.
+-- At most one live (non-CLOSED) ticket per system_key. A repeat adds a
+-- SYSTEM message to the live ticket and reopens it if RESOLVED. Once the
+-- ticket is CLOSED, a repeat opens a new ticket that links to it
+-- (previous_ticket_id), so its handler can read the earlier history.
+-- Returns the ticket id.
 create or replace function public.raise_system_ticket(
   p_system_key text,
   p_order_id   uuid,
@@ -24,6 +27,8 @@ as $$
 declare
   v_order  public.orders;
   v_id     uuid;
+  v_prev   uuid;
+  v_new    boolean := false;
   v_ref    text;
   v_now    timestamptz := clock_timestamp();
 begin
@@ -32,22 +37,44 @@ begin
     raise exception 'raise_system_ticket: unknown order %', p_order_id using errcode = 'P0001';
   end if;
 
-  loop
-    v_ref := public.new_crockford_reference('TK');
-    exit when not exists (select 1 from public.support_tickets where public_reference = v_ref);
-  end loop;
-
-  insert into public.support_tickets (tenant_id, public_reference, kind, category, order_id, territory_id,
-                                      accountable_id, priority, system_key, last_message_at)
-  values (v_order.tenant_id, v_ref, 'SYSTEM', 'SYSTEM', v_order.id, v_order.territory_id,
-          null, p_priority, p_system_key, v_now)
-  on conflict (system_key) do nothing
-  returning id into v_id;
+  select id into v_id from public.support_tickets
+   where system_key = p_system_key and status <> 'CLOSED'
+     for update;
 
   if v_id is null then
-    -- already raised: the new fact joins the existing thread
-    select id into v_id from public.support_tickets where system_key = p_system_key;
-    update public.support_tickets set last_message_at = v_now where id = v_id;
+    select id into v_prev from public.support_tickets
+     where system_key = p_system_key and status = 'CLOSED'
+     order by created_at desc, id desc
+     limit 1;
+
+    loop
+      v_ref := public.new_crockford_reference('TK');
+      exit when not exists (select 1 from public.support_tickets where public_reference = v_ref);
+    end loop;
+
+    insert into public.support_tickets (tenant_id, public_reference, kind, category, order_id, territory_id,
+                                        accountable_id, priority, system_key, previous_ticket_id, last_message_at)
+    values (v_order.tenant_id, v_ref, 'SYSTEM', 'SYSTEM', v_order.id, v_order.territory_id,
+            null, p_priority, p_system_key, v_prev, v_now)
+    on conflict (system_key) where status <> 'CLOSED' do nothing
+    returning id into v_id;
+    v_new := v_id is not null;
+
+    if v_id is null then
+      -- a concurrent raise won the insert: join its thread
+      select id into v_id from public.support_tickets
+       where system_key = p_system_key and status <> 'CLOSED'
+         for update;
+    end if;
+  end if;
+
+  if not v_new then
+    -- the new fact joins the live thread; a RESOLVED ticket reopens
+    update public.support_tickets
+       set last_message_at = v_now,
+           status = case when status = 'RESOLVED' then 'OPEN' else status end,
+           resolved_at = case when status = 'RESOLVED' then null else resolved_at end
+     where id = v_id;
   end if;
 
   insert into public.support_messages (tenant_id, ticket_id, sender_type, territory_id, body, created_at)

@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(52);
+select plan(56);
 
 
 
@@ -207,6 +207,33 @@ select is((select m.body from public.support_messages m join public.support_tick
             where t.system_key = 'COMMISSION_DISPUTED:' || pg_temp.cid(16) order by m.created_at desc, m.id limit 1),
   'Commission ' || pg_temp.cid(16) || ' disputed (NOT_SETTLED): 37.50 on payment ' || pg_temp.pid(16) || '.',
   'the later reason is in the second message');
+
+-- ── a repeat reopens a RESOLVED ticket; a CLOSED one is replaced ───────
+-- the split-mismatch dispute on commission 4 recurs (status flips back)
+create function pg_temp.redispute(p_n integer) returns void language sql as $$
+  update public.commission_records set status = 'SPLIT', dispute_reason = null where payment_id = pg_temp.pid(p_n)::uuid;
+  update public.commission_records set status = 'DISPUTED', dispute_reason = 'SPLIT_MISMATCH'
+   where payment_id = pg_temp.pid(p_n)::uuid;
+$$;
+update public.support_tickets set status = 'RESOLVED', resolved_at = now()
+ where system_key = 'COMMISSION_DISPUTED:' || pg_temp.cid(4);
+select pg_temp.redispute(4);
+select is((select row(t.status, t.resolved_at, pg_temp.sys_count(t.system_key))::text from public.support_tickets t
+            where t.system_key = 'COMMISSION_DISPUTED:' || pg_temp.cid(4)),
+  row('OPEN', null::timestamptz, 1)::text, 'resolved ticket reopens');
+create temp table closed_t on commit drop as
+  select t.id, (select count(*)::int from public.support_messages m
+                 where m.ticket_id = t.id and m.sender_type = 'SYSTEM') as n_sys
+    from public.support_tickets t where t.system_key = 'COMMISSION_DISPUTED:' || pg_temp.cid(4);
+update public.support_tickets set status = 'CLOSED' where id = (select id from closed_t);
+select pg_temp.redispute(4);
+select is(pg_temp.sys_count('COMMISSION_DISPUTED:' || pg_temp.cid(4)), 2, 'closed ticket -> a new ticket');
+select is((select t.previous_ticket_id from public.support_tickets t
+            where t.system_key = 'COMMISSION_DISPUTED:' || pg_temp.cid(4) and t.status <> 'CLOSED'),
+  (select id from closed_t), 'new ticket links to the closed one');
+select is((select count(*)::int from public.support_messages m
+            where m.ticket_id = (select id from closed_t) and m.sender_type = 'SYSTEM'),
+  (select n_sys from closed_t), 'closed history is not appended to');
 
 -- ── no contact data, no secret ──────────────────────────────────────────
 select ok(not exists (select 1 from public.support_messages

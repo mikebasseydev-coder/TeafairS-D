@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(29);
+select plan(35);
 
 -- users: ZSM1, TM_A, TM_B, DSA, DEF (DSM default agent), GONE (disabled DSM), ZSM2
 insert into public.tenants (id, name, code) values
@@ -130,6 +130,47 @@ reset role;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000002');
 select is((select count(*)::int from public.support_tickets), 0, 'other tenant sees nothing');
 reset role;
+
+-- linked history (amendment 2): C0 is CLOSED, unrouted, DEF not on it;
+-- K5 is DEF's follow-up and links to C0
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, territory_id, accountable_id, status) values
+  ('60000000-0000-0000-0000-000000000010', '10000000-0000-0000-0000-000000000001', 'TK-AAAAC0', 'PRE_PURCHASE', 'OTHER',
+   null, null, 'CLOSED');
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, territory_id, accountable_id,
+                                    previous_ticket_id) values
+  ('60000000-0000-0000-0000-000000000011', '10000000-0000-0000-0000-000000000001', 'TK-AAAAK5', 'PRE_PURCHASE', 'OTHER',
+   null, '20000000-0000-0000-0000-000000000005', '60000000-0000-0000-0000-000000000010');
+insert into public.support_messages (tenant_id, ticket_id, sender_type, territory_id, body) values
+  ('10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000010', 'CUSTOMER', null, 'first time'),
+  ('10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000010', 'CUSTOMER', null, 'still waiting'),
+  ('10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000011', 'CUSTOMER', null, 'back again');
+
+select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000010'),
+          2, 'handler reads the linked closed ticket');
+reset role;
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000010'),
+          0, 'others do not');
+reset role;
+update public.tenant_users set status = 'DISABLED' where id = '50000000-0000-0000-0000-000000000005';
+select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.support_messages where ticket_id = '60000000-0000-0000-0000-000000000010'),
+          0, 'disabled handler loses the history too');
+reset role;
+
+select throws_ok($$update public.support_tickets set previous_ticket_id = id
+                   where id = '60000000-0000-0000-0000-000000000011'$$, '23514', null, 'no self link');
+-- system keys: one live ticket per key, a CLOSED key is free again
+insert into public.support_tickets (tenant_id, public_reference, kind, category, system_key, status) values
+  ('10000000-0000-0000-0000-000000000001', 'TK-AAAAS1', 'SYSTEM', 'SYSTEM', 'TEST:LIVE', 'OPEN'),
+  ('10000000-0000-0000-0000-000000000001', 'TK-AAAAS2', 'SYSTEM', 'SYSTEM', 'TEST:DONE', 'CLOSED');
+select throws_ok($$insert into public.support_tickets (tenant_id, public_reference, kind, category, system_key, status)
+  values ('10000000-0000-0000-0000-000000000001', 'TK-AAAAS3', 'SYSTEM', 'SYSTEM', 'TEST:LIVE', 'IN_PROGRESS')$$,
+  '23505', null, 'one live ticket per key');
+select lives_ok($$insert into public.support_tickets (tenant_id, public_reference, kind, category, system_key)
+  values ('10000000-0000-0000-0000-000000000001', 'TK-AAAAS4', 'SYSTEM', 'SYSTEM', 'TEST:DONE')$$,
+  'closed keys can be reused');
 
 -- Realtime
 select ok(exists(select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'support_messages'), 'messages in Realtime');

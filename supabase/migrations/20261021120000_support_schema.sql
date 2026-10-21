@@ -30,8 +30,12 @@ create table public.support_tickets (
   assigned_to       uuid references public.profiles (id) on delete restrict,
   status            text not null default 'OPEN' check (status in ('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')),
   priority          text not null default 'MEDIUM' check (priority in ('LOW', 'MEDIUM', 'HIGH', 'URGENT')),
-  -- at-most-once key for SYSTEM tickets
-  system_key        text unique,
+  -- one live (non-CLOSED) ticket per key for SYSTEM tickets: see
+  -- support_tickets_open_system_key below
+  system_key        text,
+  -- the CLOSED ticket this one follows up (a repeat system fact, or a buyer's
+  -- new ORDER ticket); its handler may read that history
+  previous_ticket_id uuid,
   last_message_at   timestamptz not null default now(),
   resolved_at       timestamptz,
   created_at        timestamptz not null default now(),
@@ -39,6 +43,8 @@ create table public.support_tickets (
   unique (tenant_id, id),
   foreign key (tenant_id, order_id)     references public.orders (tenant_id, id) on delete restrict,
   foreign key (tenant_id, territory_id) references public.territories (tenant_id, id) on delete restrict,
+  foreign key (tenant_id, previous_ticket_id) references public.support_tickets (tenant_id, id) on delete restrict,
+  check (previous_ticket_id <> id),
   check (kind <> 'ORDER' or order_id is not null),
   check ((kind = 'SYSTEM') = (system_key is not null)),
   check (status <> 'RESOLVED' or resolved_at is not null)
@@ -49,6 +55,10 @@ create index idx_support_tickets_accountable on public.support_tickets (accounta
 create index idx_support_tickets_assigned    on public.support_tickets (assigned_to);
 create index idx_support_tickets_order       on public.support_tickets (tenant_id, order_id, status);
 create index idx_support_tickets_territory   on public.support_tickets (tenant_id, territory_id);
+create index idx_support_tickets_previous    on public.support_tickets (tenant_id, previous_ticket_id);
+-- a CLOSED ticket frees its key: a repeat fact then opens a new, linked ticket
+create unique index support_tickets_open_system_key on public.support_tickets (system_key)
+  where status <> 'CLOSED';
 create trigger support_tickets_set_updated_at before update on public.support_tickets
   for each row execute function public.set_updated_at();
 
@@ -114,7 +124,8 @@ create index idx_support_messages_sender_id on public.support_messages (sender_i
 -- ── handler lookup (Spec A §9: a helper, never a per-row subquery) ──────
 -- Tickets the caller is accountable for or assigned to, while they remain an
 -- ACTIVE member of the ticket's tenant. Lets a non-TM fallback handler read
--- the ticket routed to them.
+-- the ticket routed to them, and the CLOSED ticket it follows up
+-- (previous_ticket_id), under the same membership check.
 create or replace function public.my_support_ticket_ids()
 returns setof uuid
 language sql
@@ -122,13 +133,17 @@ security definer
 stable
 set search_path = public, pg_temp
 as $$
-  select t.id
-    from public.support_tickets t
-   where (t.accountable_id = (select auth.uid()) or t.assigned_to = (select auth.uid()))
-     and exists (select 1 from public.tenant_users tu
-                  where tu.tenant_id = t.tenant_id
-                    and tu.profile_id = (select auth.uid())
-                    and tu.status = 'ACTIVE');
+  with mine as (
+    select t.id, t.previous_ticket_id
+      from public.support_tickets t
+     where (t.accountable_id = (select auth.uid()) or t.assigned_to = (select auth.uid()))
+       and exists (select 1 from public.tenant_users tu
+                    where tu.tenant_id = t.tenant_id
+                      and tu.profile_id = (select auth.uid())
+                      and tu.status = 'ACTIVE'))
+  select id from mine
+  union
+  select previous_ticket_id from mine where previous_ticket_id is not null;
 $$;
 revoke all on function public.my_support_ticket_ids() from public, anon;
 grant execute on function public.my_support_ticket_ids() to authenticated;

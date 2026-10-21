@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(41);
+select plan(44);
 
 -- ── fixtures: TEAFAIR with Ikeja, TM, ZSM, a default agent, one routed order ──
 insert into auth.users (id, phone) values
@@ -195,6 +195,19 @@ update public.support_tickets set status = 'CLOSED' where public_reference = pg_
 select throws_ok($$select public.add_ticket_message(pg_temp.k(33), pg_temp.ref_of(3), 's3cret', 'hi')$$,
   'P0001', 'This conversation is closed. Open a new ticket if you still need help.', 'closed refuses');
 select is(public.read_support_ticket(pg_temp.ref_of(3), 's3cret') ->> 'status', 'CLOSED', 'closed stays readable');
+-- a follow-up on TF-AAAAAA links to its CLOSED ticket (key 3); TF-AAAAAB has none closed.
+-- The follow-up's own thread is its one opening message.
+do $$ begin
+  perform pg_temp.op(40, 'ORDER', '+2348055555551', 'TF-AAAAAA', 'TFW-00000000-0000-0000-0000-00000000000a', null);
+  perform pg_temp.op(41, 'ORDER', '+2348055555552', 'TF-AAAAAB', 'TFW-00000000-0000-0000-0000-00000000000b', null);
+end $$;
+select is((select t.previous_ticket_id from public.support_tickets t where t.public_reference = pg_temp.ref_of(40)),
+          (select t.id from public.support_tickets t where t.public_reference = pg_temp.ref_of(3)),
+          'buyer ticket links to the closed one');
+select is((select t.previous_ticket_id from public.support_tickets t where t.public_reference = pg_temp.ref_of(41)),
+          null, 'no link otherwise');
+select is(jsonb_array_length(public.read_support_ticket(pg_temp.ref_of(40), 's3cret') -> 'messages'),
+          1, 'buyer sees only the new thread');
 -- the ticket of key 5 already has 1 customer message; 29 more makes 30
 insert into public.support_messages (tenant_id, ticket_id, sender_type, territory_id, body)
 select t.tenant_id, t.id, 'CUSTOMER', t.territory_id, 'm' || g
