@@ -425,7 +425,7 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    const locations = await fetch(`${FN}/storefront-locations`, { method: "POST", headers: { Origin: WEB, "content-type": "application/json" }, body: "{}" });
+    const locations = await fetch(`${FN}/storefront-locations`, { headers: { Origin: WEB } });
     const located = await locations.json();
     assertEquals(locations.status, 200, JSON.stringify(located));
     const lagos = (located.states as Array<{ code: string; lgas: Array<{ id: string; deliverable: boolean }> }>).find((s) => s.code === "LA")!;

@@ -386,7 +386,8 @@ as $$
               where oi.tenant_id = o.tenant_id and oi.order_id = o.id), '[]'::jsonb))
     from public.orders o
     join public.payments p on p.tenant_id = o.tenant_id and p.order_id = o.id
-                          and p.paystack_reference = p_paystack_reference
+                          -- the gateway accepts the uuid in either case
+                          and lower(p.paystack_reference) = lower(p_paystack_reference)
    where o.public_reference = upper(btrim(p_public_reference))
      and o.channel = 'ONLINE';
 $$;

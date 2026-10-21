@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(110);
+select plan(111);
 
 -- ── Task 1: ng_states / ng_lgas (§3.1) ──────────────────────────────────
 select is((select count(*)::int from public.ng_states), 37, 'exactly 37 states (FCT included)');
@@ -450,6 +450,8 @@ select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000
 select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-g1'), null,
   'another order''s payment reference is null');
 select is(public.web_order_status('TF-000000', 'TFW-cl1'), null, 'an unknown order is null');
+select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-CL1') ->> 'order_status',
+  'PENDING', 'the Paystack reference matches whatever its case (the gateway accepts either)');
 select ok(position('+234' in public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-cl1')::text) = 0,
   'no contact details in status');
 

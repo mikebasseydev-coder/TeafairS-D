@@ -14,12 +14,12 @@ function setup() {
   return { handler: createStorefrontLocationsHandler({ rpc, allowedOrigins: [ORIGIN] }), calls };
 }
 
-const post = (handler: (r: Request) => Promise<Response>, body: unknown) =>
-  handler(new Request("http://x/storefront-locations", { method: "POST", headers: { Origin: ORIGIN }, body: JSON.stringify(body) }));
+const get = (handler: (r: Request) => Promise<Response>, query: string) =>
+  handler(new Request(`http://x/storefront-locations${query}`, { headers: { Origin: ORIGIN } }));
 
 Deno.test("returns the RPC reply with an hour's public cache", async () => {
   const { handler, calls } = setup();
-  const res = await post(handler, { code: "grace-01" });
+  const res = await get(handler, "?code=grace-01");
   assertEquals(res.status, 200);
   assertEquals(calls, [["storefront_locations", { p_code: "grace-01" }]]);
   assertEquals(res.headers.get("cache-control"), "public, max-age=3600");
@@ -28,8 +28,18 @@ Deno.test("returns the RPC reply with an hour's public cache", async () => {
 
 Deno.test("code is optional", async () => {
   const { handler, calls } = setup();
-  const res = await post(handler, {});
+  const res = await get(handler, "");
   assertEquals(res.status, 200);
   assertEquals(calls, [["storefront_locations", { p_code: null }]]);
+  await res.body?.cancel();
+});
+
+Deno.test("POST is 405: a POST reply is never cached by a CDN", async () => {
+  const { handler, calls } = setup();
+  const res = await handler(new Request("http://x/storefront-locations", {
+    method: "POST", headers: { Origin: ORIGIN, "content-type": "application/json" }, body: "{}",
+  }));
+  assertEquals(res.status, 405);
+  assertEquals(calls.length, 0);
   await res.body?.cancel();
 });
