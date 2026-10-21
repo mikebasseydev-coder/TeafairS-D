@@ -1,7 +1,7 @@
 # Web chat and ticketing — Addendum A3
 
 **Date:** 2026-10-21
-**Status:** decisions approved 2026-10-21; written spec awaiting review
+**Status:** written spec approved 2026-10-21; plan `docs/superpowers/plans/2026-10-21-addendum-a3-chat-and-ticketing.md`
 **Addendum A3 to Spec A** ("Spec E" stays reserved for the AI moat).
 **Builds on:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`),
 addenda A1 (web storefront) and A2 (buyer contact privacy), Spec D1 (web money
