@@ -1,6 +1,7 @@
 // End-to-end against `supabase start` + `supabase functions serve`.
 // Run: see supabase/CLAUDE.md → "Edge Functions". Needs API_URL, ANON_KEY,
-// SERVICE_ROLE_KEY (from `supabase status -o env`) and PAYSTACK_SECRET_KEY.
+// SERVICE_ROLE_KEY (from `supabase status -o env`), PAYSTACK_SECRET_KEY and
+// CRON_SECRET (from supabase/functions/.env).
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createClient } from "../_shared/core/deps.ts";
 
@@ -8,6 +9,7 @@ const API = Deno.env.get("API_URL")!;
 const ANON = Deno.env.get("ANON_KEY")!;
 const SERVICE = Deno.env.get("SERVICE_ROLE_KEY")!;
 const PAYSTACK_SECRET = Deno.env.get("PAYSTACK_SECRET_KEY")!;
+const CRON_SECRET = Deno.env.get("CRON_SECRET") ?? "";
 const FN = `${API}/functions/v1`;
 
 const admin = createClient(API, SERVICE, { auth: { persistSession: false } });
@@ -23,7 +25,14 @@ const ids = {
   order: crypto.randomUUID(),
   partner: crypto.randomUUID(),
   terminal: crypto.randomUUID(),
+  warehouse: crypto.randomUUID(),
+  tfZone: crypto.randomUUID(),
+  tfTerritory: crypto.randomUUID(),
+  tfWarehouse: crypto.randomUUID(),
 };
+// the TEAFAIR tenant (seeded by a migration) takes every codeless web order
+const TEAFAIR = "7eaf0000-0000-4000-8000-000000000001";
+const TF_SKU = `IT-${run.toUpperCase()}`;
 const phone = (n: number) => `234${String(Date.now()).slice(-7)}${n}`;
 
 async function must<R extends { data: unknown; error: unknown }>(p: PromiseLike<R>): Promise<R["data"]> {
@@ -56,12 +65,20 @@ async function sign(body: string): Promise<string> {
     (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// a fake Paystack (Verify + Initialize) and a fake Turnstile, reached from the
-// edge runtime via host.docker.internal:54399
+// a fake Paystack (Initialize, Verify, List Refunds, Fetch Subaccount, List
+// Settlements, Settlement Transactions; shapes per the D1 plan's F1-F4) and a
+// fake Turnstile, reached from the edge runtime via host.docker.internal:54399
 const paystackLedger = new Map<string, Record<string, unknown>>();
+const refundLedger: Array<Record<string, unknown>> = [];
+const settlementLedger: Array<Record<string, unknown> & { transactions: Array<Record<string, unknown>> }> = [];
 const initialized: Array<Record<string, unknown>> = [];
+const SUBACCOUNT_ID = 55;
+const page = (data: unknown[]) =>
+  Response.json({ status: true, message: "Retrieved", data, meta: { total: data.length, perPage: 100, page: 1, pageCount: 1 } });
+const notFound = (message: string) => Response.json({ status: false, message }, { status: 404 });
 const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {} }, async (req) => {
-  const path = new URL(req.url).pathname;
+  const url = new URL(req.url);
+  const path = url.pathname;
   if (path === "/turnstile/v0/siteverify") {
     const form = await req.formData();
     return Response.json({ success: form.get("response") === "pass" });
@@ -72,21 +89,73 @@ const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {
     const ref = String(body.reference);
     return Response.json({ status: true, data: { authorization_url: `https://checkout.paystack.test/${ref}`, access_code: `ac_${ref}`, reference: ref } });
   }
-  const reference = decodeURIComponent(path.split("/").pop()!);
-  const data = paystackLedger.get(reference);
-  return data
-    ? Response.json({ status: true, message: "Verification successful", data })
-    : Response.json({ status: false, message: "Transaction reference not found" }, { status: 400 });
+  if (path.startsWith("/transaction/verify/")) {
+    const data = paystackLedger.get(decodeURIComponent(path.slice("/transaction/verify/".length)));
+    return data
+      ? Response.json({ status: true, message: "Verification successful", data })
+      : Response.json({ status: false, message: "Transaction reference not found" }, { status: 400 });
+  }
+  if (path === "/refund") {
+    const reference = url.searchParams.get("reference");
+    return page(refundLedger.filter((r) => reference === null || r.transaction_reference === reference));
+  }
+  if (path.startsWith("/subaccount/")) {
+    return decodeURIComponent(path.slice("/subaccount/".length)) === "ACCT_it01"
+      ? Response.json({ status: true, message: "Subaccount retrieved", data: { id: SUBACCOUNT_ID, subaccount_code: "ACCT_it01" } })
+      : notFound("Subaccount not found");
+  }
+  if (path === "/settlement") {
+    const mine = url.searchParams.get("subaccount") === String(SUBACCOUNT_ID) && url.searchParams.get("status") === "success";
+    return page(mine ? settlementLedger.map(({ transactions: _, ...s }) => s) : []);
+  }
+  const txs = path.match(/^\/settlement\/([^/]+)\/transactions$/);
+  if (txs) {
+    const settlement = settlementLedger.find((s) => String(s.id) === decodeURIComponent(txs[1]));
+    return settlement ? page(settlement.transactions) : notFound("Settlement not found");
+  }
+  return notFound(`fake Paystack has no ${req.method} ${path}`);
 });
 
-let users: Record<"tm" | "dsm" | "dsa" | "owner" | "agent", { id: string; email: string }>;
+// a Verify (F1) record: unsplit unless the subaccount's share is given
+let txId = 4_000_000_000 + Math.floor(Math.random() * 1_000_000_000);
+function verified(reference: string, amountMinor: number, shareMinor?: number): Record<string, unknown> {
+  return {
+    id: txId++, status: "success", reference, amount: amountMinor, currency: "NGN", paid_at: new Date().toISOString(),
+    subaccount: shareMinor === undefined ? {} : { id: SUBACCOUNT_ID, subaccount_code: "ACCT_it01" },
+    fees_split: shareMinor === undefined ? null : {
+      paystack: 9370, integration: amountMinor - shareMinor - 9370, subaccount: shareMinor,
+      params: { bearer: "account", transaction_charge: String(amountMinor - shareMinor), percentage_charge: "0" },
+    },
+  };
+}
+
+async function deliver(payload: unknown, signature?: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  const body = JSON.stringify(payload);
+  const res = await fetch(`${FN}/process-payment`, {
+    method: "POST", body, headers: { "x-paystack-signature": signature ?? await sign(body) },
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+const cron = (fn: string, body: unknown, secret = CRON_SECRET) =>
+  fetch(`${FN}/${fn}`, {
+    method: "POST", headers: { "content-type": "application/json", "x-cron-secret": secret }, body: JSON.stringify(body),
+  });
+
+let users: Record<"tm" | "dsm" | "dsa" | "owner" | "agent" | "tfTm", { id: string; email: string }>;
+let IKEJA: string;
 
 Deno.test({
   name: "fixtures",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    users = { tm: await createUser(1), dsm: await createUser(2), dsa: await createUser(3), owner: await createUser(4), agent: await createUser(5) };
+    users = {
+      tm: await createUser(1), dsm: await createUser(2), dsa: await createUser(3),
+      owner: await createUser(4), agent: await createUser(5), tfTm: await createUser(6),
+    };
+    const [lga] = (await must(admin.from("ng_lgas").select("id").eq("state_code", "LA").eq("name", "Ikeja"))) ?? [];
+    IKEJA = lga.id;
     await must(admin.from("tenants").insert({ id: ids.tenant, name: `IT ${run}`, code: `IT_${run.toUpperCase().replace(/[^A-Z0-9]/g, "")}`.slice(0, 16) }));
     await must(admin.from("zones").insert({ id: ids.zone, tenant_id: ids.tenant, zone_name: "Lagos" }));
     await must(admin.from("territories").insert({ id: ids.territory, tenant_id: ids.tenant, zone_id: ids.zone, territory_name: "Ikeja" }));
@@ -118,6 +187,29 @@ Deno.test({
       { tenant_id: ids.tenant, sku_code: "MILO-400", product_name: "Milo 400g", brand: "Milo", category: "Beverages", unit_price: 2500, wholesale_price: 2000 },
       { tenant_id: ids.tenant, sku_code: "MAGGI-12", product_name: "Maggi 12 cubes", brand: "Maggi", category: "Seasoning", unit_price: 1200, wholesale_price: 1000 },
     ]));
+
+    // D1 routing: the territory ships web orders from its own regional warehouse
+    await must(admin.from("warehouses").insert({ id: ids.warehouse, tenant_id: ids.tenant, name: `IT Ikeja ${run}`, kind: "REGIONAL", territory_id: ids.territory }));
+    await must(admin.from("territories").update({ web_fulfilment_warehouse_id: ids.warehouse }).eq("id", ids.territory));
+    await must(admin.from("territory_coverage").insert({ tenant_id: ids.tenant, state_code: "LA", lga_id: IKEJA, territory_id: ids.territory }));
+
+    // codeless orders go to TEAFAIR: a per-run territory with an ACTIVE TM and a
+    // regional warehouse, a per-run product, and the Ikeja coverage (upserted:
+    // the local database keeps it between runs, and it is unique per LGA)
+    await must(admin.from("zones").insert({ id: ids.tfZone, tenant_id: TEAFAIR, zone_name: `IT Lagos ${run}` }));
+    await must(admin.from("territories").insert({ id: ids.tfTerritory, tenant_id: TEAFAIR, zone_id: ids.tfZone, territory_name: `IT Ikeja ${run}` }));
+    await must(admin.from("tenant_users").insert({
+      tenant_id: TEAFAIR, profile_id: users.tfTm.id, role: "TM", territory_id: ids.tfTerritory, status: "ACTIVE", is_primary: true,
+    }));
+    await must(admin.from("warehouses").insert({ id: ids.tfWarehouse, tenant_id: TEAFAIR, name: `IT Ikeja ${run}`, kind: "REGIONAL", territory_id: ids.tfTerritory }));
+    await must(admin.from("territories").update({ tm_id: users.tfTm.id, web_fulfilment_warehouse_id: ids.tfWarehouse }).eq("id", ids.tfTerritory));
+    await must(admin.from("central_products").insert({
+      tenant_id: TEAFAIR, sku_code: TF_SKU, product_name: `IT Tea ${run}`, brand: "Teafair", category: "Beverages", unit_price: 1500, wholesale_price: 1200,
+    }));
+    await must(admin.from("territory_coverage").upsert(
+      { tenant_id: TEAFAIR, state_code: "LA", lga_id: IKEJA, territory_id: ids.tfTerritory },
+      { onConflict: "tenant_id,state_code,lga_id" },
+    ));
   },
 });
 
@@ -177,13 +269,6 @@ Deno.test({
       tenant_id: ids.tenant, order_id: ids.order, teafair_agent_id: users.dsa.id,
       amount: 2500, payment_status: "INITIATED", paystack_reference: reference,
     }));
-    const deliver = async (payload: unknown, signature?: string) => {
-      const body = JSON.stringify(payload);
-      const res = await fetch(`${FN}/process-payment`, {
-        method: "POST", body, headers: { "x-paystack-signature": signature ?? await sign(body) },
-      });
-      return { status: res.status, body: await res.json() };
-    };
 
     const forged = await deliver({ event: "charge.success", data: { reference } }, "00");
     assertEquals(forged.status, 401);
@@ -193,7 +278,7 @@ Deno.test({
     const audit = await must(admin.from("audit_logs").select("operation").eq("operation", "WEBHOOK_STALE").eq("tenant_id", ids.tenant));
     assertEquals(audit?.length, 1);
 
-    paystackLedger.set(reference, { status: "success", reference, amount: 250000, currency: "NGN", paid_at: new Date().toISOString() });
+    paystackLedger.set(reference, verified(reference, 250000));
     const payload = { event: "charge.success", data: { reference, amount: 1, paid_at: new Date().toISOString() } };
     const first = await deliver(payload);
     assertEquals([first.status, first.body.outcome], [200, "updated"], JSON.stringify(first.body));
@@ -245,12 +330,15 @@ Deno.test({
 const checkout = (body: Record<string, unknown>) =>
   fetch(`${FN}/web-checkout`, { method: "POST", headers: { Origin: WEB, "content-type": "application/json" }, body: JSON.stringify(body) });
 
+// a distinct buyer phone per order keeps clear of the 5-unpaid-orders-per-phone limit
+let buyer = 0;
 const webOrder = (over: Record<string, unknown> = {}) => ({
   idempotency_key: crypto.randomUUID(),
   code: CODE,
+  lga_id: IKEJA,
   items: [{ sku_code: "MILO-400", qty: 2 }, { sku_code: "MAGGI-12", qty: 1 }],
   // a real Nigerian mobile shape (234 + [789][01] + 8 digits), as normalizePhone requires
-  customer: { name: "Ada Obi", phone: `+23480${String(Date.now()).slice(-7)}7`, delivery_address: "5 Opebi Road, Ikeja" },
+  customer: { name: "Ada Obi", phone: `+23480${String(Date.now()).slice(-6)}${buyer++ % 10}7`, delivery_address: "5 Opebi Road, Ikeja" },
   utm: { source: "whatsapp" },
   payment_route: "PAYSTACK_WEB",
   turnstile_token: "pass",
@@ -282,8 +370,9 @@ Deno.test({
     const init = initialized.find((i) => i.reference === placed.paystack_reference)!;
     assertEquals([init.amount, init.subaccount, init.transaction_charge], [558000, "ACCT_it01", 558000 - 8370]);
 
-    const [payment] = (await must(admin.from("payments").select("payment_status, amount").eq("paystack_reference", placed.paystack_reference))) ?? [];
-    assertEquals([payment.payment_status, Number(payment.amount)], ["INITIATED", 5580]);
+    const [payment] = (await must(admin.from("payments").select("payment_status, amount, split_subaccount_code, split_amount").eq("paystack_reference", placed.paystack_reference))) ?? [];
+    assertEquals([payment.payment_status, Number(payment.amount), payment.split_subaccount_code, Number(payment.split_amount)],
+      ["INITIATED", 5580, "ACCT_it01", 83.7]);
 
     // a retry with the same key gets the same order and URL back
     const again = await (await checkout(body)).json();
@@ -300,10 +389,164 @@ Deno.test({
     const placed = await res.json();
     assertEquals(res.status, 200, JSON.stringify(placed));
     assertEquals(placed.authorization_url, null);
-    const [order] = (await must(admin.from("orders").select("attributed_terminal_id, teafair_agent_id, payment_route").eq("id", placed.order_id))) ?? [];
-    assertEquals([order.attributed_terminal_id, order.teafair_agent_id, order.payment_route], [ids.terminal, users.tm.id, "POS_AGENT"]);
+    const [order] = (await must(admin.from("orders").select("attributed_terminal_id, teafair_agent_id, payment_route, territory_id, fulfilment_warehouse_id").eq("id", placed.order_id))) ?? [];
+    assertEquals([order.attributed_terminal_id, order.teafair_agent_id, order.payment_route, order.territory_id, order.fulfilment_warehouse_id],
+      [ids.terminal, users.tm.id, "POS_AGENT", ids.territory, ids.warehouse]);
     const payments = await must(admin.from("payments").select("id").eq("order_id", placed.order_id));
     assertEquals(payments?.length, 0);
+  },
+});
+
+const codeless = (over: Record<string, unknown> = {}) =>
+  webOrder({ code: undefined, items: [{ sku_code: TF_SKU, qty: 2 }], ...over });
+
+async function place(body: Record<string, unknown>): Promise<Record<string, string | number | null>> {
+  const res = await checkout(body);
+  const placed = await res.json();
+  assertEquals(res.status, 200, JSON.stringify(placed));
+  return placed;
+}
+
+async function orderOf(id: unknown): Promise<{ status: string }> {
+  const [order] = (await must(admin.from("orders").select("status").eq("id", id))) ?? [];
+  return order;
+}
+
+async function paymentOf(reference: unknown): Promise<{ id: string; payment_status: string }> {
+  const [payment] = (await must(admin.from("payments").select("id, payment_status").eq("paystack_reference", reference))) ?? [];
+  return payment;
+}
+
+const orderStatus = (body: unknown) =>
+  fetch(`${FN}/web-order-status`, { method: "POST", headers: { Origin: WEB, "content-type": "application/json" }, body: JSON.stringify(body) });
+
+Deno.test({
+  name: "codeless checkout → charge.success → PAID → status read",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const locations = await fetch(`${FN}/storefront-locations`, { method: "POST", headers: { Origin: WEB, "content-type": "application/json" }, body: "{}" });
+    const located = await locations.json();
+    assertEquals(locations.status, 200, JSON.stringify(located));
+    const lagos = (located.states as Array<{ code: string; lgas: Array<{ id: string; deliverable: boolean }> }>).find((s) => s.code === "LA")!;
+    assert(lagos.lgas.find((l) => l.id === IKEJA)!.deliverable, "codeless Ikeja is deliverable");
+
+    const placed = await place(codeless());
+    const [order] = (await must(admin.from("orders").select("tenant_id, territory_id, fulfilment_warehouse_id, teafair_agent_id, delivery_lga_id").eq("id", placed.order_id))) ?? [];
+    assertEquals([order.tenant_id, order.territory_id, order.fulfilment_warehouse_id, order.teafair_agent_id, order.delivery_lga_id],
+      [TEAFAIR, ids.tfTerritory, ids.tfWarehouse, users.tfTm.id, IKEJA]);
+    const init = initialized.find((i) => i.reference === placed.paystack_reference)!;
+    assertEquals([init.amount, init.subaccount], [300000, undefined], "a codeless order has no split");
+
+    const reference = String(placed.paystack_reference);
+    paystackLedger.set(reference, verified(reference, 300000));
+    const settled = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
+    assertEquals([settled.status, settled.body.outcome], [200, "updated"], JSON.stringify(settled.body));
+    assertEquals((await orderOf(placed.order_id)).status, "PAID");
+
+    const status = await orderStatus({ public_reference: placed.public_reference, paystack_reference: reference });
+    const read = await status.json();
+    assertEquals(status.status, 200, JSON.stringify(read));
+    assertEquals([read.order_status, read.payment_status, Number(read.total)], ["PAID", "SUCCESS", 3000]);
+
+    const wrong = await orderStatus({ public_reference: placed.public_reference, paystack_reference: `TFW-${crypto.randomUUID()}` });
+    assertEquals([wrong.status, (await wrong.json()).error.code], [404, "NOT_FOUND"]);
+  },
+});
+
+Deno.test({
+  name: "terminal checkout → SPLIT → release → SETTLED",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const placed = await place(webOrder());
+    const reference = String(placed.paystack_reference);
+    // 5580.00 at 150 bps: the partner's share is 83.70
+    const charge = verified(reference, 558000, 8370);
+    paystackLedger.set(reference, charge);
+    const settled = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
+    assertEquals([settled.status, settled.body.outcome], [200, "updated"], JSON.stringify(settled.body));
+
+    const payment = await paymentOf(reference);
+    const [commission] = (await must(admin.from("commission_records").select("id, status, amount").eq("payment_id", payment.id))) ?? [];
+    assertEquals([commission.status, Number(commission.amount)], ["SPLIT", 83.7]);
+    // the release reads only SPLIT rows older than 24 h
+    await must(admin.from("commission_records").update({ created_at: new Date(Date.now() - 25 * 3_600_000).toISOString() }).eq("id", commission.id));
+
+    const settlementId = 7_000_000 + Math.floor(Math.random() * 1_000_000);
+    settlementLedger.push({
+      id: settlementId, status: "success", currency: "NGN", total_amount: 8370, settlement_date: new Date().toISOString(),
+      transactions: [{ id: charge.id, reference, amount: 558000, subaccount: { subaccount_code: "ACCT_it01" }, fees_split: charge.fees_split }],
+    });
+    const res = await cron("fintech-commission-release", {});
+    const counts = await res.json();
+    assertEquals(res.status, 200, JSON.stringify(counts));
+    assert((counts.outcomes.settled ?? 0) >= 1, JSON.stringify(counts));
+
+    const [after] = (await must(admin.from("commission_records").select("status, paystack_settlement_id, settled_at").eq("id", commission.id))) ?? [];
+    assertEquals([after.status, after.paystack_settlement_id], ["SETTLED", String(settlementId)]);
+    assert(after.settled_at);
+  },
+});
+
+Deno.test({
+  name: "a dropped webhook is recovered by the sweep",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const placed = await place(codeless());
+    const reference = String(placed.paystack_reference);
+    // the sweep goes oldest first, 50 at a time. Each run dates its payment
+    // further back than the last, so leftovers from earlier runs never crowd it out.
+    const createdAt = new Date(Date.UTC(2000, 0, 1) - Math.floor(Date.now() / 1000) * 1000).toISOString();
+    await must(admin.from("payments").update({ created_at: createdAt }).eq("paystack_reference", reference));
+    paystackLedger.set(reference, verified(reference, 300000));
+
+    const res = await cron("reconcile-funds", { mode: "sweep" });
+    const counts = await res.json();
+    assertEquals(res.status, 200, JSON.stringify(counts));
+    assertEquals([(await paymentOf(reference)).payment_status, (await orderOf(placed.order_id)).status], ["SUCCESS", "PAID"], JSON.stringify(counts));
+  },
+});
+
+Deno.test({
+  name: "refund.processed → REFUNDED",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const placed = await place(codeless());
+    const reference = String(placed.paystack_reference);
+    const charge = verified(reference, 300000);
+    paystackLedger.set(reference, charge);
+    const paid = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
+    assertEquals(paid.body.outcome, "updated", JSON.stringify(paid.body));
+    assertEquals((await orderOf(placed.order_id)).status, "PAID");
+
+    // a refund id is an at-most-once key and the local database persists, so one per run
+    refundLedger.push({
+      id: 900_000_000 + Math.floor(Math.random() * 100_000_000), status: "processed", amount: 300000, currency: "NGN",
+      transaction: charge.id, transaction_reference: reference,
+    });
+    // F4: the webhook carries no refund id and no event timestamp
+    const refunded = await deliver({
+      event: "refund.processed",
+      data: { status: "processed", transaction_reference: reference, refund_reference: null, amount: "300000", currency: "NGN" },
+    });
+    assertEquals([refunded.status, refunded.body.outcome], [200, "refunded"], JSON.stringify(refunded.body));
+    assertEquals([(await paymentOf(reference)).payment_status, (await orderOf(placed.order_id)).status], ["REFUNDED", "REFUNDED"]);
+  },
+});
+
+Deno.test({
+  name: "cron functions reject a wrong secret",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    for (const [fn, body] of [["reconcile-funds", { mode: "sweep" }], ["fintech-commission-release", {}]] as const) {
+      const res = await cron(fn, body, "not-the-cron-secret");
+      const text = await res.text();
+      assertEquals(res.status, 401, `${fn}: ${text}`);
+    }
   },
 });
 

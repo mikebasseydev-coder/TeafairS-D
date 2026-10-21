@@ -13,6 +13,7 @@ the authority; this file is the working summary.
 | 3. Edge Function gateway (`supabase/functions/`) | done |
 | A1. Web storefront — agent codes, venues, public gateways | done |
 | A2. Buyer contact privacy — `order_contacts`, till lookup | done |
+| D1. Web money loop — routing, settlement, sweeps, refunds, commission release | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq` (2026-10-08): all 20
@@ -25,6 +26,20 @@ The nine addendum A1 and A2 migrations and the `storefront-catalogue` /
 `web-checkout` functions are local only until explicitly pushed. **A1 never
 deploys without A2**: A1 alone exposes buyer contact details to every tenant
 member, and audit rows cannot be scrubbed afterwards.
+The eight Spec D1 migrations (`20261020120000`–`20261020130300`) and the
+functions `reconcile-funds`, `fintech-commission-release`,
+`storefront-locations` and `web-order-status` (plus the changed
+`process-payment`, `storefront-catalogue` and `web-checkout`) are local only.
+**D1 never deploys without A1 and A2.**
+**D1's migrations and functions deploy together.** The D1 settlement and
+storefront migrations drop RPC signatures that the deployed `process-payment`
+and `web-checkout` call, so never push them without the matching functions,
+and never push D1 without A1 and A2. Before pushing, count ONLINE orders that
+are not PENDING and lack routing on the remote (the legacy cancel only covers
+PENDING). Before D1 the routing columns do not exist, so every such order
+lacks routing, and any count above zero makes the `orders_online_routed`
+constraint fail the push:
+`select count(*) from public.orders where channel = 'ONLINE' and status not in ('PENDING', 'CANCELLED');`
 Nothing is pushed until explicitly asked.
 
 ## Layout
@@ -119,13 +134,20 @@ one responsibility per file. Third-party versions appear only in
   caller's JWT. Never import `serviceRpc` into a user gateway.
 - **PIN-gated operations** call `requirePin(rpc, body.pin)` (from
   `_shared/auth/pin.ts`) before their RPC.
-- **System functions** (`auth-verify-claims`, `process-payment`)
-  authenticate by signature and use `serviceRpc()`.
-- **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1)
-  use `publicGateway(route, handle, deps)` from `_shared/core/public-gateway.ts`.
+- **System functions** use `serviceRpc()` and authenticate the caller
+  themselves: `auth-verify-claims` and `process-payment` (`charge.success`,
+  `refund.processed`) by signature; the cron-invoked `reconcile-funds`
+  (`{mode: "sweep" | "refunds"}`) and `fintech-commission-release` (`{}`;
+  Spec D1) by the `x-cron-secret` header, compared in constant time against
+  `CRON_SECRET` (`_shared/core/cron.ts`).
+- **Public gateways** (`storefront-catalogue`, `web-checkout`; addendum A1;
+  `storefront-locations`, `web-order-status`; Spec D1) use
+  `publicGateway(route, handle, deps)` from `_shared/core/public-gateway.ts`.
   Callers are anonymous, so their RPCs are granted to `service_role` only and
-  resolve the tenant from the agent code. CORS is limited to
-  `WEB_ALLOWED_ORIGINS`; checkout is gated by Turnstile.
+  resolve the tenant from the agent code, or TEAFAIR when there is none
+  (codeless). CORS is limited to `WEB_ALLOWED_ORIGINS`; checkout is gated by
+  Turnstile. `web-order-status` answers only for a matching
+  `(public_reference, paystack_reference)` pair; any miss is 404.
 - **`verify_jwt = false`** is set for every function in `config.toml`; each
   one verifies its caller itself.
 
@@ -142,7 +164,43 @@ deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
 `SMS_PROVIDER=log` locally, and `kudisms` (with `KUDISMS_TOKEN` and
 `KUDISMS_SENDER_ID`) anywhere real. `web-checkout` also needs `TURNSTILE_SECRET_KEY`,
 `WEB_ALLOWED_ORIGINS` and `WEB_CHECKOUT_CALLBACK_URL` (see
-`functions/.env.example`).
+`functions/.env.example`). `reconcile-funds` and `fintech-commission-release`
+need `CRON_SECRET` or they fail at boot.
+
+The integration test runs its own fake Paystack (Initialize, Verify, List
+Refunds, Fetch Subaccount, List Settlements, Settlement Transactions) and
+Turnstile on host port 54399, reached from the edge runtime at
+`host.docker.internal:54399` (`PAYSTACK_API_BASE`, `TURNSTILE_VERIFY_URL`).
+It needs no Vault secrets: it calls the cron functions directly.
+
+### Cron jobs (Spec D1 §10)
+
+`pg_cron` calls `reconcile-funds` (sweep every 5 min, refunds 05:00 UTC) and
+`fintech-commission-release` (06:00 UTC) through `pg_net`
+(`public.invoke_system_function`). It reads the base URL and the shared secret
+from Vault; the migrations hold no secret values. Create both once **per
+environment** (SQL editor or `psql`):
+
+```sql
+select vault.create_secret('<functions base url>', 'functions_base_url');
+select vault.create_secret('<secret>', 'cron_secret');
+```
+
+Locally the URL is `http://host.docker.internal:54321/functions/v1`, and the
+secret is the `CRON_SECRET` in `functions/.env`. On the remote it is
+`https://<project-ref>.supabase.co/functions/v1`, and the secret must equal the
+function secret `CRON_SECRET`. Without them each job logs
+`functions_base_url or cron_secret is missing from Vault` and posts nothing.
+`supabase db reset` wipes Vault, so recreate them after a reset if you want
+the jobs to run locally.
+
+**Paystack test mode (D1 plan, fact F6).** The Paystack account is in test
+mode. Transactions, Verify and refunds behave as they do live, but test mode
+is not expected to produce real subaccount settlements. The commission release
+path (List Settlements, Settlement Transactions) has therefore been proven only
+against the integration fake. Its first real check comes after go-live:
+watch the first `fintech-commission-release` runs and the `release_commission`
+audit rows (`share_verified`).
 
 ## Testing
 
