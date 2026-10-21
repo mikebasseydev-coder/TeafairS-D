@@ -10,6 +10,7 @@ select has_extension('postgis');
 select has_extension('pg_cron');
 
 -- the 33 Spec A tables (§6.1) + agent_codes (addendum A1) + order_contacts (addendum A2)
+-- + the four support tables (addendum A3)
 select tables_are('public', array[
   -- tenancy and identity (6)
   'tenants', 'tenant_settings', 'tenant_users', 'profiles',
@@ -29,15 +30,17 @@ select tables_are('public', array[
   'fintech_partners', 'payments', 'commission_records', 'fintech_terminals',
   'fintech_advances', 'cash_audit_batches',
   -- platform (4)
-  'otp_challenges', 'idempotency_logs', 'audit_logs', 'notifications'
-], 'public holds exactly the 38 tables');
+  'otp_challenges', 'idempotency_logs', 'audit_logs', 'notifications',
+  -- web chat and ticketing (4, addendum A3)
+  'support_tickets', 'support_ticket_secrets', 'support_ticket_contacts', 'support_messages'
+], 'public holds exactly the 42 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  38, 'RLS is enabled on all 38 tables');
+  42, 'RLS is enabled on all 42 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN']);

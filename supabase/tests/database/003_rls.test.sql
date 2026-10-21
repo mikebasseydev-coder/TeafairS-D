@@ -80,6 +80,8 @@ grant execute on function pg_temp.act_as(uuid, uuid) to authenticated;
 -- ── structure: policies are SELECT-only, everywhere ─────────────────────
 select is(
   (select count(*)::int from pg_tables t where t.schemaname = 'public'
+     -- A3: the ticket-secret hashes have no policy and no grant on purpose
+     and t.tablename <> 'support_ticket_secrets'
      and not exists (select 1 from pg_policies p
                      where p.schemaname = 'public' and p.tablename = t.tablename and p.cmd = 'SELECT')),
   0, 'every public table has a SELECT policy');
