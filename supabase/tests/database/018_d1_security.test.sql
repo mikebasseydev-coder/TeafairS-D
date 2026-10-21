@@ -72,10 +72,10 @@ select ok(to_regprocedure('public.record_stale_paystack_webhook(text,text,timest
   'anon cannot execute record_stale_paystack_webhook');
 select ok(to_regprocedure('public.record_stale_paystack_webhook(text,text,timestamptz)') is not null and not has_function_privilege('authenticated', 'public.record_stale_paystack_webhook(text,text,timestamptz)', 'execute'),
   'authenticated cannot execute record_stale_paystack_webhook');
-select ok(to_regprocedure('public.list_unconfirmed_payments(integer)') is not null and not has_function_privilege('anon', 'public.list_unconfirmed_payments(integer)', 'execute'),
-  'anon cannot execute list_unconfirmed_payments');
-select ok(to_regprocedure('public.list_unconfirmed_payments(integer)') is not null and not has_function_privilege('authenticated', 'public.list_unconfirmed_payments(integer)', 'execute'),
-  'authenticated cannot execute list_unconfirmed_payments');
+select ok(to_regprocedure('public.claim_unconfirmed_payments(integer)') is not null and not has_function_privilege('anon', 'public.claim_unconfirmed_payments(integer)', 'execute'),
+  'anon cannot execute claim_unconfirmed_payments');
+select ok(to_regprocedure('public.claim_unconfirmed_payments(integer)') is not null and not has_function_privilege('authenticated', 'public.claim_unconfirmed_payments(integer)', 'execute'),
+  'authenticated cannot execute claim_unconfirmed_payments');
 select ok(to_regprocedure('public.apply_paystack_refund(text,text,text,bigint,text,text,jsonb)') is not null and not has_function_privilege('anon', 'public.apply_paystack_refund(text,text,text,bigint,text,text,jsonb)', 'execute'),
   'anon cannot execute apply_paystack_refund');
 select ok(to_regprocedure('public.apply_paystack_refund(text,text,text,bigint,text,text,jsonb)') is not null and not has_function_privilege('authenticated', 'public.apply_paystack_refund(text,text,text,bigint,text,text,jsonb)', 'execute'),

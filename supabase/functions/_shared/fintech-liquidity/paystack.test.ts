@@ -115,3 +115,17 @@ Deno.test("a hung Initialize call is aborted by the timeout", async () => {
     init({ reference: "r", amountMinor: 100, currency: "NGN", email: "a@b.co", callbackUrl: "https://x.test/cb", metadata: {} })
   );
 });
+
+Deno.test("a hung Verify call is aborted by the timeout", async () => {
+  let aborted = false;
+  const hang: typeof fetch = (_i, init) =>
+    new Promise((_res, rej) => {
+      init?.signal?.addEventListener("abort", () => {
+        aborted = true;
+        rej(init.signal!.reason);
+      });
+    });
+  const verify = paystackVerifier({ secretKey: "sk", fetchFn: hang, timeoutMs: 10 });
+  await assertRejects(() => verify("TFW-1"));
+  assertEquals(aborted, true);
+});

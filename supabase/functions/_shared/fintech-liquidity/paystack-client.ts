@@ -1,7 +1,7 @@
 // Shared GET + pagination for Paystack list endpoints (Spec D1 §12).
 import { z } from "../core/deps.ts";
 
-export type PaystackOpts = { secretKey: string; baseUrl?: string; fetchFn?: typeof fetch };
+export type PaystackOpts = { secretKey: string; baseUrl?: string; fetchFn?: typeof fetch; timeoutMs?: number };
 
 const MAX_PAGES = 50;
 const PER_PAGE = 100;
@@ -19,6 +19,7 @@ export async function paystackGet<T>(
   const q = qs.toString();
   const res = await fetchFn(`${baseUrl}${path}${q ? `?${q}` : ""}`, {
     headers: { Authorization: `Bearer ${opts.secretKey}` },
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 15000),
   });
   const payload = await res.json().catch(() => null) as { message?: string } | null;
   const parsed = schema.safeParse(payload);

@@ -13,7 +13,7 @@ function setup(opts: { verify?: VerifyTransaction } = {}) {
   const listCalls: Array<{ reference?: string; from?: string; to?: string }> = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
-    if (fn === "list_unconfirmed_payments") {
+    if (fn === "claim_unconfirmed_payments") {
       return Promise.resolve([
         { paystack_reference: "ref_1", created_at: "2026-10-20T04:00:00Z" },
         { paystack_reference: "ref_2", created_at: "2026-10-20T04:01:00Z" },
@@ -58,7 +58,7 @@ Deno.test("sweep verifies and settles each payment", async () => {
   const res = await post(handler, { mode: "sweep" });
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { mode: "sweep", seen: 2, outcomes: { updated: 2 }, errors: 0 });
-  assertEquals(rpcCalls[0], ["list_unconfirmed_payments", { p_limit: 50 }]);
+  assertEquals(rpcCalls[0], ["claim_unconfirmed_payments", { p_limit: 50 }]);
   assertEquals(verifyCalls, ["ref_1", "ref_2"]);
   const settles = rpcCalls.filter(([fn]) => fn === "settle_paystack_payment");
   assertEquals(settles.length, 2);
@@ -79,6 +79,60 @@ Deno.test("one payment's error does not stop the batch", async () => {
   assertEquals(await res.json(), { mode: "sweep", seen: 2, outcomes: { updated: 1 }, errors: 1 });
   assertEquals(verified, ["ref_2"]);
   assertEquals(rpcCalls.filter(([fn]) => fn === "settle_paystack_payment").length, 1);
+});
+
+Deno.test("a Verify reply for another reference is an error and is not settled", async () => {
+  const { handler, rpcCalls } = setup({
+    verify: (ref) =>
+      Promise.resolve({
+        status: "success", reference: ref === "ref_1" ? "ref_other" : ref, amountMinor: 100, currency: "NGN",
+        transactionId: "9", split: null, raw: {},
+      }),
+  });
+  const res = await post(handler, { mode: "sweep" });
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { mode: "sweep", seen: 2, outcomes: { updated: 1 }, errors: 1 });
+  const settles = rpcCalls.filter(([fn]) => fn === "settle_paystack_payment");
+  assertEquals(settles.map(([, a]) => a.p_reference), ["ref_2"]);
+});
+
+Deno.test("refunds mode warns with the count of unreadable refunds, and nothing else", async () => {
+  const warned: unknown[][] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => void warned.push(args);
+  try {
+    const handler = createReconcileFundsHandler({
+      cronSecret: SECRET, now: () => NOW,
+      rpc: <T>() => Promise.resolve({ outcome: "refunded" } as T),
+      verifyTransaction: () => Promise.reject(new Error("unused")),
+      listRefunds: () => Promise.resolve([
+        { id: "1", transactionReference: null, amountMinor: 5, currency: "NGN", status: "processed",
+          raw: { customer: { email: "buyer@example.com" } } },
+        { id: "2", transactionReference: null, amountMinor: 5, currency: "NGN", status: "processed", raw: {} },
+        { id: "3", transactionReference: "ref_3", amountMinor: 5, currency: "NGN", status: "processed", raw: {} },
+      ]),
+    });
+    const res = await post(handler, { mode: "refunds" });
+    assertEquals(await res.json(), { mode: "refunds", seen: 3, outcomes: { refunded: 1, unreadable: 2 }, errors: 0 });
+  } finally {
+    console.warn = original;
+  }
+  assertEquals(warned.length, 1);
+  assertEquals(warned[0].includes(2), true);
+  assertEquals(JSON.stringify(warned).includes("buyer@example.com"), false);
+});
+
+Deno.test("refunds mode does not warn when every refund is readable", async () => {
+  const warned: unknown[][] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => void warned.push(args);
+  try {
+    const { handler } = setup();
+    await (await post(handler, { mode: "refunds" })).json();
+  } finally {
+    console.warn = original;
+  }
+  assertEquals(warned.length, 0);
 });
 
 Deno.test("refunds mode lists the last 3 days", async () => {

@@ -7,6 +7,10 @@
 -- Plan Decision 2: a refund that arrives while its charge is not yet SUCCESS
 -- is audited and returned BEFORE the key is taken, so the daily refund pass
 -- can apply it once settle_paystack_payment has recorded the charge.
+--
+-- A reversal of a charge not yet confirmed (INITIATED, PROCESSING, FAILED)
+-- moves the payment straight to REFUNDED in this one transaction: the order
+-- is never marked PAID and nobody is told it is ready to ship.
 
 create or replace function public.apply_paystack_refund(
   p_source                 text,
@@ -79,8 +83,45 @@ begin
   -- concurrent settle cannot slip between the check and the key
   select * into v_payment from public.payments where paystack_reference = p_transaction_reference for update;
 
+  if v_payment.payment_status in ('INITIATED', 'PROCESSING', 'FAILED') and p_reason = 'REVERSAL' then
+    -- the charge was reversed before Teafair recorded it: the money is gone,
+    -- so the payment is REFUNDED and the order is left as it is (never PAID)
+    v_prior := public.idempotency_begin(v_key, 'apply_paystack_refund', v_request);
+    if v_prior is not null then
+      return v_prior;
+    end if;
+    v_currency := coalesce((select s.currency from public.tenant_settings s where s.tenant_id = v_payment.tenant_id), 'NGN');
+    v_paid     := (v_payment.amount * 100)::bigint;
+    v_conflict := case
+                    when p_currency is distinct from v_currency then 'currency_mismatch'
+                    when p_amount_minor <> v_paid then 'amount_mismatch'
+                  end;
+    if v_conflict is not null then
+      perform public.write_audit(v_payment.tenant_id, 'REFUND_CONFLICT', 'payments', v_payment.id::text,
+        jsonb_build_object('payment_status', v_payment.payment_status, 'amount_minor', v_paid, 'currency', v_currency),
+        jsonb_build_object('reason', v_conflict, 'refund_id', p_refund_id,
+                           'amount_minor', p_amount_minor, 'currency', p_currency, 'refund_reason', p_reason),
+        v_key, v_source, v_payment.teafair_agent_id);
+      return public.idempotency_complete(v_key, jsonb_build_object(
+        'outcome', 'conflict', 'reason', v_conflict, 'payment_id', v_payment.id,
+        'payment_status', v_payment.payment_status));
+    end if;
+
+    update public.payments set payment_status = 'REFUNDED' where id = v_payment.id;
+    perform public.write_audit(v_payment.tenant_id, 'apply_paystack_refund', 'payments', v_payment.id::text,
+      jsonb_build_object('payment_status', v_payment.payment_status),
+      jsonb_build_object('payment_status', 'REFUNDED', 'reason', p_reason, 'refund_id', p_refund_id,
+                         'amount_minor', p_amount_minor, 'currency', p_currency),
+      v_key, v_source, v_payment.teafair_agent_id);
+    return public.idempotency_complete(v_key, jsonb_build_object(
+      'outcome', 'refunded', 'payment_id', v_payment.id, 'payment_status', 'REFUNDED',
+      'order_status', (select o.status from public.orders o
+                        where o.tenant_id = v_payment.tenant_id and o.id = v_payment.order_id),
+      'reason', p_reason));
+  end if;
+
   if v_payment.payment_status in ('INITIATED', 'PROCESSING', 'FAILED') then
-    -- Decision 2: no key, so the daily refund pass re-applies it after settle
+    -- Decision 2 (REFUND only): no key, so the daily refund pass re-applies it after settle
     perform public.write_audit(v_payment.tenant_id, 'REFUND_CONFLICT', 'payments', v_payment.id::text,
       jsonb_build_object('payment_status', v_payment.payment_status),
       jsonb_build_object('reason', 'payment_not_success', 'refund_id', p_refund_id,

@@ -1,10 +1,11 @@
 -- Spec D1 §9 — refunds and reversals: apply_paystack_refund, full and partial
 -- refunds, reversals, conflicts, commission disputes, and plan Decision 2
--- (a refund that arrives before its charge settles takes no key).
+-- (a refund that arrives before its charge settles takes no key), and a
+-- reversal of a charge not yet recorded (straight to REFUNDED, order untouched).
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(40);
+select plan(48);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
 -- 01, 02 ACTIVE ZSMs · 03 TM · 04 warehouse manager · 06 DSA, the agent
@@ -73,6 +74,8 @@ select pg_temp.mk(2, 'r_part',   'PAID',      'SUCCESS');
 select pg_temp.mk(3, 'r_rev',    'DELIVERED', 'SUCCESS');
 select pg_temp.mk(4, 'r_init',   'PENDING',   'INITIATED');
 select pg_temp.mk(5, 'r_cancel', 'CANCELLED', 'SUCCESS');
+select pg_temp.mk(6, 'r_rev_init', 'PENDING', 'INITIATED');
+select pg_temp.mk(7, 'r_rev_bad',  'PENDING', 'INITIATED');
 -- the settled commission on r_full
 insert into public.commission_records (id, tenant_id, order_id, payment_id, fintech_partner_id, teafair_agent_id,
                                        amount, bps_applied, paystack_subaccount_code, paystack_split_reference,
@@ -204,6 +207,33 @@ select is((select after ->> 'reason' from public.audit_logs
   'REVERSAL', 'reason REVERSAL, audited as CRON');
 select is((select status from public.orders where id = '90000000-0000-0000-0000-000000000003'),
   'REFUNDED', 'a DELIVERED order becomes REFUNDED');
+
+-- ── a reversal before the charge was recorded: one transaction ─────────
+select is(public.apply_paystack_refund('sweep', 'reversal:r_rev_init', 'r_rev_init', 250000, 'NGN', 'REVERSAL', '{}') ->> 'outcome',
+  'refunded', 'an INITIATED payment is reversed');
+select is((select row(p.payment_status::text, o.status)::text from public.payments p join public.orders o on o.id = p.order_id
+            where p.paystack_reference = 'r_rev_init'),
+  row('REFUNDED', 'PENDING')::text, 'the payment is REFUNDED; the order stays PENDING and is never PAID');
+select ok(not exists (select 1 from public.notifications
+                       where kind = 'WEB_ORDER_PAID' and payload ->> 'order_id' = '90000000-0000-0000-0000-000000000006')
+          and not exists (select 1 from public.audit_logs
+                           where entity_type = 'orders' and entity_id = '90000000-0000-0000-0000-000000000006'),
+  'nobody is told to ship it, and the order has no transition');
+select ok(exists (select 1 from public.audit_logs
+                   where operation = 'apply_paystack_refund' and entity_type = 'payments'
+                     and entity_id = '91000000-0000-0000-0000-000000000006' and source = 'CRON'
+                     and before ->> 'payment_status' = 'INITIATED' and after ->> 'payment_status' = 'REFUNDED'
+                     and after ->> 'reason' = 'REVERSAL'),
+  'audited apply_paystack_refund, reason REVERSAL, with the prior status');
+select is((select status::text from public.idempotency_logs where key = md5('paystack-refund:reversal:r_rev_init')::uuid),
+  'COMPLETED', 'the reversal takes its key');
+select ok(not ('r_rev_init' in (select paystack_reference from public.claim_unconfirmed_payments(500))),
+  'the sweep no longer claims it');
+select is(public.apply_paystack_refund('sweep', 'reversal:r_rev_bad', 'r_rev_bad', 100000, 'NGN', 'REVERSAL', '{}') ->> 'outcome',
+  'conflict', 'a reversal amount other than the payment amount conflicts');
+select is(row(pg_temp.conflict('91000000-0000-0000-0000-000000000007'),
+              (select payment_status::text from public.payments where paystack_reference = 'r_rev_bad'))::text,
+  row('amount_mismatch', 'INITIATED')::text, 'audited amount_mismatch; nothing changes');
 
 -- ── orders outside PAID / IN_TRANSIT / DELIVERED, and field orders ──────
 select is(public.apply_paystack_refund('webhook', '5005', 'r_cancel', 250000, 'NGN', 'REFUND', '{}') ->> 'outcome',

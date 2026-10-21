@@ -29,17 +29,20 @@ Deno.test("success passes the split through", async () => {
   }]]);
 });
 
-Deno.test("reversed settles then applies a reversal", async () => {
+Deno.test("reversed applies only a reversal, never a settlement", async () => {
   const { rpc, calls } = fakeRpc({ apply_paystack_refund: { outcome: "refunded" } });
   const r = await settleVerified(rpc, "sweep", { ...tx, status: "reversed", split: null });
   assertEquals(r.outcome, "refunded");
-  assertEquals(calls.map((c) => c[0]), ["settle_paystack_payment", "apply_paystack_refund"]);
-  assertEquals(calls[0][1].p_status, "success");
-  assertEquals(calls[0][1].p_split_subaccount, null);
-  assertEquals(calls[1][1], {
+  assertEquals(calls, [["apply_paystack_refund", {
     p_source: "sweep", p_refund_id: "reversal:ref_1", p_transaction_reference: "ref_1",
     p_amount_minor: 250000, p_currency: "NGN", p_reason: "REVERSAL", p_verified: { id: 9 },
-  });
+  }]]);
+});
+
+Deno.test("a webhook reversal is applied with source webhook", async () => {
+  const { rpc, calls } = fakeRpc({ apply_paystack_refund: { outcome: "refunded" } });
+  await settleVerified(rpc, "charge.success", { ...tx, status: "reversed" });
+  assertEquals(calls.map((c) => [c[0], c[1].p_source]), [["apply_paystack_refund", "webhook"]]);
 });
 
 Deno.test("applyRefunds continues past a failing refund", async () => {

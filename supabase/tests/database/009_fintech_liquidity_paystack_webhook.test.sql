@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(30);
+select plan(31);
 
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria',   'NESTLE'),
@@ -31,6 +31,9 @@ insert into public.payments (id, tenant_id, order_id, teafair_agent_id, amount, 
    '20000000-0000-0000-0000-000000000003', 100.00, 'INITIATED', 'ref_dup'),
   ('80000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000002', '70000000-0000-0000-0000-000000000002',
    '20000000-0000-0000-0000-000000000003', 100.00, 'INITIATED', 'ref_dup');
+-- D1 §6.1: failed is final only after 2 h (the buyer may retry the same reference)
+update public.payments set created_at = now() - interval '3 hours'
+ where id in ('80000000-0000-0000-0000-000000000003', '80000000-0000-0000-0000-000000000004');
 
 select has_index('public', 'payments', 'idx_payments_paystack_reference',
   'the webhook finds a payment by reference without knowing its tenant');
@@ -81,7 +84,7 @@ select is(public.settle_paystack_payment('charge.success', 'ref_failed', 'succes
 
 -- failure and conflicts
 select is(public.settle_paystack_payment('charge.failed', 'ref_failed', 'failed', 50000, 'NGN', '{}', '1', null, null) ->> 'outcome',
-  'updated', 'a verified failure is recorded');
+  'updated', 'a verified failure over 2 h old is recorded');
 select is((select payment_status::text from public.payments where id = '80000000-0000-0000-0000-000000000003'),
   'FAILED', 'the payment is FAILED');
 select is(public.settle_paystack_payment('charge.success', 'ref_settled', 'failed', 70000, 'NGN', '{}', '1', null, null) ->> 'outcome',
@@ -109,6 +112,9 @@ select is(public.settle_paystack_payment('charge.success', 'ref_pending', 'ongoi
 select ok(not exists (select 1 from public.idempotency_logs
                        where key = md5('paystack:charge.success:ref_pending')::uuid),
   'and is not marked processed');
+-- D1 §6.1: a fresh failure may be a declined card the buyer retries on the same reference
+select is(public.settle_paystack_payment('charge.failed', 'ref_pending', 'failed', 60000, 'NGN', '{}', '1', null, null) ->> 'outcome',
+  'not_final', 'failed on a fresh payment is not final');
 -- D1 §6.1: a fresh abandoned payment may be a buyer still on the payment page
 select is(public.settle_paystack_payment('sweep', 'ref_pending', 'abandoned', 60000, 'NGN', '{}', '1', null, null) ->> 'outcome',
   'not_final', 'abandoned on a fresh payment is not final');

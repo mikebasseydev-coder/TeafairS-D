@@ -59,3 +59,18 @@ Deno.test("a bad shape names the field path but not its value", async () => {
   );
   assertEquals(err.message.includes("secret-value"), false);
 });
+
+Deno.test("a hung paystackGet call is aborted by the timeout", async () => {
+  let aborted = false;
+  const hang: typeof fetch = (_i, init) =>
+    new Promise((_res, rej) => {
+      init?.signal?.addEventListener("abort", () => {
+        aborted = true;
+        rej(init.signal!.reason);
+      });
+    });
+  await assertRejects(() =>
+    paystackGet({ secretKey: "k", fetchFn: hang, timeoutMs: 10 }, "/p", {}, z.object({ status: z.literal(true) }))
+  );
+  assertEquals(aborted, true);
+});

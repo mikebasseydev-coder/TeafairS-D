@@ -37,11 +37,17 @@ export function createReconcileFundsHandler(deps: ReconcileFundsDeps): (req: Req
           to: day(new Date(now.getTime() + DAY_MS)),
         });
         const { error: errors = 0, ...outcomes } = await applyRefunds(deps.rpc, "sweep", refunds);
+        if ((outcomes.unreadable ?? 0) > 0) {
+          // only the count: a refund payload can carry customer details
+          console.warn("reconcile-funds: refunds without a transaction reference:", outcomes.unreadable);
+        }
         return json(200, { mode, seen: refunds.length, outcomes, errors });
       }
 
+      // claiming stamps last_swept_at on every row first, so a row that
+      // errors below still moves to the back of the next sweep
       const pending = await deps.rpc<Array<{ paystack_reference: string; created_at: string }>>(
-        "list_unconfirmed_payments",
+        "claim_unconfirmed_payments",
         { p_limit: 50 },
       );
       const outcomes: Record<string, number> = {};
@@ -49,6 +55,12 @@ export function createReconcileFundsHandler(deps: ReconcileFundsDeps): (req: Req
       for (const { paystack_reference: reference } of pending) {
         try {
           const tx = await deps.verifyTransaction(reference);
+          if (tx.reference !== reference) {
+            // the webhook makes the same check: never settle another payment
+            errors++;
+            console.error("reconcile-funds: Verify returned another reference for", reference);
+            continue;
+          }
           const result = await settleVerified(deps.rpc, "sweep", tx);
           outcomes[result.outcome] = (outcomes[result.outcome] ?? 0) + 1;
         } catch (e) {

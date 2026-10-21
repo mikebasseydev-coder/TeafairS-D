@@ -6,9 +6,10 @@
 -- Alerts are notifications rows in the same transaction (decision 12).
 
 -- ── payments: sweep bookkeeping and the split/partner pairing ───────────
--- last_swept_at is internal (not in the authenticated column grant): a
--- not-final sweep result stamps it, so the sweep visits the least recently
--- checked payment first and fresh abandoned checkouts cannot starve it.
+-- last_swept_at is internal (not in the authenticated column grant):
+-- claim_unconfirmed_payments stamps every row it hands out, so the sweep
+-- visits the least recently checked payment first and rows that keep failing
+-- (a Verify error, an ambiguous reference) or stay not final cannot starve it.
 alter table public.payments
   add column last_swept_at timestamptz,
   -- a snapshot without a partner could never become a commission row and
@@ -103,8 +104,9 @@ begin
 
   v_target := case
                 when p_status = 'success' then 'SUCCESS'
-                when p_status = 'failed'  then 'FAILED'
-                when p_status = 'abandoned' and v_age >= interval '2 hours' then 'FAILED'
+                -- failed is held like abandoned: Paystack Checkout lets the
+                -- buyer retry a declined card on the same reference
+                when p_status in ('failed', 'abandoned') and v_age >= interval '2 hours' then 'FAILED'
                 when p_status in ('ongoing', 'pending', 'processing', 'queued')
                      and v_age > interval '72 hours' then 'FAILED'
               end;
@@ -264,34 +266,48 @@ end;
 $$;
 
 -- ── the reconcile-funds confirmation sweep (§7) ─────────────────────────
--- Unconfirmed payments older than 5 minutes, least recently checked first
--- (coalesce(last_swept_at, created_at)), minus those the sweep has already
--- decided (a mismatch, say), which a human now owns.
-create or replace function public.list_unconfirmed_payments(p_limit integer)
+-- Claims up to p_limit unconfirmed payments older than 5 minutes, least
+-- recently checked first (coalesce(last_swept_at, created_at)), minus those
+-- the sweep has already decided (a mismatch, say), which a human now owns.
+-- Every claimed row is stamped before the sweep looks at it, so it moves to
+-- the back whatever happens next; SKIP LOCKED keeps overlapping runs apart.
+create or replace function public.claim_unconfirmed_payments(p_limit integer)
 returns table (paystack_reference text, created_at timestamptz)
 language sql
-stable
+volatile
 security definer
 set search_path = public, pg_temp
 as $$
-  select p.paystack_reference, p.created_at
-    from public.payments p
-   where p.payment_status in ('INITIATED', 'PROCESSING')
-     and p.created_at < now() - interval '5 minutes'
-     and not exists (
-       select 1 from public.idempotency_logs l
-        where l.key = md5('paystack:sweep:' || p.paystack_reference)::uuid
-          and l.status = 'COMPLETED')
-   order by coalesce(p.last_swept_at, p.created_at), p.id
-   limit least(greatest(coalesce(p_limit, 50), 0), 500);
+  with picked as (
+    select p.id, coalesce(p.last_swept_at, p.created_at) as swept_key
+      from public.payments p
+     where p.payment_status in ('INITIATED', 'PROCESSING')
+       and p.created_at < now() - interval '5 minutes'
+       and not exists (
+         select 1 from public.idempotency_logs l
+          where l.key = md5('paystack:sweep:' || p.paystack_reference)::uuid
+            and l.status = 'COMPLETED')
+     order by coalesce(p.last_swept_at, p.created_at), p.id
+     limit least(greatest(coalesce(p_limit, 50), 0), 500)
+       for update of p skip locked
+  ), claimed as (
+    update public.payments p
+       set last_swept_at = now()
+      from picked
+     where p.id = picked.id
+    returning p.id, p.paystack_reference, p.created_at
+  )
+  select c.paystack_reference, c.created_at
+    from claimed c join picked k on k.id = c.id
+   order by k.swept_key, c.id;
 $$;
 
 revoke execute on function public.notify_tenant_zsms(uuid, text, text, text, jsonb)
   from public, anon, authenticated, service_role;
 revoke execute on function public.settle_paystack_payment(text, text, text, bigint, text, jsonb, text, text, bigint)
   from public, anon, authenticated;
-revoke execute on function public.list_unconfirmed_payments(integer)
+revoke execute on function public.claim_unconfirmed_payments(integer)
   from public, anon, authenticated;
 grant execute on function public.settle_paystack_payment(text, text, text, bigint, text, jsonb, text, text, bigint)
   to service_role;
-grant execute on function public.list_unconfirmed_payments(integer) to service_role;
+grant execute on function public.claim_unconfirmed_payments(integer) to service_role;

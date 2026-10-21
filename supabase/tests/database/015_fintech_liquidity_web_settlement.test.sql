@@ -1,10 +1,10 @@
 -- Spec D1 §6 — collection settlement: PENDING → PAID, the commission row
 -- copied from the split snapshot, the sweep's age rules, escalations, and
--- list_unconfirmed_payments.
+-- claim_unconfirmed_payments.
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(65);
+select plan(70);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
 -- 01, 02 ACTIVE ZSMs · 05 DISABLED ZSM · 03 TM (Ikeja and Epe)
@@ -104,6 +104,7 @@ select pg_temp.mk(17, 'r_fail_old',   1, '73 hours');
 select pg_temp.mk(18, 'r_q_a',        1, '40 minutes');
 select pg_temp.mk(19, 'r_q_b',        1, '35 minutes');
 select pg_temp.mk(20, 'r_q_c',        1, '32 minutes');
+select pg_temp.mk(22, 'r_fail_new',   1, '1 hour');
 -- a field order with a split snapshot: D1 settles its payment, not its status
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, created_at) values
   ('90000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', 'FIELD_DSA',
@@ -125,6 +126,13 @@ select is((select indexdef ~ 'COALESCE\(last_swept_at, created_at\)' from pg_ind
             where schemaname = 'public' and indexname = 'idx_payments_unconfirmed'),
   true, 'the sweep index follows the sweep order');
 
+-- claiming stamps rows; tests that need a clean sweep order reset the stamps
+-- as the owner: last_swept_at = now() for p_refs, null for everything else
+create function pg_temp.stamp(p_refs text[]) returns void language sql as $$
+  update public.payments
+     set last_swept_at = case when paystack_reference = any(p_refs) then now() end;
+$$;
+
 create function pg_temp.notes(p_kind text, p_order integer) returns integer language sql as $$
   select count(*)::int from public.notifications
    where kind = p_kind
@@ -143,10 +151,10 @@ select ok(not has_function_privilege('authenticated',
   and not has_function_privilege('anon',
   'public.settle_paystack_payment(text,text,text,bigint,text,jsonb,text,text,bigint)', 'execute'),
   'no user or visitor can settle');
-select ok(has_function_privilege('service_role', 'public.list_unconfirmed_payments(integer)', 'execute')
-  and not has_function_privilege('authenticated', 'public.list_unconfirmed_payments(integer)', 'execute')
-  and not has_function_privilege('anon', 'public.list_unconfirmed_payments(integer)', 'execute'),
-  'only service_role lists unconfirmed payments');
+select ok(has_function_privilege('service_role', 'public.claim_unconfirmed_payments(integer)', 'execute')
+  and not has_function_privilege('authenticated', 'public.claim_unconfirmed_payments(integer)', 'execute')
+  and not has_function_privilege('anon', 'public.claim_unconfirmed_payments(integer)', 'execute'),
+  'only service_role claims unconfirmed payments');
 select ok(not has_function_privilege('service_role', 'public.notify_tenant_zsms(uuid,text,text,text,jsonb)', 'execute')
   and not has_function_privilege('authenticated', 'public.notify_tenant_zsms(uuid,text,text,text,jsonb)', 'execute')
   and not has_function_privilege('anon', 'public.notify_tenant_zsms(uuid,text,text,text,jsonb)', 'execute'),
@@ -165,8 +173,11 @@ select lives_ok($$select public.web_resolve_code('CAPONE01')$$, 'a pending order
 set local role service_role;
 select set_config('request.jwt.claims', '{"role": "service_role"}', true);
 
-select ok('r_mismatch' in (select paystack_reference from public.list_unconfirmed_payments(50)),
-  'an undecided payment is on the sweep list');
+select ok('r_mismatch' in (select paystack_reference from public.claim_unconfirmed_payments(50)),
+  'an undecided payment is claimed by the sweep');
+reset role;
+select pg_temp.stamp(array[]::text[]);
+set local role service_role;
 
 -- ── PENDING → PAID ──────────────────────────────────────────────────────
 select is(public.settle_paystack_payment('charge.success', 'r_ok', 'success', 250000, 'NGN', '{"id": 9001}',
@@ -267,24 +278,37 @@ select is(public.settle_paystack_payment('sweep', 'r_fail_old', 'failed', 250000
 select ok(not exists (select 1 from public.audit_logs
                        where operation = 'SWEEP_EXPIRED' and entity_id = '91000000-0000-0000-0000-000000000017'),
   'a verified failure is not an expiry');
+select is(public.settle_paystack_payment('sweep', 'r_fail_new', 'failed', 250000, 'NGN', '{}',
+  '9019', null, null) ->> 'outcome', 'not_final', 'failed at 1 h is not final: the buyer may retry the same reference');
+select ok(not exists (select 1 from public.idempotency_logs where key = md5('paystack:sweep:r_fail_new')::uuid),
+  'and takes no key, so a later success on that reference still settles');
 
 -- ── the sweep visits the least recently checked first ───────────────────
+reset role;
+select pg_temp.stamp(array[]::text[]);
+set local role service_role;
 select ok((select array_position(l, 'r_q_a') < array_position(l, 'r_q_b')
               and array_position(l, 'r_q_b') < array_position(l, 'r_q_c')
-             from (select array_agg(paystack_reference) l from public.list_unconfirmed_payments(50)) s),
-  'unchecked payments are listed oldest first');
+             from (select array_agg(paystack_reference) l from public.claim_unconfirmed_payments(50)) s),
+  'unchecked payments are claimed oldest first');
+select ok((select bool_and(last_swept_at = now()) from public.payments
+            where paystack_reference in ('r_q_a', 'r_q_b', 'r_q_c', 'r_wait_a', 'r_wait_b')),
+  'claiming stamps every row it hands out, before the sweep looks at it');
+reset role;
+select pg_temp.stamp(array[]::text[]);
+set local role service_role;
 select is(public.settle_paystack_payment('sweep', 'r_q_a', 'pending', 250000, 'NGN', '{}',
   '9017', null, null) ->> 'outcome', 'not_final', 'A is not final yet');
-select ok((select array_position(l, 'r_q_a') > array_position(l, 'r_q_c')
-              and array_position(l, 'r_q_b') < array_position(l, 'r_q_c')
-             from (select array_agg(paystack_reference) l from public.list_unconfirmed_payments(50)) s),
-  'a not-final sweep moves A behind B and C');
 select ok((select last_swept_at = now() from public.payments where paystack_reference = 'r_q_a'),
-  'the sweep stamps last_swept_at');
+  'a not-final sweep also stamps last_swept_at');
 select is(public.settle_paystack_payment('charge.success', 'r_q_b', 'pending', 250000, 'NGN', '{}',
   '9018', null, null) ->> 'outcome', 'not_final', 'a webhook not-final result');
 select ok((select last_swept_at is null from public.payments where paystack_reference = 'r_q_b'),
   'does not count as a sweep');
+select ok((select array_position(l, 'r_q_a') > array_position(l, 'r_q_c')
+              and array_position(l, 'r_q_b') < array_position(l, 'r_q_c')
+             from (select array_agg(paystack_reference) l from public.claim_unconfirmed_payments(50)) s),
+  'A, checked last, is claimed behind B and C');
 
 -- ── real money wins ─────────────────────────────────────────────────────
 select is(public.settle_paystack_payment('charge.success', 'r_late', 'success', 250000, 'NGN', '{}',
@@ -311,10 +335,13 @@ select is(public.settle_paystack_payment('sweep', 'r_mismatch', 'success', 1, 'N
 select is((select row(p.payment_status::text, o.status)::text from public.payments p join public.orders o on o.id = p.order_id
             where p.paystack_reference = 'r_mismatch'),
   row('INITIATED', 'PENDING')::text, 'mismatch changes nothing');
-select ok(not ('r_mismatch' in (select paystack_reference from public.list_unconfirmed_payments(50))),
+select ok(not ('r_mismatch' in (select paystack_reference from public.claim_unconfirmed_payments(50))),
   'a decided payment leaves the sweep');
-select is((select array_agg(paystack_reference) from public.list_unconfirmed_payments(50)),
-  array['r_wait_a', 'r_q_b', 'r_q_c', 'r_wait_b', 'r_code', 'r_aband_new', 'r_ong10', 'r_q_a'],
+reset role;
+select pg_temp.stamp(array['r_aband_new', 'r_ong10', 'r_q_a', 'r_fail_new']);
+set local role service_role;
+select is((select array_agg(paystack_reference) from public.claim_unconfirmed_payments(50)),
+  array['r_wait_a', 'r_q_b', 'r_q_c', 'r_wait_b', 'r_code', 'r_aband_new', 'r_ong10', 'r_q_a', 'r_fail_new'],
   'least recently checked first, >5 min only');
 select throws_ok($$select public.settle_paystack_payment('sweep', 'r_wait_a', 'reversed', 250000, 'NGN', '{}',
   '9011', null, null)$$, 'P0001', 'reversed is applied by apply_paystack_refund', 'reversed is not settled here');
@@ -330,6 +357,19 @@ select is(public.settle_paystack_payment('charge.success', 'r_code', 'success', 
 reset role;
 select throws_ok($$select public.web_resolve_code('CAPONE01')$$, 'P0001', 'This link is no longer valid',
   'PAID orders count toward max_redemptions');
+
+-- ── rows that error do not starve the sweep ─────────────────────────────
+-- every row above is now stamped; three older unchecked payments come first
+select pg_temp.mk(23, 'r_err_1',      1, '100 days');
+select pg_temp.mk(24, 'r_err_2',      1, '99 days');
+select pg_temp.mk(25, 'r_err_3',      1, '98 days');
+set local role service_role;
+select is((select array_agg(paystack_reference) from public.claim_unconfirmed_payments(2)),
+  array['r_err_1', 'r_err_2'], 'the two oldest are claimed');
+-- both Verify calls fail: settle_paystack_payment is never called for them
+select is((select (array_agg(paystack_reference))[1] from public.claim_unconfirmed_payments(50)),
+  'r_err_3', 'the next claim starts with the third: claimed rows moved to the back');
+reset role;
 
 select * from finish();
 rollback;

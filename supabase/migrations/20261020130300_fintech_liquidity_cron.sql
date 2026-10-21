@@ -29,7 +29,9 @@ begin
     url     := rtrim(v_base, '/') || '/' || p_function,
     body    := coalesce(p_body, '{}'::jsonb),
     headers := jsonb_build_object('content-type', 'application/json',
-                                  'x-cron-secret', v_secret));
+                                  'x-cron-secret', v_secret),
+    -- pg_net's default is 5 s; a sweep of 50 Verify calls takes longer
+    timeout_milliseconds := 120000);
 end;
 $$;
 
