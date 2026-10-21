@@ -405,6 +405,15 @@ verify_jwt = false
 [functions.web-checkout]
 verify_jwt = false
 
+[functions.support-ticket-open]
+verify_jwt = false
+
+[functions.support-ticket-read]
+verify_jwt = false
+
+[functions.support-ticket-message]
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
