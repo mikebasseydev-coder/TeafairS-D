@@ -82,6 +82,8 @@ select is(
   (select count(*)::int from pg_tables t where t.schemaname = 'public'
      -- A3: the ticket-secret hashes have no policy and no grant on purpose
      and t.tablename <> 'support_ticket_secrets'
+     -- A5: the refund policy table has no policy and no grant; it is read through a service_role RPC
+     and t.tablename <> 'refund_policies'
      and not exists (select 1 from pg_policies p
                      where p.schemaname = 'public' and p.tablename = t.tablename and p.cmd = 'SELECT')),
   0, 'every public table has a SELECT policy');
