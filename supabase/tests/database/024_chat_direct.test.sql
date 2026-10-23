@@ -1,9 +1,10 @@
 -- Addendum A4 §4.1 — get_or_create_direct_channel: scope (same territory, zone
--- ZSM, TMs of one zone), sorted pair, replay, audit on create only.
+-- ZSM, TMs of one zone), sorted pair, replay, reopen after a move, no audit
+-- row (chat audits moderation only, §7.9).
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(17);
+select plan(19);
 
 -- ── fixtures (plan "common fixture shape") ──────────────────────────────
 -- T1: zone Lagos (ZSM Z) with Ikeja (TM TA, ASM AA, DSM MA, DSA DA, DSA DA2,
@@ -127,10 +128,23 @@ select pg_temp.act_as('20000000-0000-0000-0000-000000000010', '10000000-0000-000
 select throws_ok($$select public.get_or_create_direct_channel('a0000000-0000-0000-0000-000000000012', '20000000-0000-0000-0000-000000000005')$$, '42501', null, 'fintech agent cannot open chats');
 reset role;
 
+select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
+select throws_ok($$select public.get_or_create_direct_channel('a0000000-0000-0000-0000-000000000013', '20000000-0000-0000-0000-000000000012')$$, 'P0001', 'that person is not available', 'a target in another tenant is not available');
+reset role;
+
+-- DA moves to Epe: the pair no longer shares a territory, but the chat exists
+update public.tenant_users set territory_id = '40000000-0000-0000-0000-000000000002'
+ where tenant_id = '10000000-0000-0000-0000-000000000001' and profile_id = '20000000-0000-0000-0000-000000000005';
+select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
+create temp table r3 as select public.get_or_create_direct_channel('a0000000-0000-0000-0000-000000000014', '20000000-0000-0000-0000-000000000006') as r;
+reset role;
+select is((select r from r3),
+          jsonb_build_object('channel_id', (select r ->> 'channel_id' from r1), 'created', false),
+          'reopening a direct chat after one person moves returns it');
+
 select is((select count(*)::int from public.audit_logs
-            where operation = 'get_or_create_direct_channel'
-              and after ->> 'channel_id' = (select r ->> 'channel_id' from r1)),
-          1, 'audited once, on create');
+            where operation = 'get_or_create_direct_channel' or entity_type = 'chat_channels'),
+          0, 'opening a direct chat writes no audit row');
 select ok(not has_function_privilege('anon', 'public.get_or_create_direct_channel(uuid,uuid)', 'execute'), 'not for anon');
 
 select * from finish();

@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(34);
+select plan(41);
 
 -- ── fixtures (plan "common fixture shape") ──────────────────────────────
 -- T1: zone Lagos (ZSM Z) with Ikeja (TM TA, ASM AA, DSM MA, DSA DA, DSA DA2,
@@ -137,6 +137,27 @@ select throws_ok($$select public.mark_chat_read('b2000000-0000-0000-0000-0000000
 reset role;
 select is((select count(*)::int from public.audit_logs where operation = 'mark_chat_read'), 0, 'mark read writes no audit');
 
+select pg_temp.act_as('20000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000001');
+select throws_ok($$select public.mark_chat_read('b2000000-0000-0000-0000-000000000004', (select ikeja from ids), null)$$, 'P0001', 'read_up_to is required', 'a null read_up_to is refused');
+reset role;
+
+-- a direct exchange DA <-> DA2 and a room post in Epe; a third-party TM (TA)
+-- reads audit_logs tenant-wide and must learn nothing from them (§7.9)
+select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
+select lives_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000013', (select id from d1), 'ping')$$, 'DA posts in the direct chat again');
+reset role;
+select pg_temp.act_as('20000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000001');
+select lives_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000014', (select id from d1), 'pong')$$, 'DA2 replies');
+reset role;
+select pg_temp.act_as('20000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000001');
+select lives_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000015', (select epe from ids), 'epe hello')$$, 'DB posts in the Epe room');
+reset role;
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.audit_logs
+            where operation like '%chat%' or operation like '%direct_channel%' or entity_type like 'chat%'),
+          0, 'a third-party TM sees no chat-derived audit rows');
+reset role;
+
 -- 105 messages by others, inserted directly (posting them would hit the throttle)
 insert into public.chat_messages (tenant_id, channel_id, sender_id, body)
 select '10000000-0000-0000-0000-000000000001', (select ikeja from ids), '20000000-0000-0000-0000-000000000005', 'bulk ' || g
@@ -149,20 +170,28 @@ reset role;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001');
 select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000009', (select epe from ids), repeat('x', 2001))$$, 'P0001', null, 'over 2000 refused');
 select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000010', (select epe from ids), '   ')$$, 'P0001', null, 'blank refused');
+select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000016', (select epe from ids), E'
+
+	')$$, 'P0001', 'a message must be 1 to 2000 characters', 'a newline-only post is refused');
 select lives_ok($$select count(public.post_chat_message(gen_random_uuid(), (select epe from ids), 'burst ' || g)) from generate_series(1, 20) g$$, '20 posts in a minute allowed');
 select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000011', (select epe from ids), 'one too many')$$, 'P0001', 'Too many messages. Please wait a moment.', 'throttle');
 reset role;
 
 -- partner becomes unavailable: history stays readable, posting stops
+update public.tenant_users set status = 'DISABLED' where profile_id = '20000000-0000-0000-0000-000000000006' and tenant_id = '10000000-0000-0000-0000-000000000001';
+select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
+select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000017', (select id from d1), 'still there?')$$, 'P0001', 'this person is no longer available', 'cannot post to a disabled partner');
+reset role;
+update public.tenant_users set status = 'ACTIVE' where profile_id = '20000000-0000-0000-0000-000000000006' and tenant_id = '10000000-0000-0000-0000-000000000001';
 update public.tenant_users set role = 'FINTECH_AGENT' where profile_id = '20000000-0000-0000-0000-000000000006' and tenant_id = '10000000-0000-0000-0000-000000000001';
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001');
 select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000012', (select id from d1), 'anyone there')$$, 'P0001', 'this person is no longer available', 'cannot post to an unavailable partner');
-select is((select count(*)::int from public.chat_messages where channel_id = (select id from d1)), 1, 'history still readable');
+select is((select count(*)::int from public.chat_messages where channel_id = (select id from d1)), 3, 'history still readable');
 reset role;
 
 select ok(not exists (select 1 from public.audit_logs where operation in ('post_chat_message', 'mark_chat_read')
                         and (coalesce(before::text, '') || coalesce(after::text, '')) ~ 'secret-body-xyz|direct one|big news'), 'no bodies in audit');
-select is((select count(*)::int from public.audit_logs where operation = 'post_chat_message' and after ? 'channel_type'), 25, 'each post audited once');
+select is((select count(*)::int from public.audit_logs where operation = 'post_chat_message'), 0, 'posting writes no audit row');
 select ok(not has_function_privilege('anon', 'public.post_chat_message(uuid,uuid,text)', 'execute'), 'not for anon');
 
 select * from finish();

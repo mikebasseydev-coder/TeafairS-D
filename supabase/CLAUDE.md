@@ -160,8 +160,18 @@ Functions and no secrets: staff talk through PostgREST.
   the `CHAT_MESSAGE_HIDDEN` audit holds ids and the reason, never the body.
   Hiding twice writes no second audit row.
 - **Notifications** use fixed copy and ids only; rooms never notify.
+- **Chat writes no audit rows except moderation (user decision).** Posting,
+  opening a direct chat and marking read write no `audit_logs` row, because
+  ZSMs and TMs read `audit_logs` tenant-wide and it would reveal who messages
+  whom. They still use `idempotency_logs`, which only the actor can read.
+- **Once a territory or zone has a chat channel it cannot be deleted
+  (RESTRICT); clear its channel first in any future admin cleanup.**
 - **Realtime.** The publication includes `chat_messages` and `chat_channels`;
   RLS decides who receives each event.
+- **For Spec B.** Subscribe to Realtime with `channel_id=eq.` and
+  `tenant_id=eq.` filters, because every post updates `chat_channels`. Move
+  the announcement fan-out (one `notifications` row per staff member) to a
+  queue past roughly 10k staff per tenant.
 
 ## Layout
 

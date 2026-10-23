@@ -4,9 +4,11 @@
 --                          person; ANNOUNCEMENT: every available staff member
 --                          but the sender; rooms never notify). Notification
 --                          copy is fixed and never quotes the message.
---   mark_chat_read         moves a person's read marker forward only; not audited.
+--   mark_chat_read         moves a person's read marker forward only.
 --   list_my_chat_channels  the inbox, computed from my_chat_channel_ids().
--- Audit after-images hold ids, never a message body.
+-- Neither write is audited (§7.9, user decision 2026-10-22): audit_logs is
+-- readable tenant-wide by TMs and ZSMs and would reveal who messages whom.
+-- The message row is the record; only moderation (hide_chat_message) audits.
 
 create or replace function public.post_chat_message(
   p_idempotency_key uuid,
@@ -23,7 +25,9 @@ declare
               array['ZSM', 'TM', 'ASM', 'DSM', 'DSA']::public.tenant_role_enum[]);
   v_prior   jsonb;
   v_ch      public.chat_channels;
-  v_body    text := btrim(coalesce(p_body, ''));
+  -- the same set the chat_messages CHECK trims
+  v_body    text := btrim(coalesce(p_body, ''), E' 	
+');
   v_msg     public.chat_messages;
   v_other   uuid;
   v_payload jsonb;
@@ -36,7 +40,9 @@ begin
    where c.id = p_channel_id
      and c.tenant_id = v_me.tenant_id
      and c.id in (select public.my_chat_channel_ids())
-   for update;
+   -- NO KEY UPDATE: does not conflict with the KEY SHARE that FK checks take
+   -- (mark_chat_read's read-state upsert, message inserts), so no deadlock
+   for no key update;
   if not found then
     raise exception 'channel not found' using errcode = '42501';
   end if;
@@ -57,6 +63,7 @@ begin
     raise exception 'a message must be 1 to 2000 characters' using errcode = 'P0001';
   end if;
 
+  -- unlocked by design: parallel posts across channels can slightly exceed 20
   if (select count(*) from public.chat_messages m
        where m.tenant_id = v_me.tenant_id and m.sender_id = v_me.profile_id
          and m.created_at > clock_timestamp() - interval '1 minute') >= 20 then
@@ -89,10 +96,6 @@ begin
        and tu.profile_id <> v_me.profile_id;
   end if;
 
-  perform public.write_audit(v_me.tenant_id, 'post_chat_message', 'chat_messages', v_msg.id::text,
-    null, jsonb_build_object('message_id', v_msg.id, 'channel_id', v_ch.id,
-                             'channel_type', v_ch.channel_type), p_idempotency_key);
-
   return public.idempotency_complete(p_idempotency_key,
     jsonb_build_object('message_id', v_msg.id, 'created_at', v_msg.created_at));
 end;
@@ -120,6 +123,10 @@ begin
   v_prior := public.idempotency_begin(p_idempotency_key, 'mark_chat_read',
                jsonb_build_object('channel', p_channel_id, 'up_to', p_read_up_to));
   if v_prior is not null then return v_prior; end if;
+
+  if p_read_up_to is null then
+    raise exception 'read_up_to is required' using errcode = 'P0001';
+  end if;
 
   select c.* into v_ch from public.chat_channels c
    where c.id = p_channel_id

@@ -3,8 +3,11 @@
 --   * both share a territory_id; or
 --   * one is a ZSM and the other works in that ZSM's zone; or
 --   * both are TM or ZSM of the same zone.
--- Zones come from chat_staff_zone (§7.2). Audited only when a channel is
--- created; the after-image holds ids, never a message.
+-- Zones come from chat_staff_zone (§7.2). Scope is checked only when a
+-- channel is created: an existing pair is returned even after one person has
+-- moved, since its history is already theirs. Writes no audit row: audit_logs
+-- is readable tenant-wide by TMs and ZSMs and would reveal who messages whom
+-- (§7.9, user decision 2026-10-22).
 create or replace function public.get_or_create_direct_channel(
   p_idempotency_key uuid,
   p_target_profile_id uuid
@@ -37,6 +40,15 @@ begin
     raise exception 'that person is not available' using errcode = 'P0001';
   end if;
 
+  -- an existing pair is reopened without the scope rule (§4.1)
+  select c.id into v_id from public.chat_channels c
+   where c.tenant_id = v_me.tenant_id and c.channel_type = 'DIRECT'
+     and c.direct_low_id = v_low and c.direct_high_id = v_high;
+  if found then
+    return public.idempotency_complete(p_idempotency_key,
+      jsonb_build_object('channel_id', v_id, 'created', false));
+  end if;
+
   select * into v_target from public.tenant_users tu
    where tu.tenant_id = v_me.tenant_id and tu.profile_id = p_target_profile_id and tu.status = 'ACTIVE';
   v_my_zone    := public.chat_staff_zone(v_me.tenant_id, v_me.profile_id);
@@ -58,13 +70,11 @@ begin
   returning id into v_id;
   v_created := v_id is not null;
 
+  -- lost a race with a concurrent create of the same pair
   if not v_created then
     select c.id into v_id from public.chat_channels c
      where c.tenant_id = v_me.tenant_id and c.channel_type = 'DIRECT'
        and c.direct_low_id = v_low and c.direct_high_id = v_high;
-  else
-    perform public.write_audit(v_me.tenant_id, 'get_or_create_direct_channel', 'chat_channels', v_id::text,
-      null, jsonb_build_object('channel_id', v_id, 'other_profile_id', p_target_profile_id), p_idempotency_key);
   end if;
 
   return public.idempotency_complete(p_idempotency_key,

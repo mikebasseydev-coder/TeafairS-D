@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(49);
+select plan(50);
 
 -- ── fixtures (plan "common fixture shape") ──────────────────────────────
 -- T1: zone Lagos (ZSM Z) with Ikeja (TM TA, ASM AA, DSM MA, DSA DA, DSA DA2,
@@ -147,6 +147,12 @@ select throws_ok($$insert into public.chat_messages (tenant_id, channel_id, send
   values ('10000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',
           '20000000-0000-0000-0000-000000000005', '   ')$$,
   '23514', null, 'empty body refused');
+select throws_ok($$insert into public.chat_messages (tenant_id, channel_id, sender_id, body)
+  values ('10000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',
+          '20000000-0000-0000-0000-000000000005', E'
+	
+')$$,
+  '23514', null, 'a newline-only body is refused');
 select throws_ok($$insert into public.chat_messages (tenant_id, channel_id, sender_id, body)
   values ('10000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',
           '20000000-0000-0000-0000-000000000005', repeat('x', 2001))$$,

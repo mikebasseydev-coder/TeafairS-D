@@ -81,7 +81,8 @@ All tables are tenant-owned. FKs are `ON DELETE RESTRICT`; this replaces the bri
 |---|---|
 | `id`, `tenant_id`, `channel_id` | FK `(tenant_id, channel_id)` → `chat_channels` |
 | `sender_id uuid not null` | → profiles |
-| `body text not null` | CHECK `length(btrim(body)) between 1 and 2000` |
+| `body text not null` | CHECK `length(btrim(body, E' 	
+')) between 1 and 2000`; stored trimmed of the same set |
 | `hidden_at timestamptz`, `hidden_by uuid` | moderation (§5); `hidden_by` → profiles |
 | `created_at timestamptz not null default clock_timestamp()` | |
 
@@ -90,7 +91,7 @@ All tables are tenant-owned. FKs are `ON DELETE RESTRICT`; this replaces the bri
 
 ### 3.3 `chat_read_state`
 
-`(tenant_id, channel_id, profile_id)` is the primary key, plus `last_read_at timestamptz not null`. Rows are written only through `mark_chat_read`. Unread count = messages in the channel with `created_at > last_read_at` (all messages if there is no row), excluding the caller's own messages.
+`(tenant_id, channel_id, profile_id)` is the primary key, plus `last_read_at timestamptz not null`. Rows are written by `mark_chat_read`, and posting advances the sender's own row (§4.2). Unread count = messages in the channel with `created_at > last_read_at` (all messages if there is no row), excluding the caller's own messages.
 
 ### 3.4 Access: the single source of truth
 
@@ -114,7 +115,7 @@ All tables are tenant-owned. FKs are `ON DELETE RESTRICT`; this replaces the bri
 Every RPC:
 - takes `p_idempotency_key uuid` first;
 - calls `assert_tenant_role(staff roles)`, so the tenant comes from the JWT and is re-verified live;
-- runs `idempotency_begin`, then the writes, then `write_audit` (source `USER`, never the body), then `idempotency_complete`;
+- runs `idempotency_begin`, then the writes, then `idempotency_complete`; write_audit for moderation only (user decision 2026-10-22), source `USER`, never the body (§7.9);
 - is SECURITY DEFINER with `search_path` pinned, revoked from public, anon and service_role, and granted to `authenticated`.
 
 Errors: P0001 → 422, 42501 → 403.
@@ -128,18 +129,21 @@ Errors: P0001 → 422, 42501 → 403.
      - **zone ZSM:** one is the ZSM of the other's zone;
      - **zone management:** both are a TM or ZSM in the same zone.
    - Returns the existing channel for a sorted pair; concurrent creates resolve through the unique index.
-   - The scope is checked only when the chat is created. An existing direct chat stays usable while both people are ACTIVE in the tenant, even if one moves. *(Builder's call: history matters more than re-checking scope on every message.)*
+   - The scope is checked only when the chat is created. The existing sorted pair is looked up after the self and availability checks and before the scope rule, so an existing direct chat is returned (`created: false`) and stays usable while both people are ACTIVE in the tenant, even if one moves. *(Builder's call: history matters more than re-checking scope on every message.)*
+   - Writes no audit row, on create or reopen (§7.9).
 2. **`post_chat_message(p_idempotency_key uuid, p_channel_id uuid, p_body text) returns jsonb`** → `{message_id, created_at}`.
    - The channel must be in `my_chat_channel_ids()` for the active tenant, else 42501.
    - Only ZSMs post to ANNOUNCEMENT.
    - DIRECT needs both participants ACTIVE, else P0001 `this person is no longer available`.
-   - Throttle: more than 20 messages from the sender in the last minute raises P0001 `Too many messages. Please wait a moment.`
-   - Writes the message, bumps `last_message_at`, and advances the sender's own read state.
+   - The body is trimmed of spaces, tabs, CR and LF, then must be 1 to 2000 characters (P0001); it is stored trimmed.
+   - Throttle: more than 20 messages from the sender in the last minute raises P0001 `Too many messages. Please wait a moment.` The count is unlocked by design, so parallel posts across channels can slightly exceed 20.
+   - The channel row is locked `FOR NO KEY UPDATE`, which does not conflict with the KEY SHARE that FK checks take.
+   - Writes the message, bumps `last_message_at`, and advances the sender's own read state. Writes no audit row (§7.9): the message row is the record.
    - Notifications, kind `CHAT_MESSAGE` for DIRECT and `CHAT_ANNOUNCEMENT` for ANNOUNCEMENT. The payload is `{channel_id, message_id}` only and never carries the body.
      - DIRECT → the other participant.
      - ANNOUNCEMENT → every ACTIVE staff member of the tenant, in one set-based insert.
      - TERRITORY and ZONE write no notification rows; they rely on unread counts. Rooms are busy, and a row per member per message would swamp `notifications`.
-3. **`mark_chat_read(p_idempotency_key uuid, p_channel_id uuid, p_read_up_to timestamptz) returns jsonb`**. Upserts read state forward only, with `greatest(existing, p_read_up_to)`, and caps it at `now()`. This is the only RPC that writes no audit row: read state is not a business fact. *(Builder's call.)*
+3. **`mark_chat_read(p_idempotency_key uuid, p_channel_id uuid, p_read_up_to timestamptz) returns jsonb`**. Upserts read state forward only, with `greatest(existing, p_read_up_to)`, and caps it at `clock_timestamp()`, which is consistent with `chat_messages.created_at`. A null `p_read_up_to` raises P0001 `read_up_to is required`. Writes no audit row (§7.9).
 4. **`hide_chat_message(p_idempotency_key uuid, p_message_id uuid, p_reason text) returns jsonb`**.
    - Moderation for TERRITORY, ZONE and ANNOUNCEMENT only.
    - Allowed for a ZSM whose zone covers the channel, or any ZSM for ANNOUNCEMENT.
@@ -181,7 +185,7 @@ Access matrix, one assertion per cell:
 - only ZSMs post announcements;
 - the throttle;
 - the notification fan-out and payload keys;
-- no body in audit.
+- no audit row (§7.9).
 
 Also:
 - `mark_chat_read` moves forward only;
@@ -202,6 +206,7 @@ These were settled after the builder check. Each is marked as the builder's call
 6. **Who counts as available (builder's call).** A person is available to chat in a tenant when they are ACTIVE **and** hold a staff role there. Someone moved to FINTECH_AGENT or RETAIL_SHOP_OWNER becomes unavailable, exactly like a disabled user.
 7. **Throttle (builder's call).** The limit is per sender, per tenant, across all channels.
 8. **Unread count (builder's call).** It is capped. `unread_count` counts at most 100 messages per channel, so the client shows "99+" at 100. This keeps a ZSM with many territory rooms cheap to serve.
+9. **Chat audit (answer).** Posting, opening a direct chat and marking read write no audit row; only moderation is audited. Reason: audit_logs is readable tenant-wide by TMs and ZSMs, and audit rows would reveal who messages whom (user decision 2026-10-22).
 
 ## 8. Left to the builder
 
