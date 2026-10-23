@@ -1,6 +1,6 @@
 # Addendum A5 to Spec A — Food refund policy, support photos, web-order fulfilment, WhatsApp-first messaging
 
-**Status:** written 2026-10-23. The user has not yet reviewed it.
+**Status:** approved 2026-10-23; plan `docs/superpowers/plans/2026-10-23-addendum-a5-refund-fulfillment.md`.
 **Authority:** this addendum amends Spec A. Spec A §9 applies in full, and so do A2 (buyer contact privacy) and A3 (support tickets).
 **Builds on:** D1, A3 and A4. All of them are merged into local `main`, and A5's branch `docs/addendum-a5-refund-fulfillment` is cut from there.
 **Scope:** backend only, meaning migrations, RPCs, Edge Functions and tests. The policy page and the checkout checkbox UI wait for Spec B, because frontend work is on hold.
