@@ -253,12 +253,12 @@ select is((public.web_find_order_by_pair('tf-aaaaab', 'TFW-00000000-0000-0000-00
 select is((public.web_find_order_by_pair('TF-AAAAAA', 'TFW-00000000-0000-0000-0000-00000000000B')).id,
           null, 'the lookup misses a mismatched pair');
 select ok(has_function_privilege('service_role',
-            'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute')
+            'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute')
       and has_function_privilege('service_role', 'public.read_support_ticket(text,text)', 'execute')
-      and has_function_privilege('service_role', 'public.add_ticket_message(uuid,text,text,text)', 'execute')
+      and has_function_privilege('service_role', 'public.add_ticket_message(uuid,text,text,text,uuid[])', 'execute')
       and not has_function_privilege('anon', 'public.read_support_ticket(text,text)', 'execute')
-      and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute')
-      and not has_function_privilege('authenticated', 'public.add_ticket_message(uuid,text,text,text)', 'execute'),
+      and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute')
+      and not has_function_privilege('authenticated', 'public.add_ticket_message(uuid,text,text,text,uuid[])', 'execute'),
   'the buyer RPCs are service_role only');
 select ok(not has_function_privilege('service_role', 'public.web_find_order_by_pair(text,text)', 'execute')
       and not has_function_privilege('service_role', 'public.support_notify_activity(public.support_tickets)', 'execute')

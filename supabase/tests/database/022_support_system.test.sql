@@ -264,17 +264,17 @@ select is((select count(*)::int from public.support_ticket_secrets s
   0, 'and no secret');
 
 -- ── grants across A3 ────────────────────────────────────────────────────
-select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)') is not null and not has_function_privilege('anon', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute'),
+select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])') is not null and not has_function_privilege('anon', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute'),
   'anon cannot execute open_support_ticket');
-select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)') is not null and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute'),
+select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])') is not null and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute'),
   'authenticated cannot execute open_support_ticket');
 select ok(to_regprocedure('public.read_support_ticket(text,text)') is not null and not has_function_privilege('anon', 'public.read_support_ticket(text,text)', 'execute'),
   'anon cannot execute read_support_ticket');
 select ok(to_regprocedure('public.read_support_ticket(text,text)') is not null and not has_function_privilege('authenticated', 'public.read_support_ticket(text,text)', 'execute'),
   'authenticated cannot execute read_support_ticket');
-select ok(to_regprocedure('public.add_ticket_message(uuid,text,text,text)') is not null and not has_function_privilege('anon', 'public.add_ticket_message(uuid,text,text,text)', 'execute'),
+select ok(to_regprocedure('public.add_ticket_message(uuid,text,text,text,uuid[])') is not null and not has_function_privilege('anon', 'public.add_ticket_message(uuid,text,text,text,uuid[])', 'execute'),
   'anon cannot execute add_ticket_message');
-select ok(to_regprocedure('public.add_ticket_message(uuid,text,text,text)') is not null and not has_function_privilege('authenticated', 'public.add_ticket_message(uuid,text,text,text)', 'execute'),
+select ok(to_regprocedure('public.add_ticket_message(uuid,text,text,text,uuid[])') is not null and not has_function_privilege('authenticated', 'public.add_ticket_message(uuid,text,text,text,uuid[])', 'execute'),
   'authenticated cannot execute add_ticket_message');
 select ok(to_regprocedure('public.raise_system_ticket(text,uuid,text,text)') is not null and not has_function_privilege('anon', 'public.raise_system_ticket(text,uuid,text,text)', 'execute'),
   'anon cannot execute raise_system_ticket');

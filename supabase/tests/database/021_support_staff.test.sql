@@ -307,7 +307,8 @@ select is((select m.body from public.support_messages m
           'Secret reply body one', 'staff reply untouched');
 select is((select a.after from public.audit_logs a
             where a.operation = 'TICKET_DATA_REDACTED' and a.entity_id = current_setting('t.p1')),
-          jsonb_build_object('ticket_id', current_setting('t.p1'), 'had_email', true, 'messages_redacted', 2),
+          jsonb_build_object('ticket_id', current_setting('t.p1'), 'had_email', true, 'messages_redacted', 2,
+                             'attachments_deleted', 0),  -- A5: the buyer photos it deleted
           'audit summary only');
 call pg_temp.as_user(1);
 select is(public.redact_ticket_customer_data('b2000000-0000-0000-0000-000000000007', current_setting('t.p1')::uuid) ->> 'ticket_id',
