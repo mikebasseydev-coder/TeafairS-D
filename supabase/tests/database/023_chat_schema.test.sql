@@ -149,9 +149,7 @@ select throws_ok($$insert into public.chat_messages (tenant_id, channel_id, send
   '23514', null, 'empty body refused');
 select throws_ok($$insert into public.chat_messages (tenant_id, channel_id, sender_id, body)
   values ('10000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',
-          '20000000-0000-0000-0000-000000000005', E'
-	
-')$$,
+          '20000000-0000-0000-0000-000000000005', E'\n\t\r\n')$$,
   '23514', null, 'a newline-only body is refused');
 select throws_ok($$insert into public.chat_messages (tenant_id, channel_id, sender_id, body)
   values ('10000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',

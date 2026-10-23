@@ -81,8 +81,7 @@ All tables are tenant-owned. FKs are `ON DELETE RESTRICT`; this replaces the bri
 |---|---|
 | `id`, `tenant_id`, `channel_id` | FK `(tenant_id, channel_id)` → `chat_channels` |
 | `sender_id uuid not null` | → profiles |
-| `body text not null` | CHECK `length(btrim(body, E' 	
-')) between 1 and 2000`; stored trimmed of the same set |
+| `body text not null` | CHECK `length(btrim(body, E' \t\r\n')) between 1 and 2000`; stored trimmed of the same set |
 | `hidden_at timestamptz`, `hidden_by uuid` | moderation (§5); `hidden_by` → profiles |
 | `created_at timestamptz not null default clock_timestamp()` | |
 

@@ -57,8 +57,7 @@ create table public.chat_messages (
   channel_id  uuid not null,
   sender_id   uuid not null references public.profiles (id) on delete restrict,
   -- trimmed of spaces, tabs, CR and LF, the same set post_chat_message trims
-  body        text not null check (length(btrim(body, E' 	
-')) between 1 and 2000),
+  body        text not null check (length(btrim(body, E' \t\r\n')) between 1 and 2000),
   hidden_at   timestamptz,
   hidden_by   uuid references public.profiles (id) on delete restrict,
   created_at  timestamptz not null default clock_timestamp(),

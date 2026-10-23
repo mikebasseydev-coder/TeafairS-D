@@ -26,8 +26,7 @@ declare
   v_prior   jsonb;
   v_ch      public.chat_channels;
   -- the same set the chat_messages CHECK trims
-  v_body    text := btrim(coalesce(p_body, ''), E' 	
-');
+  v_body    text := btrim(coalesce(p_body, ''), E' \t\r\n');
   v_msg     public.chat_messages;
   v_other   uuid;
   v_payload jsonb;

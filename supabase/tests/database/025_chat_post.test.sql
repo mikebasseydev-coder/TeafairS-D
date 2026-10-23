@@ -170,9 +170,7 @@ reset role;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001');
 select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000009', (select epe from ids), repeat('x', 2001))$$, 'P0001', null, 'over 2000 refused');
 select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000010', (select epe from ids), '   ')$$, 'P0001', null, 'blank refused');
-select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000016', (select epe from ids), E'
-
-	')$$, 'P0001', 'a message must be 1 to 2000 characters', 'a newline-only post is refused');
+select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000016', (select epe from ids), E'\n\r\n\t')$$, 'P0001', 'a message must be 1 to 2000 characters', 'a newline-only post is refused');
 select lives_ok($$select count(public.post_chat_message(gen_random_uuid(), (select epe from ids), 'burst ' || g)) from generate_series(1, 20) g$$, '20 posts in a minute allowed');
 select throws_ok($$select public.post_chat_message('b0000000-0000-0000-0000-000000000011', (select epe from ids), 'one too many')$$, 'P0001', 'Too many messages. Please wait a moment.', 'throttle');
 reset role;
