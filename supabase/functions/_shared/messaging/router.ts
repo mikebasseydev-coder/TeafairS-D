@@ -139,6 +139,7 @@ export const otpTemplate = (code: string): WhatsAppTemplate => ({
   name: Deno.env.get("WHATSAPP_TEMPLATE_OTP") || "teafair_otp",
   language: "en",
   params: [code],
+  kind: "authentication",
 });
 
 export const deliveryCodeTemplate = (reference: string, code: string): WhatsAppTemplate => ({

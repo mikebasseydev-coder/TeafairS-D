@@ -3,8 +3,8 @@
 // profile (never a number from the request).
 //
 // A replayed key returns the original challenge, whose code this request does
-// not know, so a replay never sends a message. If the SMS fails, the agent
-// requests a fresh code with a new key.
+// not know, so a replay never sends a message. If delivery fails on every
+// channel, the agent requests a fresh code with a new key.
 import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { userGateway, type UserGatewayDeps } from "../_shared/core/gateway.ts";
@@ -57,6 +57,7 @@ export function createOtpIssueHandler(deps: OtpIssueDeps): (req: Request) => Pro
       challenge_id: issued.challenge_id,
       expires_at: issued.expires_at,
       destination: maskPhone(issued.destination_phone),
+      // "sent on any channel", kept under its old name for compatibility
       sms_sent: !issued.replayed,
       channel,
     };

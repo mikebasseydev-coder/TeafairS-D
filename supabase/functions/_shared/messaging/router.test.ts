@@ -63,7 +63,7 @@ Deno.test("WhatsApp non-2xx falls back to SMS and logs both", async () => {
 
 Deno.test("WhatsApp slower than the timeout falls back to SMS", async () => {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const { send, sms } = setup({
+  const { send, sms, logs } = setup({
     timeoutMs: 50,
     // ignores the abort signal and resolves after 200 ms; cleared below so no timer leaks
     wa: () => new Promise<void>((resolve) => { timer = setTimeout(resolve, 200); }),
@@ -72,10 +72,12 @@ Deno.test("WhatsApp slower than the timeout falls back to SMS", async () => {
   clearTimeout(timer);
   assertEquals(result.channel, "SMS");
   assertEquals(sms.length, 1);
+  assertEquals(summary(logs), ["WHATSAPP/FAILED", "SMS/SENT"]);
+  assertEquals(logs[0].whatsappError, "TIMEOUT");
 });
 
 Deno.test("WhatsApp that honours the abort signal also falls back to SMS", async () => {
-  const { send, sms } = setup({
+  const { send, sms, logs } = setup({
     timeoutMs: 50,
     wa: (signal) => new Promise<void>((resolve, reject) => {
       const t = setTimeout(resolve, 200);
@@ -84,6 +86,8 @@ Deno.test("WhatsApp that honours the abort signal also falls back to SMS", async
   });
   assertEquals((await send(PHONE, msg())).channel, "SMS");
   assertEquals(sms.length, 1);
+  assertEquals(summary(logs), ["WHATSAPP/FAILED", "SMS/SENT"]);
+  assertEquals(logs[0].whatsappError, "TIMEOUT");
 });
 
 Deno.test("no WhatsApp config goes straight to SMS", async () => {

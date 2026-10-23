@@ -2,7 +2,8 @@
 // The access token is never put in an error message.
 export type WhatsAppConfig = { token: string; phoneNumberId: string; apiVersion: string; apiUrl?: string };
 
-export type WhatsAppTemplate = { name: string; language: string; params: string[] };
+/** `kind: "authentication"` adds the copy-code button Meta requires on authentication templates. */
+export type WhatsAppTemplate = { name: string; language: string; params: string[]; kind?: "authentication" };
 
 /** A non-2xx answer from Meta; `code` is Meta's `error.code` when present. */
 export class WhatsAppError extends Error {
@@ -42,7 +43,7 @@ export async function sendWhatsAppTemplate(
         // authentication templates also carry the code on their copy-code button
         components: [
           { type: "body", parameters: template.params.map((text) => ({ type: "text", text })) },
-          ...(template.name.includes("otp")
+          ...(template.kind === "authentication"
             ? [{ type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: template.params[0] ?? "" }] }]
             : []),
         ],

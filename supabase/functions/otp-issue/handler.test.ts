@@ -51,7 +51,7 @@ Deno.test("a fresh challenge stores the code via the RPC and texts it to the own
   assertEquals(sms[0][0], "+2348000000005");
   assertEquals(sms[0][1].smsText.includes("042917"), true);
   assertEquals(sms[0][1].purpose, "OTP");
-  assertEquals(sms[0][1].template, { name: "teafair_otp", language: "en", params: ["042917"] });
+  assertEquals(sms[0][1].template, { name: "teafair_otp", language: "en", params: ["042917"], kind: "authentication" });
   assertEquals(sms[0][1].relatedId, "60000000-0000-0000-0000-000000000001");
 });
 
