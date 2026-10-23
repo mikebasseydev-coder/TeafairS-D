@@ -1,10 +1,10 @@
 import { liveUserGatewayDeps } from "../_shared/core/gateway.ts";
-import { smsSenderFromEnv } from "../_shared/core/sms.ts";
+import { messageRouterFromEnv } from "../_shared/messaging/router.ts";
 import { generateOtpCode } from "./code.ts";
 import { createOtpIssueHandler } from "./handler.ts";
 
 Deno.serve(createOtpIssueHandler({
   ...liveUserGatewayDeps(),
-  sendSms: smsSenderFromEnv(),
+  sendMessage: messageRouterFromEnv(),
   generateCode: generateOtpCode,
 }));

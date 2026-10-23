@@ -38,15 +38,17 @@ select tables_are('public', array[
   -- refund policy versions (1, addendum A5)
   'refund_policies',
   -- WhatsApp phone verification at checkout (1, addendum A5)
-  'web_phone_verifications'
-], 'public holds exactly the 47 tables');
+  'web_phone_verifications',
+  -- message delivery log (1, addendum A5)
+  'notification_logs'
+], 'public holds exactly the 48 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  47, 'RLS is enabled on all 47 tables');
+  48, 'RLS is enabled on all 48 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN']);
