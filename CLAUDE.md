@@ -29,11 +29,12 @@ integrations. Its implementation runs in four phases (§14).
 
 | Path | Status |
 |---|---|
-| `supabase/` | **Phases 1–3 done**: 41 migrations, 921 pgTAP assertions, 13 Edge Functions; addenda A1 (web storefront) and A2 (buyer contact privacy) pushed to the remote on 2026-10-15; Spec D1 (web money loop) and addendum A3 (web chat and ticketing) done locally. See `supabase/CLAUDE.md` |
+| `supabase/` | **Phases 1–3 done**: 45 migrations, 1055 pgTAP assertions, 13 Edge Functions; addenda A1 (web storefront) and A2 (buyer contact privacy) pushed to the remote on 2026-10-15; Spec D1 (web money loop), addendum A3 (web chat and ticketing) and addendum A4 (internal staff messaging) done locally. See `supabase/CLAUDE.md` |
 | `docs/superpowers/specs/2026-10-05-…` | Spec A — the authority |
 | `docs/superpowers/specs/2026-10-15-web-…` | Addendum A1 to Spec A — web storefront, agent codes, terminal venues |
 | `docs/superpowers/specs/2026-10-15-buyer-…` | Addendum A2 to Spec A — buyer contact privacy |
 | `docs/superpowers/specs/2026-10-21-addendum-a3-…` | Addendum A3 to Spec A — web chat and ticketing |
+| `docs/superpowers/specs/2026-10-21-addendum-a4-…` | Addendum A4 to Spec A — internal staff messaging |
 | client app | **none yet**: built fresh under Spec B as a flat `src/`. `frontend/`, `apps/` and `docs/features/` were removed (§13) |
 
 Phase 4 (client offline queue) needs the Spec B app shell.

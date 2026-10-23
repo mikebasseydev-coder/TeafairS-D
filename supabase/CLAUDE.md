@@ -15,6 +15,7 @@ the authority; this file is the working summary.
 | A2. Buyer contact privacy — `order_contacts`, till lookup | done |
 | D1. Web money loop — routing, settlement, sweeps, refunds, commission release | done (local) |
 | A3. Web chat & ticketing — support tables, buyer gateways, staff RPCs, system tickets | done (local) |
+| A4. Internal staff messaging — chat channels, direct chats, team/zone rooms, announcements | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -137,6 +138,30 @@ its triggers watch D1's tables to raise system tickets from payment exceptions.
   `my_support_history_ticket_ids()`, which covers the whole chain and gives
   messages only. Contacts stay with each ticket's own handlers through
   `my_support_ticket_ids()`.
+
+### Addendum A4 (internal staff messaging)
+
+Four migrations (`20261022120000`–`20261022120300`), local only. No Edge
+Functions and no secrets: staff talk through PostgREST.
+
+- **RPCs** (`authenticated`): `get_or_create_direct_channel`,
+  `post_chat_message`, `mark_chat_read`, `hide_chat_message` (ZSM only), and
+  the read-only inbox `list_my_chat_channels()`. The tables are `SELECT`-only.
+  Team (territory), zone and announcement channels are created by trigger.
+- **Access is live-derived.** `my_chat_channel_ids()` computes the caller's
+  channels from `tenant_users` on every call; there is no member table, so a
+  role or territory change takes effect at once. The internal helpers
+  `chat_is_available`, `chat_staff_zone` and `chat_create_group_channel` have
+  no grants.
+- **Direct chats are private.** Only the two people can read them, and
+  `hide_chat_message` refuses them (42501). Rooms are moderated by a ZSM of
+  the room's zone; any ZSM of the tenant moderates announcements. A hidden
+  message keeps its row with body `[removed]`, `hidden_at` and `hidden_by`;
+  the `CHAT_MESSAGE_HIDDEN` audit holds ids and the reason, never the body.
+  Hiding twice writes no second audit row.
+- **Notifications** use fixed copy and ids only; rooms never notify.
+- **Realtime.** The publication includes `chat_messages` and `chat_channels`;
+  RLS decides who receives each event.
 
 ## Layout
 
