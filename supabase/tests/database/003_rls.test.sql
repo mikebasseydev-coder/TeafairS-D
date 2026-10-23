@@ -84,6 +84,8 @@ select is(
      and t.tablename <> 'support_ticket_secrets'
      -- A5: the refund policy table has no policy and no grant; it is read through a service_role RPC
      and t.tablename <> 'refund_policies'
+     -- A5: phone verifications are written and read only by service_role RPCs
+     and t.tablename <> 'web_phone_verifications'
      and not exists (select 1 from pg_policies p
                      where p.schemaname = 'public' and p.tablename = t.tablename and p.cmd = 'SELECT')),
   0, 'every public table has a SELECT policy');

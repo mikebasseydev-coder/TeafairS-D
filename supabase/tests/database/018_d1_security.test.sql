@@ -52,9 +52,9 @@ select ok(to_regprocedure('public.quote_web_order(text,jsonb,uuid)') is not null
   'anon cannot execute quote_web_order');
 select ok(to_regprocedure('public.quote_web_order(text,jsonb,uuid)') is not null and not has_function_privilege('authenticated', 'public.quote_web_order(text,jsonb,uuid)', 'execute'),
   'authenticated cannot execute quote_web_order');
-select ok(to_regprocedure('public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)') is not null and not has_function_privilege('anon', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute'),
+select ok(to_regprocedure('public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)') is not null and not has_function_privilege('anon', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)', 'execute'),
   'anon cannot execute place_web_order');
-select ok(to_regprocedure('public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)') is not null and not has_function_privilege('authenticated', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute'),
+select ok(to_regprocedure('public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)') is not null and not has_function_privilege('authenticated', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)', 'execute'),
   'authenticated cannot execute place_web_order');
 select ok(to_regprocedure('public.storefront_locations(text)') is not null and not has_function_privilege('anon', 'public.storefront_locations(text)', 'execute'),
   'anon cannot execute storefront_locations');

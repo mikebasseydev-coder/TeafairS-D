@@ -4,6 +4,43 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(111);
 
+-- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
+-- These fixtures insert ONLINE orders directly and are not about consent, so
+-- stamp it for them (027 tests the CHECK itself).
+create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
+begin
+  if new.channel = 'ONLINE' then
+    new.policy_version_tag := coalesce(new.policy_version_tag, 'v2.0-food');
+    new.policy_accepted_at := coalesce(new.policy_accepted_at, now());
+  end if;
+  return new;
+end;
+$f$;
+create trigger a5_stamp_consent before insert on public.orders
+  for each row execute function pg_temp.a5_stamp_consent();
+
+-- A5: place_web_order now needs a consent assertion and a WhatsApp-verified
+-- token for the buyer's phone. This wrapper keeps the 9-argument calls in
+-- this file readable: it mints a verified token for the order's phone, then
+-- calls the real function with consent, the active policy and a client IP.
+create function pg_temp.pwo(
+  p_key uuid, p_code text, p_items jsonb, p_customer jsonb, p_utm jsonb,
+  p_route text, p_total numeric, p_checkout jsonb, p_lga uuid)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $f$
+declare
+  v_tok text := encode(extensions.gen_random_bytes(16), 'hex');
+begin
+  if p_customer ->> 'phone' ~ '^\+[1-9][0-9]{7,14}$' then
+    insert into public.web_phone_verifications (phone, code_hash, expires_at, verified_at, token_hash, token_expires_at)
+    values (p_customer ->> 'phone', 'x', now() + interval '10 minutes', now(),
+            encode(extensions.digest(v_tok, 'sha256'), 'hex'), now() + interval '30 minutes');
+  end if;
+  return public.place_web_order(p_key, p_code, p_items, p_customer, p_utm, p_route, p_total, p_checkout, p_lga,
+                                true, 'v2.0-food', '10.0.0.9'::inet, v_tok);
+end;
+$f$;
+grant execute on function pg_temp.pwo(uuid, text, jsonb, jsonb, jsonb, text, numeric, jsonb, uuid) to service_role;
+
 -- ── Task 1: ng_states / ng_lgas (§3.1) ──────────────────────────────────
 select is((select count(*)::int from public.ng_states), 37, 'exactly 37 states (FCT included)');
 select is((select count(*)::int from public.ng_lgas), 774, 'exactly 774 LGAs');
@@ -339,7 +376,7 @@ select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', 
 update public.fintech_partners set commission_bps = 0 where id = '60000000-0000-0000-0000-000000000002';
 
 -- codeless PAYSTACK_WEB order
-select lives_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000001', null,
+select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Ada Obi","phone":"+2348030000001","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
     '{}', 'PAYSTACK_WEB', 1000.00,
@@ -356,18 +393,18 @@ select is((select territory_id from public.order_contacts where order_id = pg_te
 select is((select num_nulls(split_subaccount_code, split_bps, split_amount) from public.payments
             where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000001')),
   3, 'a codeless payment has no split snapshot');
-select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000002', null,
+select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000002', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
     null, 'POS_AGENT', 1000.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'paying at an agent needs a link from a POS agent', 'codeless must pay online');
-select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000003', null,
+select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000003', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
     null, 'PAYSTACK_WEB', 1000.00,
     '{"reference":"TFW-cl3","authorization_url":"https://x","split":null}', md5('ng_lga:KN:Fagge')::uuid)$$,
   'P0001', 'We don''t deliver to this area yet.', 'an unshippable order is refused at placement too');
-select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000004', null,
+select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000004', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
     null, 'PAYSTACK_WEB', 1000.00,
@@ -375,20 +412,20 @@ select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000
   'P0001', 'Prices changed — refresh and try again', 'a missing split key is not JSON null');
 
 -- coded orders: the split snapshot
-select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000005', 'POSIKEJA',
+select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000005', 'POSIKEJA',
     '[{"sku_code":"T1-SKU","qty":2}]',
     '{"name":"Chi","phone":"+2348030000003","delivery_address":"9 Awolowo Way"}',
     null, 'PAYSTACK_WEB', 2000.00,
     '{"reference":"TFW-g1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Prices changed — refresh and try again', 'split snapshot must match the quote');
-select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000006', 'POSIKEJA',
+select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000006', 'POSIKEJA',
     '[{"sku_code":"T1-SKU","qty":2}]',
     '{"name":"Chi","phone":"+2348030000003","delivery_address":"9 Awolowo Way"}',
     null, 'PAYSTACK_WEB', 2000.00,
     '{"reference":"TFW-g1","authorization_url":"https://x","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":31.00}}',
     md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Prices changed — refresh and try again', 'a different partner share is refused');
-select lives_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000007', 'POSIKEJA',
+select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000007', 'POSIKEJA',
     '[{"sku_code":"T1-SKU","qty":2}]',
     '{"name":"Chi","phone":"+2348030000003","delivery_address":"9 Awolowo Way"}',
     null, 'PAYSTACK_WEB', 2000.00,
@@ -402,7 +439,7 @@ select is((select territory_id || '|' || fulfilment_warehouse_id || '|' || teafa
              from public.orders where id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000007')),
   '40000000-0000-0000-0000-000000000001|70000000-0000-0000-0000-000000000001|20000000-0000-0000-0000-000000000003',
   'a coded order is routed through its terminal''s territory and TM');
-select lives_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000008', 'ZERO-BPS',
+select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000008', 'ZERO-BPS',
     '[{"sku_code":"T1-SKU","qty":1}]',
     '{"name":"Dayo","phone":"+2348030000004","delivery_address":"3 Allen Avenue"}',
     null, 'PAYSTACK_WEB', 1000.00,
@@ -412,7 +449,7 @@ select is((select num_nulls(split_subaccount_code, split_bps, split_amount) from
             where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000008')),
   3, 'and its payment has no split snapshot');
 
-select throws_ok($$select public.place_web_order('eeeeeeee-0000-0000-0000-000000000001', null,
+select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Ada Obi","phone":"+2348030000001","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
     '{}', 'PAYSTACK_WEB', 1000.00,
@@ -466,8 +503,8 @@ select ok(not has_function_privilege('anon', 'public.storefront_locations(text)'
   'locations is service_role only');
 select ok(not has_function_privilege('authenticated', 'public.quote_web_order(text,jsonb,uuid)', 'execute')
       and has_function_privilege('service_role', 'public.quote_web_order(text,jsonb,uuid)', 'execute')
-      and not has_function_privilege('authenticated', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute')
-      and has_function_privilege('service_role', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute')
+      and not has_function_privilege('authenticated', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)', 'execute')
+      and has_function_privilege('service_role', 'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)', 'execute')
       and has_function_privilege('service_role', 'public.storefront_catalogue(text)', 'execute'),
   'quote, place and catalogue are service_role only');
 select ok(not has_function_privilege('service_role', 'public.web_storefront_code(text)', 'execute')

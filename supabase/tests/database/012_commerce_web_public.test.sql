@@ -5,6 +5,43 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(50);
 
+-- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
+-- These fixtures insert ONLINE orders directly and are not about consent, so
+-- stamp it for them (027 tests the CHECK itself).
+create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
+begin
+  if new.channel = 'ONLINE' then
+    new.policy_version_tag := coalesce(new.policy_version_tag, 'v2.0-food');
+    new.policy_accepted_at := coalesce(new.policy_accepted_at, now());
+  end if;
+  return new;
+end;
+$f$;
+create trigger a5_stamp_consent before insert on public.orders
+  for each row execute function pg_temp.a5_stamp_consent();
+
+-- A5: place_web_order now needs a consent assertion and a WhatsApp-verified
+-- token for the buyer's phone. This wrapper keeps the 9-argument calls in
+-- this file readable: it mints a verified token for the order's phone, then
+-- calls the real function with consent, the active policy and a client IP.
+create function pg_temp.pwo(
+  p_key uuid, p_code text, p_items jsonb, p_customer jsonb, p_utm jsonb,
+  p_route text, p_total numeric, p_checkout jsonb, p_lga uuid)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $f$
+declare
+  v_tok text := encode(extensions.gen_random_bytes(16), 'hex');
+begin
+  if p_customer ->> 'phone' ~ '^\+[1-9][0-9]{7,14}$' then
+    insert into public.web_phone_verifications (phone, code_hash, expires_at, verified_at, token_hash, token_expires_at)
+    values (p_customer ->> 'phone', 'x', now() + interval '10 minutes', now(),
+            encode(extensions.digest(v_tok, 'sha256'), 'hex'), now() + interval '30 minutes');
+  end if;
+  return public.place_web_order(p_key, p_code, p_items, p_customer, p_utm, p_route, p_total, p_checkout, p_lga,
+                                true, 'v2.0-food', '10.0.0.9'::inet, v_tok);
+end;
+$f$;
+grant execute on function pg_temp.pwo(uuid, text, jsonb, jsonb, jsonb, text, numeric, jsonb, uuid) to service_role;
+
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria',   'NESTLE'),
@@ -213,15 +250,15 @@ reset role;
 
 -- ── place_web_order ─────────────────────────────────────────────────────
 select ok(not has_function_privilege('authenticated',
-  'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute'),
+  'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)', 'execute'),
   'the app cannot call place_web_order');
 select ok(has_function_privilege('service_role',
-  'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)', 'execute'),
+  'public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid,boolean,text,inet,text)', 'execute'),
   'the public gateway (service_role) can');
 
 select pg_temp.as_service();
 select lives_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000001', 'grace-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000001', 'grace-01',
       '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
       '{"source":"whatsapp","medium":"social","campaign":"easter"}',
@@ -256,7 +293,7 @@ select is(
 
 select pg_temp.as_service();
 select is(
-  public.place_web_order('cccccccc-0000-0000-0000-000000000001', 'grace-01',
+  pg_temp.pwo('cccccccc-0000-0000-0000-000000000001', 'grace-01',
       '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
       '{"source":"whatsapp","medium":"social","campaign":"easter"}',
@@ -271,7 +308,7 @@ select is(
 
 select pg_temp.as_service();
 select lives_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000002', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000002', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
       null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
@@ -284,7 +321,7 @@ select is(
 
 select pg_temp.as_service();
 select lives_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000003', 'HOUSE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000003', 'HOUSE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Chi","phone":"+2348031234569","delivery_address":"9 Awolowo Way"}',
       '{}', 'PAYSTACK_WEB', 1200.00,
@@ -298,49 +335,49 @@ select is(
 
 select pg_temp.as_service();
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000004', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000004', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
       null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Prices changed — refresh and try again', 'a stale total is refused');
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000005', 'HOUSE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000005', 'HOUSE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
       null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'pay-at-agent needs a code bound to a terminal');
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000006', 'NOTM-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000006', 'NOTM-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
       null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'This link is not active yet', 'no accountable agent means the link is not active');
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000007', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000007', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"08031234568","delivery_address":"7 Toyin Street"}',
       null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'the phone must already be E.164');
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000008', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000008', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568"}',
       null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'a delivery address is required');
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000009', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000009', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
       null, 'PAYSTACK_WEB', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'the Paystack route needs checkout details');
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-00000000000a', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-00000000000a', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
       null, 'CASH', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'an unknown payment route is refused');
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-000000000001', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000001', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
       null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
@@ -359,7 +396,7 @@ insert into public.order_contacts (order_id, tenant_id, customer_phone)
 select id, tenant_id, '+2348099999999' from o;
 select pg_temp.as_service();
 select throws_ok(
-  $$select public.place_web_order('cccccccc-0000-0000-0000-00000000000b', 'GRACE-01',
+  $$select pg_temp.pwo('cccccccc-0000-0000-0000-00000000000b', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Spam","phone":"+2348099999999","delivery_address":"1 Nowhere"}',
       null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,

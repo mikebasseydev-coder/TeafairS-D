@@ -4,6 +4,21 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(44);
 
+-- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
+-- These fixtures insert ONLINE orders directly and are not about consent, so
+-- stamp it for them (027 tests the CHECK itself).
+create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
+begin
+  if new.channel = 'ONLINE' then
+    new.policy_version_tag := coalesce(new.policy_version_tag, 'v2.0-food');
+    new.policy_accepted_at := coalesce(new.policy_accepted_at, now());
+  end if;
+  return new;
+end;
+$f$;
+create trigger a5_stamp_consent before insert on public.orders
+  for each row execute function pg_temp.a5_stamp_consent();
+
 -- users: ZSM1, TM_A, TM_B, DSA, DEF (DSM default agent), GONE (disabled DSM), ZSM2
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria',   'NESTLE'),
