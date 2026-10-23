@@ -1,6 +1,6 @@
 # Addendum A4 to Spec A — Internal staff messaging
 
-**Status:** written 2026-10-21. Awaiting the user's review.
+**Status:** written spec approved 2026-10-21; plan `docs/superpowers/plans/2026-10-21-addendum-a4-staff-messaging.md`.
 **Authority:** this amends Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`). Spec A §9 applies in full.
 **Builds on:** A3 (web chat & ticketing). A4 is branched from A3's branch head so the shared table-count tests line up. A4 does not depend on any A3 table.
 **Scope:** backend only, meaning migrations, RPCs and pgTAP. Client UI stays on hold (Spec B).
