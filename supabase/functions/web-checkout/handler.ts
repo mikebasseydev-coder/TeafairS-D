@@ -10,6 +10,7 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { publicGateway, type PublicGatewayDeps } from "../_shared/core/public-gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
+import { clientIp } from "../_shared/commerce/client-ip.ts";
 import { normalizePhone } from "../_shared/commerce/phone.ts";
 import type { VerifyTurnstile } from "../_shared/commerce/turnstile.ts";
 import type { InitializeTransaction } from "../_shared/fintech-liquidity/paystack.ts";
@@ -42,6 +43,11 @@ const schema = z.object({
   }).optional(),
   payment_route: z.enum(["PAYSTACK_WEB", "POS_AGENT"]),
   turnstile_token: z.string().min(1).max(2048),
+  // A5 §3.5. Checked in the handler (not z.literal) so a missing or false
+  // value gets the consent copy rather than the generic validation message.
+  accept_refund_policy: z.boolean().optional(),
+  policy_version_tag: z.string().min(1).max(64),
+  phone_verification_token: z.string().length(43),
 }).refine((b) => b.code !== undefined || b.payment_route === "PAYSTACK_WEB", {
   message: "A link is required to pay an agent.",
   path: ["payment_route"],
@@ -55,12 +61,11 @@ type Quote = {
 
 const toMinor = (amount: number | string) => Math.round(Number(amount) * 100);
 
-function clientIp(req: Request): string | null {
-  return req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? null;
-}
-
 export function createWebCheckoutHandler(deps: WebCheckoutDeps): (req: Request) => Promise<Response> {
   return publicGateway({ method: "POST", schema }, async ({ body, rpc, req }) => {
+    if (body.accept_refund_policy !== true) {
+      throw new GatewayError(400, "VALIDATION_FAILED", "You must accept the refund policy to place an order.");
+    }
     let human: boolean;
     try {
       human = await deps.verifyTurnstile(body.turnstile_token, clientIp(req));
@@ -117,6 +122,10 @@ export function createWebCheckoutHandler(deps: WebCheckoutDeps): (req: Request) 
       p_utm: body.utm ?? {},
       p_payment_route: body.payment_route,
       p_expected_total: quote.total,
+      p_accepted_refund_policy: true,
+      p_policy_version_tag: body.policy_version_tag,
+      p_client_ip: clientIp(req),
+      p_phone_verification_token: body.phone_verification_token,
       p_checkout: checkout && { ...checkout, split },
     });
   }, deps);

@@ -16,6 +16,12 @@ export async function ticketSecretFor(serverKey: string, idempotencyKey: string)
   return btoa(String.fromCharCode(...mac)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
+// A fresh 32-byte bearer token, base64url with no padding (43 characters).
+export function randomToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
 export async function sha256Hex(s: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");

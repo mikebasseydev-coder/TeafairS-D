@@ -405,6 +405,15 @@ verify_jwt = false
 [functions.web-checkout]
 verify_jwt = false
 
+[functions.checkout-phone-verify-start]
+verify_jwt = false
+
+[functions.checkout-phone-verify-confirm]
+verify_jwt = false
+
+[functions.storefront-refund-policy]
+verify_jwt = false
+
 [functions.support-ticket-open]
 verify_jwt = false
 

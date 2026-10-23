@@ -10,6 +10,7 @@ const QUOTE = {
   total: 5580, currency: "NGN",
   split: { fintech_partner_id: "p1", subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 },
 };
+const TOKEN = "A".repeat(43);
 const LGA = "d0000000-0000-0000-0000-000000000009";
 const PLACED = { order_id: "o1", public_reference: "TF-7K3Q9X", total: 5580 };
 
@@ -57,6 +58,9 @@ const order = (over: Record<string, unknown> = {}) => ({
   utm: { source: "whatsapp", medium: "social" },
   payment_route: "PAYSTACK_WEB",
   turnstile_token: "tok",
+  accept_refund_policy: true,
+  policy_version_tag: "v2.0-food",
+  phone_verification_token: TOKEN,
   ...over,
 });
 
@@ -89,6 +93,10 @@ Deno.test("Paystack route: verify, quote, initialize with split, then place", as
     p_utm: { source: "whatsapp", medium: "social" },
     p_payment_route: "PAYSTACK_WEB",
     p_expected_total: 5580,
+    p_accepted_refund_policy: true,
+    p_policy_version_tag: "v2.0-food",
+    p_client_ip: "1.2.3.4",
+    p_phone_verification_token: TOKEN,
     p_checkout: { reference: "TFW-FIXED", access_code: "ac_1", authorization_url: "https://checkout.paystack.com/ac_1",
       split: { subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 },
     },
@@ -195,5 +203,22 @@ Deno.test("the quote's split travels to place_web_order", async () => {
   const res = await post(handler, order());
   const checkout = rpcCalls[1][1].p_checkout as Record<string, unknown>;
   assertEquals(checkout.split, { subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 });
+  await res.body?.cancel();
+});
+
+Deno.test("missing accept_refund_policy is 400 with the consent copy", async () => {
+  for (const over of [{ accept_refund_policy: undefined }, { accept_refund_policy: false }]) {
+    const { handler, rpcCalls, turnstileCalls } = setup();
+    const res = await post(handler, order(over));
+    assertEquals([res.status, (await res.json()).error.message, rpcCalls.length, turnstileCalls.length], [
+      400, "You must accept the refund policy to place an order.", 0, 0,
+    ]);
+  }
+});
+
+Deno.test("a verification token that is not 43 characters is 400", async () => {
+  const { handler, rpcCalls } = setup();
+  const res = await post(handler, order({ phone_verification_token: "short" }));
+  assertEquals([res.status, rpcCalls.length], [400, 0]);
   await res.body?.cancel();
 });
