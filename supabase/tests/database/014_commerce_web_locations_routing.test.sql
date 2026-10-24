@@ -348,7 +348,11 @@ $$;
 select is(public.storefront_catalogue(null) -> 'tenant' ->> 'name', 'Teafair', 'codeless catalogue is TEAFAIR');
 select is(public.storefront_catalogue('  ') -> 'tenant' ->> 'name', 'Teafair', 'blank code is codeless');
 select is(public.storefront_catalogue() -> 'code', 'null'::jsonb, 'code is null when codeless');
-select is(jsonb_array_length(public.storefront_catalogue(null) -> 'products'), 1, 'codeless sees TEAFAIR''s products');
+select ok(exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e
+                   where e ->> 'sku_code' = 'TF-TEA-50')
+          and not exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e
+                           where e ->> 'sku_code' = 'T1-SKU'),
+  'codeless sees TEAFAIR''s products');
 select throws_ok($$select public.storefront_catalogue('NOPE-99')$$, 'P0001', 'This link is no longer valid',
   'an unknown code is still refused, not treated as codeless');
 

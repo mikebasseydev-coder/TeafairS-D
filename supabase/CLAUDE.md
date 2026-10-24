@@ -18,6 +18,7 @@ the authority; this file is the working summary.
 | A4. Internal staff messaging — chat channels, direct chats, team/zone rooms, announcements | done (local) |
 | A5. Refund policy, WhatsApp-verified checkout, fulfilment and delivery code, support photos, dispute evidence | done (local) |
 | Tenant sale categories (NCC licence) and NAFDAC numbers | done (local) |
+| Cartons and break-bulk wholesale packs | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -355,9 +356,10 @@ deploys with or after A5, which it extends.
   (CHECK `central_products_nafdac_required`, 23514). The dispute evidence
   bundle shows `nafdac_number` and `nafdac_regulated` on each line (the
   product's current values).
-- **Purerigin Coconut Oil** is seeded on TEAFAIR as SKU
-  `PURERIGIN-COCONUT-OIL`, `COSMETICS`, NAFDAC `LG-IKJ-02-2134`, **inactive at
-  price 0**. Set the real unit and wholesale prices, then activate it.
+- **Purerigin Coconut Oil** (Teafair's own brand, tenant TEAFAIR) is seeded
+  active as two SKUs, both `COSMETICS` with NAFDAC `LG-IKJ-02-2134`:
+  `PURERIGIN-COCONUT-OIL-200ML` (retail 5,000, wholesale 4,000 a bottle) and
+  `PURERIGIN-COCONUT-OIL-100ML` (retail 3,000, wholesale 2,500 a bottle).
 - **The NAFDAC requirement is `NOT VALID` on push.** Products that already
   exist are not checked, so the push cannot fail on them, but any update to
   such a row fails until it has a number. **Pre-push:** confirm that no remote
@@ -367,6 +369,28 @@ deploys with or after A5, which it extends.
   Load their numbers (or deactivate them; until then they stay on sale). When
   the list is empty, close the gap in a new migration:
   `alter table public.central_products validate constraint central_products_nafdac_required;`
+
+### Cartons and break-bulk packs
+
+One migration (`20261024130000_break_bulk`), local only, after the one above.
+
+- Prices stay **per unit**: `unit_price` is retail, `wholesale_price` is
+  wholesale. `central_products.carton_units` is the number of units in a
+  carton. `break_bulk_units` is the smallest pack the trade may buy, and must
+  divide the carton. The generated columns `carton_wholesale_price` and
+  `break_bulk_wholesale_price` give the pack prices.
+- **Trade sales come in whole packs.** Order lines on any channel except
+  `ONLINE`, and retail stock pickup lines, must be a multiple of the
+  break-bulk pack (else a full carton; with neither, any quantity): P0001
+  "<product> sells to the trade in packs of N units; Q is not a whole number of
+  packs." Web buyers still buy single units. The rule sits on the tables
+  (triggers) because no RPC writes these lines yet; Spec C inherits it.
+  Ruling: `RETAIL`-channel orders count as trade sales (Spec A does not define
+  the channel); relax the trigger if `RETAIL` turns out to mean consumer sales.
+  Requisitions (warehouse to warehouse) are not restricted.
+- **Purerigin break-bulk (user, 2026-10-24): a quarter carton.** 200ml:
+  carton of 12 at 48,000, quarter carton of 3 at 12,000. 100ml: carton of 24
+  at 60,000, quarter carton of 6 at 15,000.
 
 ## Layout
 

@@ -146,14 +146,20 @@ alter table public.central_products
     check (not is_active or sale_category not in ('FOOD', 'COSMETICS') or nafdac_number is not null) not valid;
 
 -- ── Purerigin Coconut Oil (Teafair house brand) ─────────────────────────
--- NAFDAC-registered and branded for skin, hair and body care. Seeded inactive
--- at zero price: the catalogue owner sets the real prices, then activates it.
+-- NAFDAC-registered and branded for skin, hair and body care; both sizes carry
+-- the same number. Prices are per bottle (user, 2026-10-24): retail 5,000 and
+-- 3,000; wholesale 4,000 (48,000 a carton of 12) and 2,500 (60,000 a carton
+-- of 24). Carton sizes and break-bulk packs are set in 20261024130000.
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category,
                                      sale_category, nafdac_number, unit_price, wholesale_price, is_active)
-values ('7eaf0000-0000-4000-8000-000000000001', 'PURERIGIN-COCONUT-OIL', 'Purerigin Coconut Oil',
-        'Purerigin', 'Skin and hair care', 'COSMETICS', 'LG-IKJ-02-2134', 0, 0, false)
+values ('7eaf0000-0000-4000-8000-000000000001', 'PURERIGIN-COCONUT-OIL-200ML', 'Purerigin Coconut Oil - 200ml',
+        'Purerigin', 'Skin and hair care', 'COSMETICS', 'LG-IKJ-02-2134', 5000, 4000, true),
+       ('7eaf0000-0000-4000-8000-000000000001', 'PURERIGIN-COCONUT-OIL-100ML', 'Purerigin Coconut Oil - 100ml',
+        'Purerigin', 'Skin and hair care', 'COSMETICS', 'LG-IKJ-02-2134', 3000, 2500, true)
 on conflict (tenant_id, sku_code) do update
-  set sale_category = excluded.sale_category, nafdac_number = excluded.nafdac_number;
+  set product_name = excluded.product_name, sale_category = excluded.sale_category,
+      nafdac_number = excluded.nafdac_number, unit_price = excluded.unit_price,
+      wholesale_price = excluded.wholesale_price, is_active = excluded.is_active;
 
 -- ── dispute evidence: the A5 bundle, with NAFDAC facts on each line ─────
 create or replace function public.get_order_dispute_evidence(p_order_id uuid)

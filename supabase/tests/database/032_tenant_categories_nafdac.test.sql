@@ -108,18 +108,19 @@ select lives_ok($$update public.central_products set is_active = true where sku_
 
 -- ── Purerigin Coconut Oil ───────────────────────────────────────────────
 select is(
-  (select row(p.brand, p.sale_category, p.nafdac_number, p.is_active)::text
-     from public.central_products p
-    where p.tenant_id = '7eaf0000-0000-4000-8000-000000000001' and p.sku_code = 'PURERIGIN-COCONUT-OIL'),
-  row('Purerigin', 'COSMETICS', 'LG-IKJ-02-2134', false)::text,
-  'Purerigin Coconut Oil is seeded as COSMETICS with NAFDAC LG-IKJ-02-2134, inactive until priced');
-select lives_ok(
-  $$update public.central_products set unit_price = 3500, wholesale_price = 3000, is_active = true
-     where sku_code = 'PURERIGIN-COCONUT-OIL'$$,
-  'Purerigin activates once priced');
-select ok(public.web_category_sellable('COSMETICS')
-          and exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e
-                       where e ->> 'sku_code' = 'PURERIGIN-COCONUT-OIL'),
+  (select row(t.code, p.brand, p.sale_category, p.nafdac_number, p.is_active)::text
+     from public.central_products p join public.tenants t on t.id = p.tenant_id
+    where p.sku_code = 'PURERIGIN-COCONUT-OIL-200ML'),
+  row('TEAFAIR', 'Purerigin', 'COSMETICS', 'LG-IKJ-02-2134', true)::text,
+  'Purerigin Coconut Oil 200ml is Teafair''s, COSMETICS, NAFDAC LG-IKJ-02-2134, active');
+select is(
+  (select row(t.code, p.brand, p.sale_category, p.nafdac_number, p.is_active)::text
+     from public.central_products p join public.tenants t on t.id = p.tenant_id
+    where p.sku_code = 'PURERIGIN-COCONUT-OIL-100ML'),
+  row('TEAFAIR', 'Purerigin', 'COSMETICS', 'LG-IKJ-02-2134', true)::text,
+  'and so is the 100ml, under the same number');
+select ok(exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e
+                   where e ->> 'sku_code' = 'PURERIGIN-COCONUT-OIL-200ML'),
   'and is listed in the Teafair storefront');
 
 -- ── NAFDAC numbers ──────────────────────────────────────────────────────
