@@ -24,12 +24,18 @@ export function createStoragePurgeHandler(deps: StoragePurgeDeps): (req: Request
       await req.body?.cancel();
 
       let batches = 0, purged = 0, errors = 0;
+      const failed = new Set<string>();
       while (batches < maxBatches) {
         const rows = await deps.rpc<Row[]>("storage_purge_batch", { p_limit: 100 });
         if (!rows || rows.length === 0) break;
         batches++;
         const byBucket = new Map<string, Row[]>();
-        for (const r of rows) byBucket.set(r.bucket, [...(byBucket.get(r.bucket) ?? []), r]);
+        for (const r of rows) {
+          if (failed.has(r.bucket)) continue; // already failed in this run: leave it queued
+          const group = byBucket.get(r.bucket);
+          if (group) group.push(r);
+          else byBucket.set(r.bucket, [r]);
+        }
         let progressed = false;
         for (const [bucket, group] of byBucket) {
           try {
@@ -39,6 +45,7 @@ export function createStoragePurgeHandler(deps: StoragePurgeDeps): (req: Request
             progressed = true;
           } catch (e) {
             errors++;
+            failed.add(bucket);
             console.error("storage-purge: bucket failed:", bucket, e instanceof Error ? e.name : "error");
           }
         }

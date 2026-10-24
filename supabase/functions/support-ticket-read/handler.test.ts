@@ -11,11 +11,13 @@ function setup(reply: unknown) {
     calls.push([fn, args]);
     return Promise.resolve(reply as T);
   };
-  return { handler: createSupportTicketReadHandler({
-      rpc,
-      allowedOrigins: [ORIGIN],
-      signDownload: (bucket, path) => Promise.resolve(`https://s/${bucket}/signed?p=${path.length}`),
-    }), calls };
+  const handler = createSupportTicketReadHandler({
+    rpc,
+    allowedOrigins: [ORIGIN],
+    signDownload: (bucket, path) =>
+      path.startsWith("bad/") ? Promise.reject(new Error("storage 400")) : Promise.resolve(`https://s/${bucket}/signed?p=${path.length}`),
+  });
+  return { handler, calls };
 }
 
 const post = (handler: (r: Request) => Promise<Response>, b: unknown) =>
@@ -60,5 +62,27 @@ Deno.test("read gateway swaps paths for signed URLs", async () => {
   assertEquals(text.includes("storage_path"), false);
   assertEquals(JSON.parse(text).messages[0].attachments, [
     { attachment_id: "a1", mime_type: "image/png", url: "https://s/support-attachments/signed?p=9" },
+  ]);
+});
+
+Deno.test("one failing signature gives url null and the read still succeeds", async () => {
+  const reply = {
+    public_reference: "TK-7K3Q9X",
+    messages: [{
+      id: "m1",
+      attachments: [
+        { attachment_id: "a1", mime_type: "image/png", storage_path: "t/k/p.png" },
+        { attachment_id: "a2", mime_type: "image/jpeg", storage_path: "bad/gone.jpg" },
+      ],
+    }],
+  };
+  const { handler } = setup(reply);
+  const res = await post(handler, { public_reference: "TK-7K3Q9X", secret: SECRET });
+  const text = await res.text();
+  assertEquals(res.status, 200);
+  assertEquals(text.includes("gone.jpg") || text.includes("t/k/p.png"), false);
+  assertEquals(JSON.parse(text).messages[0].attachments, [
+    { attachment_id: "a1", mime_type: "image/png", url: "https://s/support-attachments/signed?p=9" },
+    { attachment_id: "a2", mime_type: "image/jpeg", url: null },
   ]);
 });

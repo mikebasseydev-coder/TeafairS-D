@@ -85,3 +85,30 @@ Deno.test("a failing bucket is counted, left in the queue, and never logs paths"
   }
   assertEquals(JSON.stringify(logged).includes("secret/path.jpg"), false);
 });
+
+Deno.test("a bucket that failed is not retried in the same run", async () => {
+  const bad = (id: string): Row => ({ id, bucket: "bad", path: `x${id}` });
+  const ok = (id: string): Row => ({ id, bucket: "ok", path: `y${id}` });
+  const attempts: string[] = [];
+  const queue = [[bad("1"), ok("2")], [bad("1"), ok("3")]];
+  const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) =>
+    Promise.resolve((fn === "storage_purge_batch" ? queue.shift() ?? [] : (args.p_ids as string[]).length) as T);
+  const orig = console.error;
+  console.error = () => {};
+  try {
+    const handler = createStoragePurgeHandler({
+      cronSecret: SECRET,
+      rpc,
+      remove: (bucket) => {
+        attempts.push(bucket);
+        return bucket === "bad" ? Promise.reject(new Error("down")) : Promise.resolve();
+      },
+      maxBatches: 5,
+    });
+    const res = await call(handler);
+    assertEquals(await res.json(), { batches: 2, purged: 2, errors: 1 });
+  } finally {
+    console.error = orig;
+  }
+  assertEquals(attempts, ["bad", "ok", "ok"]);
+});

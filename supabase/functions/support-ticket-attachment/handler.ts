@@ -1,5 +1,6 @@
 // Addendum A5 §4.3 — a buyer asks for one photo upload slot. The response is
-// the attachment id and a 10-minute signed upload URL; the storage path stays
+// the attachment id and a signed upload URL (its lifetime is set by Storage, 2 h, and it allows a
+// single upload because there is no upsert); the storage path stays
 // server-side and nothing is logged.
 import { z } from "../_shared/core/deps.ts";
 import { publicGateway, type PublicGatewayDeps } from "../_shared/core/public-gateway.ts";

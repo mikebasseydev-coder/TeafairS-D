@@ -16,17 +16,21 @@ export type SupportTicketReadDeps = PublicGatewayDeps & {
 
 type Attachment = { attachment_id: string; mime_type: string; storage_path: string };
 
-// The database returns storage paths; the response carries only 10-minute signed URLs.
+// The database returns storage paths; the response carries only signed URLs (download links last 600 s).
 async function signAttachments(ticket: unknown, deps: SupportTicketReadDeps): Promise<unknown> {
   const messages = (ticket as { messages?: unknown }).messages;
   if (!Array.isArray(messages)) return ticket;
   const signed = await Promise.all(messages.map(async (m: { attachments?: Attachment[] }) => {
     if (!Array.isArray(m.attachments)) return m;
-    const attachments = await Promise.all(m.attachments.map(async (a) => ({
-      attachment_id: a.attachment_id,
-      mime_type: a.mime_type,
-      url: await deps.signDownload(ATTACHMENT_BUCKET, a.storage_path),
-    })));
+    const attachments = await Promise.all(m.attachments.map(async (a) => {
+      let url: string | null = null;
+      try {
+        url = await deps.signDownload(ATTACHMENT_BUCKET, a.storage_path);
+      } catch {
+        // a purged, never-uploaded or briefly unavailable photo must not fail the read; nothing is logged
+      }
+      return { attachment_id: a.attachment_id, mime_type: a.mime_type, url };
+    }));
     return { ...m, attachments };
   }));
   return { ...(ticket as object), messages: signed };
