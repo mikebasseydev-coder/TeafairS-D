@@ -478,3 +478,15 @@ verify_jwt = false
 
 [functions.support-staff-attachment]
 verify_jwt = false
+
+[functions.order-dispatch]
+verify_jwt = false
+
+[functions.order-delivery-pin]
+verify_jwt = false
+
+[functions.order-delivery-photo]
+verify_jwt = false
+
+[functions.order-delivery-confirm]
+verify_jwt = false
