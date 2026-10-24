@@ -20,6 +20,7 @@ the authority; this file is the working summary.
 | Tenant sale categories (NCC licence) and NAFDAC numbers | done (local) |
 | Cartons and break-bulk wholesale packs | done (local) |
 | Web transport fare | done (local) |
+| Sentry observability (Edge Functions) | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -428,6 +429,72 @@ decisions 2026-10-24: the web is for consumers, at full retail price.
   each payment shows `agent_commission`.
 - Ruling: the bounty is a per-tenant setting, like the fare; tenants without
   one keep D1's percentage. Settings are written by migration only.
+
+### Sentry observability
+
+`@sentry/deno@10.76.2` (pinned in `_shared/core/deps.ts`), local only. **Off
+unless `SENTRY_DSN` is set**, so tests and plain local runs send nothing.
+
+- **`observe(name, handler)`** (`_shared/core/observability.ts`) wraps every
+  function's `Deno.serve` handler. It continues the caller's trace from the
+  `sentry-trace` and `baggage` headers, opens one `http.server` transaction
+  per request (`POST /<function>`), tags `function`, `region` and
+  `execution_id`, and flushes after the response through
+  `EdgeRuntime.waitUntil`. Default integrations are off; the edge runtime has
+  no `Deno.serve` instrumentation.
+- **Spans:** every RPC is a `db.rpc` child span (`rpc <function>`, with
+  `db.sqlstate` on a refusal; never the arguments). The message router adds
+  `message.send` spans per WhatsApp and SMS attempt (channel and purpose
+  only). Spans inside Postgres are not possible from here.
+- **Tags:** user gateways tag `gateway=user`, `tenant_id`, `tenant_role` and
+  `platform_role` from the verified JWT, plus `user.id`; public gateways tag
+  `gateway=public`.
+- **What becomes an event** (`reportError`, called from `errorResponse` and
+  for anything thrown past the handler): every 5xx and every unexpected throw
+  at level `error`; database refusals (P0001, 42501, 23505, 23514, TF001,
+  TF002) at level `warning`, fingerprinted by RPC + SQLSTATE + message shape
+  (digits folded) so each rule is one issue. Bad input, auth failures and 404s
+  send nothing. Tagged `db.sqlstate`, `rpc.function`, `error_code`,
+  `http.status_code`.
+- **Scrubbing** (`_shared/core/scrub.ts`, `beforeSend`,
+  `beforeSendTransaction`, `beforeBreadcrumb`; `sendDefaultPii: false`):
+  requests keep only method and path (no query, headers or body); the user
+  keeps only its id; values under sensitive keys (pin, otp, code, token,
+  secret, proof, phone, email, address, ip, hash, signature, path, url; `p_`
+  RPC parameters too) are dropped; every string is scrubbed of JWTs, bearer
+  tokens, Paystack keys, signed URLs, emails, Nigerian and E.164 phone
+  numbers, IPs, and digits next to "pin", "code" or "otp". Stack frames lose
+  local variables.
+- **Env** (`functions/.env.example`): `SENTRY_DSN`, `SENTRY_ENVIRONMENT`
+  (local, staging, production), optional `SENTRY_RELEASE` (git SHA),
+  `SENTRY_TRACES_SAMPLE_RATE` (default 1; lower it as traffic grows).
+- **Tests:** `scrub.test.ts` and `observability.test.ts` (a recording
+  transport) prove scrubbing, trace continuation, tags, the RPC span and the
+  capture policy. The integration run's fake ingest on port 54399 receives
+  real envelopes from the edge runtime when `functions/.env` has
+  `SENTRY_DSN=http://public@host.docker.internal:54399/1` and
+  `SENTRY_ENVIRONMENT=local-integration`; the Sentry test is skipped without
+  a DSN.
+
+**Proving it against real Sentry (local, under 3 minutes):**
+
+1. In Sentry, create a project for the backend (platform Deno) and copy its
+   DSN. Choose the data region (EU or US) deliberately: events leave Nigeria.
+2. In `supabase/functions/.env`, set `SENTRY_DSN=<that DSN>` and
+   `SENTRY_ENVIRONMENT=local`; then `supabase functions serve --env-file supabase/functions/.env`.
+3. Sign in as a staff user and send a request the database refuses, with a
+   trace of your own:
+   `curl -X POST http://127.0.0.1:54321/functions/v1/order-dispatch -H "Authorization: Bearer <jwt>" -H "content-type: application/json" -H "sentry-trace: 4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1" -d '{"idempotency_key":"<uuid>","order_id":"<random uuid>"}'`
+4. In Sentry: **Issues** shows a warning on `mark_order_dispatched` tagged
+   `tenant_id`, `tenant_role`, `db.sqlstate`; **Performance** (or the trace
+   view for `4bf92f3577b34da6a3ce929d0e0e4736`) shows `POST /order-dispatch`
+   with its `rpc mark_order_dispatched` span. Check the event JSON holds no
+   phone, token or PIN.
+5. Put `SENTRY_DSN` back to the fake (or empty) before running the
+   integration tests.
+
+**Deploy:** set `SENTRY_DSN`, `SENTRY_ENVIRONMENT` and `SENTRY_RELEASE` as
+remote function secrets; nothing else changes.
 
 ## Layout
 
