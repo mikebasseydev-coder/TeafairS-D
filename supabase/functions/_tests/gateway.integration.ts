@@ -1,7 +1,9 @@
 // End-to-end against `supabase start` + `supabase functions serve`.
 // Run: see supabase/CLAUDE.md → "Edge Functions". Needs API_URL, ANON_KEY,
 // SERVICE_ROLE_KEY (from `supabase status -o env`), PAYSTACK_SECRET_KEY and
-// CRON_SECRET (from supabase/functions/.env).
+// CRON_SECRET (from supabase/functions/.env). The functions must be served with
+// WHATSAPP_API_URL pointing at this file's fake (host.docker.internal:54399) and
+// GATEWAY_SECRET equal to the Vault secret `gateway_secret` (A5, R16).
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createClient } from "../_shared/core/deps.ts";
 
@@ -73,6 +75,10 @@ const refundLedger: Array<Record<string, unknown>> = [];
 const settlementLedger: Array<Record<string, unknown> & { transactions: Array<Record<string, unknown>> }> = [];
 const initialized: Array<Record<string, unknown>> = [];
 const SUBACCOUNT_ID = 55;
+// a fake WhatsApp Cloud API (A5 §7): records template sends; the next
+// `whatsappFailures` sends answer 500
+const whatsappSends: Array<{ to: string; template: string; params: string[] }> = [];
+let whatsappFailures = 0;
 const page = (data: unknown[]) =>
   Response.json({ status: true, message: "Retrieved", data, meta: { total: data.length, perPage: 100, page: 1, pageCount: 1 } });
 const notFound = (message: string) => Response.json({ status: false, message }, { status: 404 });
@@ -82,6 +88,19 @@ const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {
   if (path === "/turnstile/v0/siteverify") {
     const form = await req.formData();
     return Response.json({ success: form.get("response") === "pass" });
+  }
+  const wa = path.match(/^\/v[0-9.]+\/[0-9]+\/messages$/);
+  if (wa && req.method === "POST") {
+    if (whatsappFailures > 0) {
+      whatsappFailures--;
+      return Response.json({ error: { code: 131000, message: "fake failure" } }, { status: 500 });
+    }
+    const sent = await req.json() as { to: string; template: { name: string; components: Array<{ type: string; parameters: Array<{ text: string }> }> } };
+    whatsappSends.push({
+      to: sent.to, template: sent.template.name,
+      params: sent.template.components.find((c) => c.type === "body")!.parameters.map((p) => p.text),
+    });
+    return Response.json({ messages: [{ id: `wamid.${whatsappSends.length}` }] });
   }
   if (path === "/transaction/initialize") {
     const body = await req.json() as Record<string, unknown>;
@@ -142,7 +161,7 @@ const cron = (fn: string, body: unknown, secret = CRON_SECRET) =>
     method: "POST", headers: { "content-type": "application/json", "x-cron-secret": secret }, body: JSON.stringify(body),
   });
 
-let users: Record<"tm" | "dsm" | "dsa" | "owner" | "agent" | "tfTm", { id: string; email: string }>;
+let users: Record<"tm" | "dsm" | "dsa" | "owner" | "agent" | "tfTm" | "tfWm" | "tfDsm" | "tfDsa" | "tfZsm", { id: string; email: string }>;
 let IKEJA: string;
 
 Deno.test({
@@ -153,6 +172,7 @@ Deno.test({
     users = {
       tm: await createUser(1), dsm: await createUser(2), dsa: await createUser(3),
       owner: await createUser(4), agent: await createUser(5), tfTm: await createUser(6),
+      tfWm: await createUser(7), tfDsm: await createUser(8), tfDsa: await createUser(9), tfZsm: await createUser(10),
     };
     const [lga] = (await must(admin.from("ng_lgas").select("id").eq("state_code", "LA").eq("name", "Ikeja"))) ?? [];
     IKEJA = lga.id;
@@ -201,7 +221,18 @@ Deno.test({
     await must(admin.from("tenant_users").insert({
       tenant_id: TEAFAIR, profile_id: users.tfTm.id, role: "TM", territory_id: ids.tfTerritory, status: "ACTIVE", is_primary: true,
     }));
-    await must(admin.from("warehouses").insert({ id: ids.tfWarehouse, tenant_id: TEAFAIR, name: `IT Ikeja ${run}`, kind: "REGIONAL", territory_id: ids.tfTerritory }));
+    await must(admin.from("warehouses").insert({ id: ids.tfWarehouse, tenant_id: TEAFAIR, name: `IT Ikeja ${run}`, kind: "REGIONAL", territory_id: ids.tfTerritory, manager_id: users.tfWm.id }));
+    // A5 fulfilment staff: a warehouse manager (a member who manages the warehouse),
+    // a DSM and DSA of the territory, and a tenant-wide ZSM
+    const [tfTmRow] = (await must(admin.from("tenant_users").select("id").eq("tenant_id", TEAFAIR).eq("profile_id", users.tfTm.id))) ?? [];
+    const [tfDsmRow] = (await must(admin.from("tenant_users").insert(
+      { tenant_id: TEAFAIR, profile_id: users.tfDsm.id, role: "DSM", territory_id: ids.tfTerritory, reports_to_id: tfTmRow.id, status: "ACTIVE", is_primary: true },
+    ).select("id"))) ?? [];
+    await must(admin.from("tenant_users").insert([
+      { tenant_id: TEAFAIR, profile_id: users.tfDsa.id, role: "DSA", territory_id: ids.tfTerritory, reports_to_id: tfDsmRow.id, status: "ACTIVE", is_primary: true },
+      { tenant_id: TEAFAIR, profile_id: users.tfWm.id, role: "ASM", territory_id: ids.tfTerritory, reports_to_id: tfTmRow.id, status: "ACTIVE", is_primary: true },
+      { tenant_id: TEAFAIR, profile_id: users.tfZsm.id, role: "ZSM", zone_id: ids.tfZone, status: "ACTIVE", is_primary: true },
+    ]));
     await must(admin.from("territories").update({ tm_id: users.tfTm.id, web_fulfilment_warehouse_id: ids.tfWarehouse }).eq("id", ids.tfTerritory));
     await must(admin.from("central_products").insert({
       tenant_id: TEAFAIR, sku_code: TF_SKU, product_name: `IT Tea ${run}`, brand: "Teafair", category: "Beverages", unit_price: 1500, wholesale_price: 1200,
@@ -327,8 +358,56 @@ Deno.test({
   },
 });
 
-const checkout = (body: Record<string, unknown>) =>
-  fetch(`${FN}/web-checkout`, { method: "POST", headers: { Origin: WEB, "content-type": "application/json" }, body: JSON.stringify(body) });
+// A5 §3: a checkout carries consent (policy tag + acceptance) and a single-use
+// WhatsApp verification token for the buyer's number. Each call verifies the
+// phone through the fake WhatsApp; a retry with the same idempotency key reuses
+// its token. Each verification comes from its own address (cf-connecting-ip), so
+// the 10-per-IP-per-hour start limit never bites between runs.
+const tokenByKey = new Map<string, string>();
+let policyTag: string | undefined;
+
+async function activePolicyTag(): Promise<string> {
+  if (!policyTag) {
+    const res = await fetch(`${FN}/storefront-refund-policy`, { headers: { Origin: WEB } });
+    const policy = await res.json();
+    assertEquals(res.status, 200, JSON.stringify(policy));
+    policyTag = policy.version_tag as string;
+  }
+  return policyTag;
+}
+
+async function verifyPhone(phoneNumber: string): Promise<string> {
+  const ip = `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${1 + Math.floor(Math.random() * 250)}`;
+  const started = await fetch(`${FN}/checkout-phone-verify-start`, {
+    method: "POST", headers: { Origin: WEB, "content-type": "application/json", "cf-connecting-ip": ip },
+    body: JSON.stringify({ turnstile_token: "pass", phone: phoneNumber }),
+  });
+  const start = await started.json();
+  assertEquals(started.status, 200, JSON.stringify(start));
+  const sent = [...whatsappSends].reverse().find((m) => m.template === "teafair_otp" && m.to === phoneNumber.replace(/^\+/, ""));
+  assert(sent, "the code arrives over the fake WhatsApp");
+  const confirmed = await fetch(`${FN}/checkout-phone-verify-confirm`, {
+    method: "POST", headers: { Origin: WEB, "content-type": "application/json" },
+    body: JSON.stringify({ verification_id: start.verification_id, code: sent.params[0] }),
+  });
+  const confirm = await confirmed.json();
+  assertEquals(confirmed.status, 200, JSON.stringify(confirm));
+  return confirm.verification_token as string;
+}
+
+async function checkout(body: Record<string, unknown>) {
+  const key = String(body.idempotency_key);
+  if (!tokenByKey.has(key)) {
+    tokenByKey.set(key, await verifyPhone((body.customer as { phone: string }).phone));
+  }
+  return fetch(`${FN}/web-checkout`, {
+    method: "POST", headers: { Origin: WEB, "content-type": "application/json" },
+    body: JSON.stringify({
+      accept_refund_policy: true, policy_version_tag: await activePolicyTag(),
+      phone_verification_token: tokenByKey.get(key), ...body,
+    }),
+  });
+}
 
 // a distinct buyer phone per order keeps clear of the 5-unpaid-orders-per-phone limit
 let buyer = 0;
@@ -615,6 +694,186 @@ Deno.test({
     // 7. a wrong secret is a 404
     const wrong = await support("support-ticket-read", { public_reference: ref, secret: "A".repeat(43) });
     assertEquals([wrong.status, (await wrong.json()).error.code], [404, "NOT_FOUND"]);
+  },
+});
+
+// ── A5: verified checkout → dispatch → delivery → damage ticket → evidence ──
+async function asUser(email: string) {
+  const jwt = await signIn(email);
+  const post = (fn: string, body: unknown) =>
+    fetch(`${FN}/${fn}`, { method: "POST", headers: { Authorization: `Bearer ${jwt}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const db = createClient(API, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}` } } });
+  return { post, db };
+}
+
+// the signed URLs are built from the edge runtime's internal Storage address; reach them from the host
+const fromHost = (url: string) => url.replace(/^https?:\/\/[^/]+/, API);
+
+async function uploadTo(signedUrl: string, bytes: Uint8Array<ArrayBuffer>, type: string): Promise<void> {
+  const form = new FormData();
+  form.append("cacheControl", "3600");
+  form.append("", new Blob([bytes], { type }));
+  const res = await fetch(fromHost(signedUrl), { method: "PUT", headers: { apikey: ANON }, body: form });
+  assert(res.ok, `upload failed with ${res.status}: ${await res.text()}`);
+}
+
+const photoBytes = (n: number): Uint8Array<ArrayBuffer> => new Uint8Array(n).fill(7);
+
+// a codeless order placed through the verified checkout and paid
+async function paidOrder(name: string, phoneNumber: string): Promise<Record<string, string | number | null>> {
+  const placed = await place(codeless({ customer: { name, phone: phoneNumber, delivery_address: "5 Opebi Road, Ikeja" } }));
+  const reference = String(placed.paystack_reference);
+  paystackLedger.set(reference, verified(reference, 300000));
+  const settled = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
+  assertEquals(settled.body.outcome, "updated", JSON.stringify(settled.body));
+  assertEquals((await orderOf(placed.order_id)).status, "PAID");
+  return placed;
+}
+
+Deno.test({
+  name: "A5: verified checkout → dispatch → delivery code via WhatsApp → delivery → damage ticket with photo → evidence",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    // 1-2. verification and consenting checkout (checkout() verifies through the fake WhatsApp)
+    const buyerName = "Ada Obi";
+    const buyerPhone = `+23480${String(Date.now()).slice(-6)}${buyer++ % 10}3`;
+    const tag = await activePolicyTag();
+
+    // a missing consent is refused before anything else
+    const noConsent = await fetch(`${FN}/web-checkout`, {
+      method: "POST", headers: { Origin: WEB, "content-type": "application/json" },
+      body: JSON.stringify({ ...codeless(), accept_refund_policy: false, policy_version_tag: tag, phone_verification_token: "A".repeat(43) }),
+    });
+    const refused = await noConsent.json();
+    assertEquals([noConsent.status, refused.error.message], [400, "You must accept the refund policy to place an order."]);
+
+    const placed = await paidOrder(buyerName, buyerPhone);
+    const orderId = String(placed.order_id);
+    const [order] = (await must(admin.from("orders").select("policy_version_tag, policy_accepted_at").eq("id", orderId))) ?? [];
+    assertEquals(order.policy_version_tag, tag);
+    assert(order.policy_accepted_at);
+
+    // 3. the warehouse manager dispatches; the code reaches the buyer over WhatsApp
+    const wm = await asUser(users.tfWm.email);
+    const dispatched = await wm.post("order-dispatch", { idempotency_key: crypto.randomUUID(), order_id: orderId, tracking_reference: `IT-${run}` });
+    const dispatch = await dispatched.json();
+    assertEquals(dispatched.status, 200, JSON.stringify(dispatch));
+    assertEquals([dispatch.status, dispatch.delivery_code_sent, dispatch.channel], ["IN_TRANSIT", true, "WHATSAPP"], JSON.stringify(dispatch));
+    assert(!JSON.stringify(dispatch).includes(buyerPhone.slice(1)), "the buyer's phone never reaches the dispatcher");
+    const codeMessage = [...whatsappSends].reverse().find((m) => m.template === "teafair_delivery_code" && m.to === buyerPhone.slice(1))!;
+    assert(codeMessage, "the delivery code message went out over the fake WhatsApp");
+    assertEquals(codeMessage.params[0], placed.public_reference);
+    const pin = codeMessage.params[1];
+    assert(/^[0-9]{4}$/.test(pin));
+
+    // 4. the territory's DSA uploads a delivery photo, a wrong code is refused, the right one delivers
+    const dsa = await asUser(users.tfDsa.email);
+    const photo = photoBytes(2048);
+    const slotRes = await dsa.post("order-delivery-photo", {
+      idempotency_key: crypto.randomUUID(), order_id: orderId, mime_type: "image/png", size_bytes: photo.length,
+    });
+    const slot = await slotRes.json();
+    assertEquals(slotRes.status, 200, JSON.stringify(slot));
+    await uploadTo(slot.upload_url, photo, "image/png");
+
+    const wrongPin = pin === "0000" ? "1111" : "0000";
+    const wrong = await dsa.post("order-delivery-confirm", {
+      idempotency_key: crypto.randomUUID(), order_id: orderId, pin: wrongPin, photo_attachment_id: slot.attachment_id,
+    });
+    assertEquals([wrong.status, (await wrong.json()).error.code], [422, "WRONG_PIN"]);
+
+    const confirmed = await dsa.post("order-delivery-confirm", {
+      idempotency_key: crypto.randomUUID(), order_id: orderId, pin, photo_attachment_id: slot.attachment_id,
+    });
+    const delivered = await confirmed.json();
+    assertEquals(confirmed.status, 200, JSON.stringify(delivered));
+    assertEquals([delivered.status, delivered.delivered_via], ["DELIVERED", "FIELD_STAFF"]);
+    assertEquals((await orderOf(orderId)).status, "DELIVERED");
+
+    // 5. the buyer opens a DELIVERY ticket, requests an attachment, uploads it, posts with it
+    const opened = await support("support-ticket-open", {
+      idempotency_key: crypto.randomUUID(), turnstile_token: "pass", category: "DELIVERY", message: "The box arrived crushed.",
+      customer: { name: buyerName, phone: buyerPhone },
+      order: { public_reference: placed.public_reference, paystack_reference: placed.paystack_reference },
+    });
+    const ticket = await opened.json();
+    assertEquals(opened.status, 200, JSON.stringify(ticket));
+    const buyerSlotRes = await support("support-ticket-attachment", {
+      idempotency_key: crypto.randomUUID(), public_reference: ticket.public_reference, secret: ticket.secret,
+      mime_type: "image/jpeg", size_bytes: 1500,
+    });
+    const buyerSlot = await buyerSlotRes.json();
+    assertEquals(buyerSlotRes.status, 200, JSON.stringify(buyerSlot));
+    await uploadTo(buyerSlot.upload_url, photoBytes(1500), "image/jpeg");
+    const posted = await support("support-ticket-message", {
+      idempotency_key: crypto.randomUUID(), public_reference: ticket.public_reference, secret: ticket.secret,
+      message: "Photo of the damage.", attachment_ids: [buyerSlot.attachment_id],
+    });
+    assertEquals(posted.status, 200, await posted.text());
+
+    const readBack = await (await support("support-ticket-read", { public_reference: ticket.public_reference, secret: ticket.secret })).json();
+    const urls = (readBack.messages as Array<{ attachments?: Array<{ url: string | null }> }>).flatMap((m) => m.attachments ?? []);
+    assertEquals(urls.length, 1, JSON.stringify(readBack));
+    assert(urls[0].url, "the buyer reads back a signed URL");
+
+    // the ZSM sees that the ticket came within the 24-hour damage window
+    const zsm = await asUser(users.tfZsm.email);
+    const tickets = (await must(zsm.db.from("support_tickets").select("within_damage_window").eq("order_id", orderId))) ?? [];
+    assertEquals(tickets.map((t: { within_damage_window: boolean | null }) => t.within_damage_window), [true]);
+
+    // 6. the ZSM's dispute evidence bundle
+    const evidenceRes = await zsm.post("order-dispute-evidence", { order_id: orderId });
+    const evidence = await evidenceRes.json();
+    assertEquals(evidenceRes.status, 200, JSON.stringify(evidence));
+    assertEquals(evidence.consent.policy_version_tag, tag);
+    assert(evidence.consent.policy_accepted_at && evidence.consent.content);
+    assert(evidence.contact.phone_verified_at, "the WhatsApp verification is in the bundle");
+    assertEquals(evidence.contact.phone_verified_channel, "WHATSAPP");
+    assertEquals([evidence.fulfilment.pin_verified, evidence.fulfilment.delivered_via], [true, "FIELD_STAFF"]);
+    assert(typeof evidence.fulfilment.delivery_photo.url === "string", "delivery photo URL");
+    const evidenceAttachments = evidence.tickets[0].messages.flatMap((m: { attachments: Array<{ url: string | null }> }) => m.attachments);
+    assertEquals(evidenceAttachments.length, 1);
+    assert(typeof evidenceAttachments[0].url === "string", "ticket photo URL");
+    assertEquals(evidence.tickets[0].within_damage_window, true);
+    const text = JSON.stringify(evidence);
+    assert(!text.includes('"storage_path"') && !text.includes('"bucket"'), "no Storage path or bucket leaves the gateway");
+
+    // the signed photo URL works
+    const fetched = await fetch(fromHost(String(evidence.fulfilment.delivery_photo.url)), { headers: { apikey: ANON } });
+    assertEquals(fetched.status, 200);
+    assertEquals((await fetched.arrayBuffer()).byteLength, 2048);
+  },
+});
+
+Deno.test({
+  name: "A5: a failing WhatsApp falls back to SMS and the delivery log says so",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const buyerPhone = `+23480${String(Date.now()).slice(-6)}${buyer++ % 10}5`;
+    const placed = await paidOrder("Bola Ade", buyerPhone);
+    const orderId = String(placed.order_id);
+    const wm = await asUser(users.tfWm.email);
+
+    whatsappFailures = 1;
+    const res = await wm.post("order-dispatch", { idempotency_key: crypto.randomUUID(), order_id: orderId });
+    const dispatch = await res.json();
+    assertEquals(res.status, 200, JSON.stringify(dispatch));
+    assertEquals([dispatch.status, dispatch.delivery_code_sent, dispatch.channel], ["IN_TRANSIT", true, "SMS"], JSON.stringify(dispatch));
+    whatsappFailures = 0;
+
+    // notification_logs has no service_role grant, and the router logs a null
+    // tenant (so no ZSM policy matches): read it with psql, as the owner
+    const psql = await new Deno.Command("psql", {
+      args: ["-qAt", "-F", "|", "-d", Deno.env.get("DB_URL")!, "-c",
+        `select channel, status, phone_last4 from public.notification_logs where related_id = '${orderId}' and purpose = 'DELIVERY_CODE'`],
+      stdout: "piped", stderr: "piped",
+    }).output();
+    assert(psql.success, new TextDecoder().decode(psql.stderr));
+    const logs = new TextDecoder().decode(psql.stdout).trim().split(/\r?\n/).filter(Boolean);
+    assert(logs.includes(`SMS|SENT|${buyerPhone.slice(-4)}`), JSON.stringify(logs));
+    assert(logs.includes(`WHATSAPP|FAILED|${buyerPhone.slice(-4)}`), JSON.stringify(logs));
   },
 });
 

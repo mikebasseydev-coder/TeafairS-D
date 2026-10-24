@@ -16,6 +16,7 @@ the authority; this file is the working summary.
 | D1. Web money loop — routing, settlement, sweeps, refunds, commission release | done (local) |
 | A3. Web chat & ticketing — support tables, buyer gateways, staff RPCs, system tickets | done (local) |
 | A4. Internal staff messaging — chat channels, direct chats, team/zone rooms, announcements | done (local) |
+| A5. Refund policy, WhatsApp-verified checkout, fulfilment and delivery code, support photos, dispute evidence | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -173,6 +174,105 @@ Functions and no secrets: staff talk through PostgREST.
   the announcement fan-out (one `notifications` row per staff member) to a
   queue past roughly 10k staff per tenant.
 
+### Addendum A5 (refund policy, verified checkout, fulfilment, support photos)
+
+Seven migrations (`20261023120000`–`20261023120500`, plus `120310`) and the
+functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
+`open_support_ticket`, `add_ticket_message` and `reply_ticket`).
+
+- **Refund policy.** `refund_policies` holds `v2.0-food` (FOOD only, sellable
+  categories on `central_products.sale_category`). `storefront-refund-policy`
+  (GET, cached 5 min) returns the active policy. **The policy text is a
+  placeholder and needs legal review before go-live.** Food copy: "Opened food
+  items can't be refunded. Report transit damage within 24 hours of delivery
+  with photos."
+- **Verified, consenting checkout.** `web-checkout` now requires
+  `accept_refund_policy: true`, `policy_version_tag` and
+  `phone_verification_token` (43 chars). The token comes from
+  `checkout-phone-verify-start` (Turnstile, then a WhatsApp-only code; throttles
+  3 per phone and 10 per IP per hour) and `checkout-phone-verify-confirm` (a
+  wrong code is 422, not a raise, so the attempt counter commits). Consent IP
+  and verification facts live in `order_contacts`. The cut-off constant for
+  ONLINE orders is 2026-10-23.
+- **Message router.** `_shared/messaging/router.ts` tries the Meta WhatsApp
+  Cloud API first and falls back to SMS (not for PHONE_VERIFY). Each attempt is
+  logged in `notification_logs` (last four digits only). `otp-issue` now uses
+  it.
+- **Support photos.** Private buckets `support-attachments` and
+  `delivery-proofs` (JPEG/PNG/WebP, 5 MiB, 3 per message). A photo needs an
+  `upload_slots` row first: `support-ticket-attachment` (buyer),
+  `support-staff-attachment` (staff), `order-delivery-photo` (delivery). A
+  buyer **opens the ticket, requests an attachment, uploads, then posts a
+  message with `attachment_ids`** (`support-ticket-message`); a ticket cannot be
+  opened with photos. `support-ticket-read` signs download URLs for 600 s.
+  **Signed upload URLs live 2 hours** (Storage fixes this; each allows one
+  upload because there is no upsert; the DB slot checks size and mime at claim
+  and cleanup runs at 24 h). Storage has SELECT policies only. Deleting is
+  asynchronous: slot deletion enqueues paths in `storage_purge_queue`, and the
+  cron-invoked `storage-purge` function (every 15 min, `x-cron-secret`) drains
+  it through the Storage API.
+- **Fulfilment.** `order-dispatch` (WM or ZSM; PIN generated in the gateway,
+  hashed by `mark_order_dispatched`, sent through the router),
+  `order-delivery-pin` (resend), `order-delivery-photo`,
+  `order-delivery-confirm` (RPC `mark_order_delivered`) and
+  `order-dispute-evidence` (ZSM; `get_order_dispute_evidence`, audited as
+  `DISPUTE_EVIDENCE_VIEWED`, signs photo URLs for 600 s). Web orders only.
+  Delivery opens a 24 h damage window; `within_damage_window` is stamped on
+  ORDER DELIVERY/PRODUCT tickets.
+- **Gateway proof (R16).** `mark_order_dispatched`, `resend_delivery_pin` and
+  `mark_delivery_pin_sent` demand the Vault secret `gateway_secret`, equal to
+  the functions env `GATEWAY_SECRET`. Create it **once per environment and
+  after every `db reset`**, next to `cron_secret`:
+  `select vault.create_secret('<value>', 'gateway_secret');`. Missing or
+  different, dispatch fails closed (42501). `storage-purge` also needs the
+  existing `functions_base_url` and `cron_secret` Vault secrets and `CRON_SECRET`.
+- **New secrets (functions env).** `WHATSAPP_ACCESS_TOKEN`,
+  `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_API_VERSION`, optional
+  `WHATSAPP_API_URL` (tests only), `WHATSAPP_TEMPLATE_OTP`,
+  `WHATSAPP_TEMPLATE_DELIVERY_CODE`, `GATEWAY_SECRET`. With the first three
+  empty the router sends SMS only (and phone verification returns 503).
+
+**Deploy notes.**
+
+1. **Meta must approve the templates `teafair_otp` (authentication, with the
+   copy-code button) and `teafair_delivery_code` before deploy.**
+2. Storage buckets and policies: **dry-run the storage policies against staging
+   first; the fallback is gateway-signed URLs for staff.**
+3. Pre-push check on the remote; it must return 0 before pushing
+   `20261023120100`: `select count(*) from orders where channel = 'ONLINE' and created_at >= '2026-10-23' and policy_version_tag is null;`
+   If not, move the cut-off constant to the push date in a new migration.
+4. Create `gateway_secret` in Vault and set `GATEWAY_SECRET` and the
+   `WHATSAPP_*` secrets as function secrets; then deploy the functions.
+5. Legal review of the placeholder policy text.
+
+**For Spec B (client).** Checkout must send the consent fields and run the
+verification flow first (start, then confirm, then checkout with the token;
+tokens are single use and expire in 30 min). Use a fresh idempotency key for
+every delivery-PIN entry (the stored request omits the PIN, so a reused key
+replays the first answer). Open a ticket, then request an attachment, then post
+with it. Confirm delivery through `order-delivery-confirm`, not the RPC, to get
+the 422 for a wrong or locked code.
+
+**A5 builder rulings.**
+
+- R1: `start_web_phone_verification` takes `p_client_ip inet` for the per-IP limit.
+- R2: the router lives at `_shared/messaging/router.ts`, not `_shared/core/messaging.ts`.
+- R3: the D1/A1 integration flows send the new checkout fields.
+- R4: `support-ticket-attachment` takes no `file_name`.
+- R5: `mark_order_delivered` returns `WRONG_PIN`/`LOCKED` as data; the gateway maps them to 422 so counters commit.
+- R6: only a ZSM resend resets PIN failure counters and locks; 5 wrong codes lock 30 min, 10 lifetime lock to ZSM.
+- R7: extra tests for other-tenant and other-warehouse WMs delivering (42501).
+- R8: `get_order_dispute_evidence` is VOLATILE because it writes an audit row.
+- R9: a wrong verification code returns `verified:false` data (gateway 422), not a raise.
+- R10: pre-push count check for ONLINE orders without a policy tag (above).
+- R11: `accept_refund_policy` is checked in the handler for the exact 400 copy.
+- R12: Storage deletes go through `storage_purge_queue` and the `storage-purge` cron function; Storage SELECT policies require a live slot.
+- R13: `open_support_ticket` keeps its A3 signature; photos attach after opening.
+- R14: the bucket migration also enforces bucket settings on a pre-existing bucket.
+- R15: the 2-hour signed upload URL lifetime is accepted (Storage-fixed).
+- R16: gateway-only proof through Vault `gateway_secret` for dispatch, resend and mark-sent.
+- R17: `add_ticket_message` stays service_role-only; `reply_ticket` and `redact_ticket_customer_data` keep their A3 grants. Flagged for final review.
+
 ## Layout
 
 ```
@@ -290,9 +390,15 @@ one responsibility per file. Third-party versions appear only in
 supabase functions serve --env-file supabase/functions/.env     # serve locally
 deno test --allow-env supabase/functions/                       # unit tests
 supabase status -o env > supabase/.env.test.local               # then:
-deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
+deno test --allow-net --allow-env --allow-run=psql --env-file=supabase/.env.test.local \
   --env-file=supabase/functions/.env supabase/functions/_tests/gateway.integration.ts
 ```
+
+Before the integration run: `supabase db reset` wipes Vault, so run
+`select vault.create_secret('<GATEWAY_SECRET>', 'gateway_secret');` (A5, R16),
+and put `GATEWAY_SECRET` and the `WHATSAPP_*` test values in
+`supabase/functions/.env` (gitignored; see `.env.example`). `psql` must be on
+the PATH (the SMS-fallback test reads `notification_logs`, which no API role can).
 
 **Secrets:** copy `supabase/.env.example` and
 `supabase/functions/.env.example`; `AUTH_HOOK_SECRET` must match in both. Set
@@ -306,8 +412,13 @@ deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
 The integration test runs its own fake Paystack (Initialize, Verify, List
 Refunds, Fetch Subaccount, List Settlements, Settlement Transactions) and
 Turnstile on host port 54399, reached from the edge runtime at
-`host.docker.internal:54399` (`PAYSTACK_API_BASE`, `TURNSTILE_VERIFY_URL`).
-It needs no Vault secrets: it calls the cron functions directly.
+`host.docker.internal:54399` (`PAYSTACK_API_BASE`, `TURNSTILE_VERIFY_URL`),
+plus a fake WhatsApp Cloud API on the same port (`WHATSAPP_API_URL`, with
+`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_API_VERSION`
+set to any values) that records template sends so the test can read codes.
+Verification starts use a random `cf-connecting-ip` each, to stay under the
+10-per-IP-per-hour limit. The only Vault secret it needs is `gateway_secret`;
+it calls the cron functions directly.
 
 ### Cron jobs (Spec D1 §10)
 
@@ -329,6 +440,10 @@ function secret `CRON_SECRET`. Without them each job logs
 `functions_base_url or cron_secret is missing from Vault` and posts nothing.
 `supabase db reset` wipes Vault, so recreate them after a reset if you want
 the jobs to run locally.
+
+A5 adds the `storage-purge` job (every 15 min, same two secrets) and the Vault
+secret `gateway_secret` (see Addendum A5); create `gateway_secret` the same way,
+once per environment and after every `db reset`.
 
 **Paystack test mode (D1 plan, fact F6).** The Paystack account is in test
 mode. Transactions, Verify and refunds behave as they do live, but test mode

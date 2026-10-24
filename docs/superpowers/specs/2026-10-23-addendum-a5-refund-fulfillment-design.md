@@ -144,7 +144,7 @@ The catalogue response carries `refund_note` per sellable category, taken from t
 - Paths take the form `tickets/<ticket_id>/<attachment_id>.<ext>`.
 - **Nobody uploads with a raw client write** *(builder's call, keeping Spec A §9 "no direct client writes")*. Instead:
   1. An RPC authorises the upload and registers a pending attachment.
-  2. The gateway creates a **signed upload URL** valid for 10 minutes.
+  2. The gateway creates a **signed upload URL** valid for 2 hours (Storage fixes the lifetime of upload URLs; each allows a single upload because there is no upsert, and the DB slot decides what is accepted). Download URLs last 10 minutes.
   3. The client uploads the file.
   4. Posting the message claims the attachment.
 - `storage.objects` gets one FOR SELECT policy, for authenticated staff downloads. It applies when the bucket is `support-attachments` and the ticket id parsed from the path is in `my_support_message_ticket_ids()`. That new helper returns exactly the tickets whose messages the caller may read, mirroring the `support_messages` policy, including A2-strict ORDER tickets and linked history. There is no insert, update or delete policy for clients.
