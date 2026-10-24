@@ -5,7 +5,8 @@
 -- cleanup of slots that were never claimed.
 --
 -- Nobody writes to Storage directly: an RPC registers a pending slot, the
--- gateway signs a 10-minute upload URL for its path, the client uploads, and
+-- gateway signs an upload URL for its path (Storage fixes its lifetime at
+-- 2 hours, R15; it allows a single upload, no upsert), the client uploads, and
 -- posting the message claims the slot once the object is really there.
 -- Paths and URLs never reach an audit row.
 --

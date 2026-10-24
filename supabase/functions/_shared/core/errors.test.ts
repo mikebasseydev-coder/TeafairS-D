@@ -50,3 +50,23 @@ Deno.test("errorResponse hides unexpected exceptions behind a 500", async () => 
   assertEquals(res.status, 500);
   assertEquals((await res.json()).error.code, "INTERNAL");
 });
+
+Deno.test("an unmapped error logs only code and message, never details or hint", () => {
+  const seen: unknown[][] = [];
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void seen.push(a);
+  try {
+    const e = mapPostgresError({
+      code: "23514",
+      message: "new row violates check constraint",
+      details: "Failing row contains (+2348031234567, 203.0.113.9).",
+      hint: "203.0.113.9",
+    } as { code: string; message: string; details: string });
+    assertEquals([e.status, e.code, e.details], [500, "INTERNAL", null]);
+  } finally {
+    console.error = orig;
+  }
+  assertEquals(seen, [["unmapped database error", { code: "23514", message: "new row violates check constraint" }]]);
+  const text = JSON.stringify(seen);
+  assertEquals(text.includes("2348031234567") || text.includes("203.0.113.9"), false);
+});

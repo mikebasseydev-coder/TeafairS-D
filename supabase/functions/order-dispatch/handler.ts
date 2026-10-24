@@ -24,7 +24,7 @@ export type OrderDispatchDeps = UserGatewayDeps & {
 type DispatchReply = { order_id: string; status: string; public_reference: string; buyer_phone?: string };
 
 export function createOrderDispatchHandler(deps: OrderDispatchDeps): (req: Request) => Promise<Response> {
-  return userGateway(schema, async ({ body, rpc }) => {
+  return userGateway(schema, async ({ caller, body, rpc }) => {
     const pin = deps.generatePin();
     const r = await rpc<DispatchReply>("mark_order_dispatched", {
       p_idempotency_key: body.idempotency_key,
@@ -43,6 +43,9 @@ export function createOrderDispatchHandler(deps: OrderDispatchDeps): (req: Reque
       phone: r.buyer_phone,
       pin,
       gatewayProof: deps.gatewaySecret,
+      // R18: the RPC succeeded, so assert_tenant_role and the order lock proved
+      // the active tenant is the order's; notification_logs gets it for ZSM RLS.
+      tenantId: caller.activeTenantId,
     });
     return { order_id: r.order_id, status: r.status, ...sent };
   }, deps);

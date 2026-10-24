@@ -5,6 +5,7 @@ import { createOtpIssueHandler } from "./handler.ts";
 
 const KEY = "b0000000-0000-0000-0000-000000000001";
 const SUBJECT = "20000000-0000-0000-0000-000000000005";
+const TENANT = "e0000000-0000-0000-0000-000000000001";
 
 function setup(opts: { replayed?: boolean; smsFails?: boolean; channel?: "WHATSAPP" | "SMS" } = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
@@ -19,7 +20,7 @@ function setup(opts: { replayed?: boolean; smsFails?: boolean; channel?: "WHATSA
     } as T);
   };
   const handler = createOtpIssueHandler({
-    verifyToken: () => Promise.resolve({ sub: "u3", role: "authenticated", app_metadata: {} }),
+    verifyToken: () => Promise.resolve({ sub: "u3", role: "authenticated", app_metadata: { active_tenant_id: TENANT } }),
     rpcFor: () => rpc,
     generateCode: () => "042917",
     sendMessage: (to, message) => {
@@ -53,6 +54,7 @@ Deno.test("a fresh challenge stores the code via the RPC and texts it to the own
   assertEquals(sms[0][1].purpose, "OTP");
   assertEquals(sms[0][1].template, { name: "teafair_otp", language: "en", params: ["042917"], kind: "authentication" });
   assertEquals(sms[0][1].relatedId, "60000000-0000-0000-0000-000000000001");
+  assertEquals(sms[0][1].tenantId, TENANT); // R18: the caller's active tenant goes to notification_logs
 });
 
 Deno.test("a replay never texts a code the database does not hold", async () => {

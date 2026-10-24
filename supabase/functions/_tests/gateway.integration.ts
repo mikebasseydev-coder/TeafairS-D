@@ -857,23 +857,32 @@ Deno.test({
     const wm = await asUser(users.tfWm.email);
 
     whatsappFailures = 1;
-    const res = await wm.post("order-dispatch", { idempotency_key: crypto.randomUUID(), order_id: orderId });
-    const dispatch = await res.json();
-    assertEquals(res.status, 200, JSON.stringify(dispatch));
+    let dispatch: Record<string, unknown>;
+    try {
+      const res = await wm.post("order-dispatch", { idempotency_key: crypto.randomUUID(), order_id: orderId });
+      dispatch = await res.json();
+      assertEquals(res.status, 200, JSON.stringify(dispatch));
+    } finally {
+      whatsappFailures = 0;
+    }
     assertEquals([dispatch.status, dispatch.delivery_code_sent, dispatch.channel], ["IN_TRANSIT", true, "SMS"], JSON.stringify(dispatch));
-    whatsappFailures = 0;
 
-    // notification_logs has no service_role grant, and the router logs a null
-    // tenant (so no ZSM policy matches): read it with psql, as the owner
-    const psql = await new Deno.Command("psql", {
-      args: ["-qAt", "-F", "|", "-d", Deno.env.get("DB_URL")!, "-c",
-        `select channel, status, phone_last4 from public.notification_logs where related_id = '${orderId}' and purpose = 'DELIVERY_CODE'`],
-      stdout: "piped", stderr: "piped",
-    }).output();
-    assert(psql.success, new TextDecoder().decode(psql.stderr));
-    const logs = new TextDecoder().decode(psql.stdout).trim().split(/\r?\n/).filter(Boolean);
-    assert(logs.includes(`SMS|SENT|${buyerPhone.slice(-4)}`), JSON.stringify(logs));
-    assert(logs.includes(`WHATSAPP|FAILED|${buyerPhone.slice(-4)}`), JSON.stringify(logs));
+    // R18: the router logs the dispatcher's tenant, so the tenant's ZSM reads the
+    // log through PostgREST under RLS (notification_logs_select_zsm).
+    const zsm = await asUser(users.tfZsm.email);
+    const rows = (await must(
+      zsm.db.from("notification_logs").select("tenant_id, channel, status, phone_last4")
+        .eq("related_id", orderId).eq("purpose", "DELIVERY_CODE"),
+    )) as Array<{ tenant_id: string; channel: string; status: string; phone_last4: string }>;
+    const logs = rows.map((r) => `${r.channel}|${r.status}|${r.phone_last4}`);
+    assert(logs.includes(`SMS|SENT|${buyerPhone.slice(-4)}`), JSON.stringify(rows));
+    assert(logs.includes(`WHATSAPP|FAILED|${buyerPhone.slice(-4)}`), JSON.stringify(rows));
+    assert(rows.every((r) => r.tenant_id === TEAFAIR), JSON.stringify(rows));
+
+    // a DSA of the same tenant is not a ZSM: RLS hides the log
+    const dsa = await asUser(users.tfDsa.email);
+    const dsaRows = (await must(dsa.db.from("notification_logs").select("id").eq("related_id", orderId))) as unknown[];
+    assertEquals(dsaRows.length, 0);
   },
 });
 

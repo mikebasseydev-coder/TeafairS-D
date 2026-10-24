@@ -43,6 +43,8 @@ export async function sendDeliveryCode(args: {
   phone: string | undefined;
   pin: string;
   gatewayProof: string;
+  /** The caller's active tenant (R18), already proved equal to the order's by the RPC. */
+  tenantId: string | null;
 }): Promise<CodeDelivery> {
   if (!args.phone) return { delivery_code_sent: false, channel: null };
   let channel: "WHATSAPP" | "SMS";
@@ -52,6 +54,7 @@ export async function sendDeliveryCode(args: {
       template: deliveryCodeTemplate(args.reference, args.pin),
       smsText: deliveryCodeSms(args.reference, args.pin),
       relatedId: args.orderId,
+      tenantId: args.tenantId ?? undefined,
     })).channel;
   } catch (e) {
     if (e instanceof MessageDeliveryError) return { delivery_code_sent: false, channel: null };

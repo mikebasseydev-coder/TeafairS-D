@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { createOrderDeliveryPinHandler } from "./handler.ts";
-import { KEY, ORDER, PHONE, PIN, post, REF, SECRET, sendSetup } from "../_shared/fulfilment/_fixtures.ts";
+import { KEY, ORDER, PHONE, PIN, post, REF, SECRET, sendSetup, TENANT } from "../_shared/fulfilment/_fixtures.ts";
 
 const first = { order_id: ORDER, public_reference: REF, buyer_phone: PHONE };
 
@@ -12,6 +12,7 @@ Deno.test("resend uses DELIVERY_CODE_RESEND and never returns the PIN or phone",
   assertEquals(text.includes(PIN) || text.includes(PHONE), false);
   assertEquals(calls[0], ["resend_delivery_pin", { p_idempotency_key: KEY, p_order_id: ORDER, p_pin: PIN, p_gateway_proof: SECRET }]);
   assertEquals(sends[0][1].purpose, "DELIVERY_CODE_RESEND");
+  assertEquals(sends[0][1].tenantId, TENANT); // R18
   assertEquals(calls[1][0], "mark_delivery_pin_sent");
 });
 

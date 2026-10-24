@@ -64,10 +64,10 @@ const order = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const post = (handler: (r: Request) => Promise<Response>, body: unknown) =>
+const post = (handler: (r: Request) => Promise<Response>, body: unknown, ip = "1.2.3.4") =>
   handler(new Request("http://x/web-checkout", {
     method: "POST",
-    headers: { Origin: ORIGIN, "cf-connecting-ip": "1.2.3.4" },
+    headers: { Origin: ORIGIN, "cf-connecting-ip": ip },
     body: JSON.stringify(body),
   }));
 
@@ -221,4 +221,21 @@ Deno.test("a verification token that is not 43 characters is 400", async () => {
   const res = await post(handler, order({ phone_verification_token: "short" }));
   assertEquals([res.status, rpcCalls.length], [400, 0]);
   await res.body?.cancel();
+});
+
+Deno.test("a non-IP client address header is dropped to null, never a 500 (R19)", async () => {
+  const { handler, rpcCalls, turnstileCalls } = setup();
+  const res = await post(handler, order(), "unknown");
+  assertEquals(res.status, 200);
+  await res.body?.cancel();
+  assertEquals(turnstileCalls, [["tok", null]]);
+  assertEquals(rpcCalls[1][1].p_client_ip, null);
+});
+
+Deno.test("an IPv6 client address reaches the consent record (R19)", async () => {
+  const { handler, rpcCalls } = setup();
+  const res = await post(handler, order(), "2001:db8::42");
+  assertEquals(res.status, 200);
+  await res.body?.cancel();
+  assertEquals(rpcCalls[1][1].p_client_ip, "2001:db8::42");
 });

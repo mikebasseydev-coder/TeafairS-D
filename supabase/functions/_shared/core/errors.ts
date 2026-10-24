@@ -33,7 +33,9 @@ const GENERIC = "Something went wrong. Please try again.";
 export function mapPostgresError(err: PostgresError): GatewayError {
   const hit = err.code ? CONTRACT[err.code] : undefined;
   if (!hit) {
-    console.error("unmapped database error", err);
+    // code and message only: details and hint can echo the failing row (a
+    // phone, an IP), which must never reach a log (A5 constraints)
+    console.error("unmapped database error", { code: err.code ?? null, message: err.message ?? null });
     return new GatewayError(500, "INTERNAL", GENERIC);
   }
   const message = hit.status === 503

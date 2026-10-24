@@ -16,9 +16,45 @@ create table public.refund_policies (
   created_at    timestamptz not null default now()
 );
 alter table public.refund_policies enable row level security;
-revoke all on public.refund_policies from anon, authenticated;
+revoke all on public.refund_policies from anon, authenticated, service_role;
 -- exactly one active version
 create unique index refund_policies_one_active on public.refund_policies (is_active) where is_active;
+
+-- ── versions are immutable (R20) ────────────────────────────────────────
+-- An order's consent points at version_tag, and the dispute evidence bundle
+-- shows that version's text: editing a row in place would rewrite what every
+-- past buyer accepted. Only is_active may change (and published_at, when a
+-- version is activated); new wording ships as a new version. Rows are never
+-- deleted. The function is internal: trigger only, no grant.
+create function public.refund_policies_immutable()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if tg_op in ('DELETE', 'TRUNCATE') then
+    raise exception 'refund policy versions cannot be deleted; publish a new version and activate it instead'
+      using errcode = 'P0001';
+  end if;
+  if (new.id, new.version_tag, new.title, new.content, new.categories, new.created_at)
+       is distinct from (old.id, old.version_tag, old.title, old.content, old.categories, old.created_at)
+     or (new.published_at is distinct from old.published_at and not (new.is_active and not old.is_active)) then
+    raise exception 'refund policy % is immutable: publish a new version (e.g. v2.1-food) instead of editing it', old.version_tag
+      using errcode = 'P0001',
+            hint = 'Only is_active may change, and published_at when activating.';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.refund_policies_immutable() from public, anon, authenticated, service_role;
+
+create trigger refund_policies_immutable
+  before update or delete on public.refund_policies
+  for each row execute function public.refund_policies_immutable();
+create trigger refund_policies_no_truncate
+  before truncate on public.refund_policies
+  for each statement execute function public.refund_policies_immutable();
 
 -- PLACEHOLDER wording: counsel must review it before go-live.
 insert into public.refund_policies (version_tag, title, content, categories, is_active, published_at)

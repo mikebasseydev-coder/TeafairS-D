@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(168);
+select plan(176);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
 -- TEAFAIR: ZSM (1), Ikeja TM (2), Ikeja DSA (4), DSM (5, manages warehouse W).
@@ -233,9 +233,11 @@ insert into want values
   ('public.fulfilment_today()', false, false, false),
   ('public.assert_gateway_proof(text)', false, false, false),
   ('public.upload_slot_extension(text,bigint)', false, false, false),
-  ('public.support_new_slot(public.support_tickets,text,uuid,text,bigint)', false, false, false);
+  ('public.support_new_slot(public.support_tickets,text,uuid,text,bigint)', false, false, false),
+  ('public.refund_policies_immutable()', false, false, false),
+  ('public.cleanup_web_phone_verifications()', false, false, false);
 -- reply_ticket keeps its A3 grant: authenticated, and (as in A3) service_role
-select is((select count(*) from want), 30::bigint, 'thirty functions in the sweep');
+select is((select count(*) from want), 32::bigint, 'thirty-two functions in the sweep');
 select ok(to_regprocedure(sig) is not null, sig || ' exists') from want order by sig;
 select ok(coalesce(has_function_privilege('anon', to_regprocedure(sig), 'execute'), false) = a, 'anon: ' || sig)
   from want order by sig;

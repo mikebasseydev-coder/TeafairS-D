@@ -2,6 +2,7 @@
 
 **Status:** approved 2026-10-23; plan `docs/superpowers/plans/2026-10-23-addendum-a5-refund-fulfillment.md`.
 **Authority:** this addendum amends Spec A. Spec A §9 applies in full, and so do A2 (buyer contact privacy) and A3 (support tickets).
+**Builder rulings:** R1–R22 in the A5 rulings register of `supabase/CLAUDE.md` refine this text; where they differ, the register holds.
 **Builds on:** D1, A3 and A4. All of them are merged into local `main`, and A5's branch `docs/addendum-a5-refund-fulfillment` is cut from there.
 **Scope:** backend only, meaning migrations, RPCs, Edge Functions and tests. The policy page and the checkout checkbox UI wait for Spec B, because frontend work is on hold.
 
@@ -167,10 +168,11 @@ Composite FKs link it to the ticket and the message. RLS has SELECT only, `ticke
 ### 4.3 Flows
 
 - **Buyer:**
-  - `support-ticket-attachment` (public, POST) takes `{public_reference, secret, file_name, mime_type, size_bytes}`.
+  - `support-ticket-attachment` (public, POST) takes `{public_reference, secret, mime_type, size_bytes}` (no `file_name`, R4).
   - The RPC `request_ticket_attachment(p_idempotency_key, p_public_reference, p_secret, p_mime_type, p_size_bytes)` checks the secret and the limits, refuses CLOSED tickets, and rate-limits to 10 pending attachments per ticket per hour.
   - It returns `{attachment_id, storage_path}`, and the gateway adds `upload_url`.
-  - `add_ticket_message` and `open_support_ticket` gain `p_attachment_ids uuid[] default '{}'`. Attaching more than 3 IDs, an ID from another ticket, or an object not yet uploaded raises P0001.
+  - `add_ticket_message` gains `p_attachment_ids uuid[] default '{}'`. Attaching more than 3 IDs, an ID from another ticket, or an object not yet uploaded raises P0001.
+  - `open_support_ticket` keeps its A3 signature and takes no attachment ids (R13): the buyer opens the ticket, requests an attachment, uploads, then posts a message with it.
   - The RPC checks that the object exists in `storage.objects` and that its stored size and MIME type match the request.
 - **Staff:**
   - `support-staff-attachment` (user gateway, JWT) calls `request_staff_ticket_attachment(p_idempotency_key, p_ticket_id, p_mime_type, p_size_bytes)` with the caller's JWT. It passes the same `support_lock_ticket` permission check as replying.
@@ -226,11 +228,11 @@ RLS is SELECT only, granted to the ZSM, the order's TM and the fulfilment wareho
   - It is limited to 3 resends per order per day, through the `order-delivery-pin` gateway.
 - **`mark_order_delivered(p_idempotency_key, p_order_id, p_pin text, p_photo_attachment_id uuid default null) returns jsonb`**
   - It requires an IN_TRANSIT order and the delivery rule.
-  - A wrong PIN increments `pin_failed_attempts`. At 5 failures, `pin_locked_until` is set to now plus 30 minutes and the call raises P0001 `Too many wrong codes. Ask the buyer to request a new code or try again later.`
-  - While locked, every attempt is refused.
+  - A wrong PIN increments `pin_failed_attempts` and is returned as data (`error: 'WRONG_PIN'`), not raised, so the counter commits (R5). At 5 failures, `pin_locked_until` is set to now plus 30 minutes and the reply is `error: 'LOCKED'`.
+  - While locked, every attempt is refused with `error: 'LOCKED'`; the gateway's copy is `Too many wrong codes. Ask the buyer to request a new code or try again later.`
   - A correct PIN sets DELIVERED, `delivered_at` and the deadline. The photo, if given, must be a claimed attachment in the `delivery-proofs` bucket.
   - The audit records `{order_id, status, pin_verified: true, has_photo}`.
-  - Staff call it directly, because it has no outside IO.
+  - Staff call it through the `order-delivery-confirm` user gateway, which maps `WRONG_PIN` and `LOCKED` to 422 (R5).
 - **Delivery photos** go in a second private bucket, `delivery-proofs`, using the same signed-upload pattern. The upload is authorised by `request_delivery_photo(p_idempotency_key, p_order_id, p_mime_type, p_size_bytes)` through the `order-delivery-photo` gateway, and only for callers allowed to deliver the order. Storage SELECT is allowed for the ZSM and the order's TM. The shared table `upload_slots` (§5.4) holds these slots.
 - **Damage window.** Delivery does not change ticket rules; buyers can always open a ticket. An ORDER ticket opened with category `DELIVERY` or `PRODUCT` records `within_damage_window boolean`, which is true when `now() <= damage_claim_deadline`. ZSMs see the flag.
 - **Refund interaction.** D1 `apply_paystack_refund` already accepts PAID, IN_TRANSIT and DELIVERED orders, so nothing changes. A refunded order cannot be dispatched or delivered: the status checks enforce this.
@@ -254,7 +256,7 @@ Each call is audited as `DISPUTE_EVIDENCE_VIEWED` with `{order_id}`, because the
 
 ## 7. WhatsApp-first messaging
 
-- **A shared router, not a public endpoint** *(builder's call: a public `send-otp` would let anyone send messages to any number).* `_shared/core/messaging.ts` exports `MessageSender = (to, message: OutboundMessage) => Promise<DeliveryResult>`. Every gateway that sends a buyer or shop-owner message uses it: `otp-issue`, `order-dispatch` and `order-delivery-pin`. `SmsSender` stays as the fallback transport.
+- **A shared router, not a public endpoint** *(builder's call: a public `send-otp` would let anyone send messages to any number).* `_shared/messaging/router.ts` (R2) exports `MessageSender = (to, message: OutboundMessage) => Promise<DeliveryResult>`. Every gateway that sends a buyer or shop-owner message uses it: `otp-issue`, `order-dispatch` and `order-delivery-pin`. `SmsSender` stays as the fallback transport.
 - **Routing.**
   - The router first tries the Meta WhatsApp Cloud API with an approved template, `POST https://graph.facebook.com/v{N}/{phone_number_id}/messages`, under a 15-second `AbortSignal.timeout`.
   - On a timeout, a network error, a non-2xx response, or a missing configuration, it sends through KudiSMS.

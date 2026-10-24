@@ -29,7 +29,7 @@ const message = (code: string) =>
   `Your Teafair code is ${code}. Give it to the agent only once you have your goods. It expires in 5 minutes.`;
 
 export function createOtpIssueHandler(deps: OtpIssueDeps): (req: Request) => Promise<Response> {
-  return userGateway(schema, async ({ body, rpc }) => {
+  return userGateway(schema, async ({ caller, body, rpc }) => {
     const code = deps.generateCode();
     const issued = await rpc<Issued>("issue_otp", {
       p_idempotency_key: body.idempotency_key,
@@ -46,6 +46,8 @@ export function createOtpIssueHandler(deps: OtpIssueDeps): (req: Request) => Pro
           template: otpTemplate(code),
           smsText: message(code),
           relatedId: issued.challenge_id,
+          // R18: issue_otp checked the caller's live membership of this tenant
+          tenantId: caller.activeTenantId ?? undefined,
         }));
       } catch {
         // no error object is logged: it could echo the destination or the code

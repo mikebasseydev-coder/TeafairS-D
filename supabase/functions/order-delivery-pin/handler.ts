@@ -19,7 +19,7 @@ export type OrderDeliveryPinDeps = UserGatewayDeps & {
 type ResendReply = { order_id: string; public_reference: string; buyer_phone?: string };
 
 export function createOrderDeliveryPinHandler(deps: OrderDeliveryPinDeps): (req: Request) => Promise<Response> {
-  return userGateway(schema, async ({ body, rpc }) => {
+  return userGateway(schema, async ({ caller, body, rpc }) => {
     const pin = deps.generatePin();
     const r = await rpc<ResendReply>("resend_delivery_pin", {
       p_idempotency_key: body.idempotency_key,
@@ -37,6 +37,9 @@ export function createOrderDeliveryPinHandler(deps: OrderDeliveryPinDeps): (req:
       phone: r.buyer_phone,
       pin,
       gatewayProof: deps.gatewaySecret,
+      // R18: the RPC succeeded, so assert_tenant_role and the order lock proved
+      // the active tenant is the order's; notification_logs gets it for ZSM RLS.
+      tenantId: caller.activeTenantId,
     });
     return { order_id: r.order_id, status: "IN_TRANSIT", ...sent };
   }, deps);

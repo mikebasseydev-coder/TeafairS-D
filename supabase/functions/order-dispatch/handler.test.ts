@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { createOrderDispatchHandler } from "./handler.ts";
-import { KEY, ORDER, PHONE, PIN, post, REF, SECRET, sendSetup } from "../_shared/fulfilment/_fixtures.ts";
+import { KEY, ORDER, PHONE, PIN, post, REF, SECRET, sendSetup, TENANT } from "../_shared/fulfilment/_fixtures.ts";
 
 const first = { order_id: ORDER, status: "IN_TRANSIT", public_reference: REF, buyer_phone: PHONE };
 const replay = { order_id: ORDER, status: "IN_TRANSIT", public_reference: REF };
@@ -23,6 +23,7 @@ Deno.test("dispatch sends the PIN through the router and never returns it or the
   assertEquals(sends[0][0], PHONE);
   assertEquals(sends[0][1].purpose, "DELIVERY_CODE");
   assertEquals(sends[0][1].relatedId, ORDER);
+  assertEquals(sends[0][1].tenantId, TENANT); // R18: the log row is visible to the tenant's ZSMs
   assertEquals(sends[0][1].template.params, [REF, PIN]);
   assertEquals(sends[0][1].smsText, `Your Teafair order ${REF} is on its way. Give this delivery code to the rider: ${PIN}.`);
   assertEquals(calls[1][0], "mark_delivery_pin_sent");

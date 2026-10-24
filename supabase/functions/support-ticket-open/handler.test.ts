@@ -14,6 +14,7 @@ const OPENED = { ticket_id: "t1", public_reference: "TK-7K3Q9X", status: "OPEN" 
 function setup(opts: { human?: boolean; rpcError?: Error; secretError?: Error } = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
   const turnstileCalls: string[] = [];
+  const turnstileIps: Array<string | null> = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
     return opts.rpcError ? Promise.reject(opts.rpcError) : Promise.resolve(OPENED as T);
@@ -21,13 +22,14 @@ function setup(opts: { human?: boolean; rpcError?: Error; secretError?: Error } 
   const handler = createSupportTicketOpenHandler({
     rpc,
     allowedOrigins: [ORIGIN],
-    verifyTurnstile: (token: string) => {
+    verifyTurnstile: (token: string, ip: string | null) => {
       turnstileCalls.push(token);
+      turnstileIps.push(ip);
       return Promise.resolve(opts.human ?? true);
     },
     secretFor: (k: string) => opts.secretError ? Promise.reject(opts.secretError) : ticketSecretFor(SERVER_KEY, k),
   });
-  return { handler, rpcCalls, turnstileCalls };
+  return { handler, rpcCalls, turnstileCalls, turnstileIps };
 }
 
 const body = (over: Record<string, unknown> = {}) => ({
@@ -40,10 +42,10 @@ const body = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const post = (handler: (r: Request) => Promise<Response>, b: unknown) =>
+const post = (handler: (r: Request) => Promise<Response>, b: unknown, ip = "1.2.3.4") =>
   handler(new Request("http://x/support-ticket-open", {
     method: "POST",
-    headers: { Origin: ORIGIN, "cf-connecting-ip": "1.2.3.4" },
+    headers: { Origin: ORIGIN, "cf-connecting-ip": ip },
     body: JSON.stringify(b),
   }));
 
@@ -151,4 +153,14 @@ Deno.test("an unusable phone is 400 before any RPC", async () => {
   const res = await post(handler, body({ customer: { name: "Ada", phone: "12345" } }));
   assertEquals([res.status, rpcCalls.length], [400, 0]);
   await res.body?.cancel();
+});
+
+Deno.test("uses the shared client-IP helper: a non-IP header reaches Turnstile as null (R19)", async () => {
+  const { handler, turnstileIps } = setup();
+  for (const ip of ["unknown", "2001:db8::42", "1.2.3.4"]) {
+    const res = await post(handler, body(), ip);
+    assertEquals(res.status, 200);
+    await res.body?.cancel();
+  }
+  assertEquals(turnstileIps, [null, "2001:db8::42", "1.2.3.4"]);
 });

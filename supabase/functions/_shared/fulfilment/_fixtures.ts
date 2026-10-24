@@ -8,6 +8,7 @@ export const PHONE = "+2348012345678";
 export const PIN = "4821";
 export const SECRET = "gw-secret-value";
 export const REF = "TF-1234";
+export const TENANT = "e0000000-0000-0000-0000-000000000001";
 
 export function sendSetup(opts: { reply: Record<string, unknown>; fail?: boolean }) {
   const calls: Array<[string, Record<string, unknown>]> = [];
@@ -22,7 +23,7 @@ export function sendSetup(opts: { reply: Record<string, unknown>; fail?: boolean
     return Promise.resolve({ channel: "WHATSAPP", sent: true });
   };
   const base = {
-    verifyToken: () => Promise.resolve({ sub: "u1", role: "authenticated", app_metadata: {} }),
+    verifyToken: () => Promise.resolve({ sub: "u1", role: "authenticated", app_metadata: { active_tenant_id: TENANT } }),
     rpcFor: () => rpc,
     sendMessage,
     generatePin: () => PIN,

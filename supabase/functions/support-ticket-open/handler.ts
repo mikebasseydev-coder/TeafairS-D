@@ -6,6 +6,7 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { publicGateway, type PublicGatewayDeps } from "../_shared/core/public-gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
+import { clientIp } from "../_shared/commerce/client-ip.ts";
 import { normalizePhone } from "../_shared/commerce/phone.ts";
 import type { VerifyTurnstile } from "../_shared/commerce/turnstile.ts";
 import { mapNotFound } from "../_shared/support/not-found.ts";
@@ -36,10 +37,6 @@ const schema = z.object({
   message: "Give either an order or a delivery area.",
   path: ["order"],
 });
-
-function clientIp(req: Request): string | null {
-  return req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? null;
-}
 
 export function createSupportTicketOpenHandler(deps: SupportTicketOpenDeps): (req: Request) => Promise<Response> {
   return publicGateway({ method: "POST", schema }, async ({ body, rpc, req }) => {

@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(42);
+select plan(56);
 
 -- the TEAFAIR tenant is seeded in every environment (005)
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price)
@@ -11,6 +11,8 @@ select t.id, v.sku, v.name, 'Teafair', v.cat, v.price, v.wholesale
        (values ('TEA-1', 'Black tea', 'Beverages', 500, 400),
                ('GAD-1', 'Charger',   'Gadgets',    900, 700)) as v(sku, name, cat, price, wholesale)
  where t.code = 'TEAFAIR';
+
+create temp table pol0 as select content from public.refund_policies where version_tag = 'v2.0-food';
 
 -- T1
 select is((select count(*) from public.refund_policies where is_active), 1::bigint, 'one active policy');
@@ -41,8 +43,9 @@ select is(public.storefront_catalogue(null) -> 'refund_notes' ->> 'FOOD',
   'Opened food items can''t be refunded. Report transit damage within 24 hours of delivery with photos.',
   'food note');
 select ok(not has_table_privilege('anon', 'public.refund_policies', 'select')
-      and not has_table_privilege('authenticated', 'public.refund_policies', 'select'),
-  'policy table not client-readable');
+      and not has_table_privilege('authenticated', 'public.refund_policies', 'select')
+      and not has_table_privilege('service_role', 'public.refund_policies', 'select'),
+  'policy table not readable by any API role');
 select ok(position('PLACEHOLDER' in (select content from public.refund_policies where version_tag = 'v2.0-food')) > 0,
   'seed marked for legal review');
 
@@ -244,6 +247,49 @@ select ok(not has_function_privilege('authenticated', 'public.start_web_phone_ve
   'verification RPCs are service_role only');
 select ok(to_regprocedure('public.place_web_order(uuid,text,jsonb,jsonb,jsonb,text,numeric,jsonb,uuid)') is null,
   'the consent-free signature is gone');
+
+-- ══ R20: policy versions are immutable ══════════════════════════════════
+reset role;
+select throws_ok($$update public.refund_policies set content = 'edited' where version_tag = 'v2.0-food'$$,
+  'P0001', 'refund policy v2.0-food is immutable: publish a new version (e.g. v2.1-food) instead of editing it',
+  'content cannot be edited');
+select throws_ok($$update public.refund_policies set title = 'edited' where version_tag = 'v2.0-food'$$,
+  'P0001', null, 'title cannot be edited');
+select throws_ok($$update public.refund_policies set categories = '{FOOD,ELECTRONICS}' where version_tag = 'v2.0-food'$$,
+  'P0001', null, 'categories cannot be edited');
+select throws_ok($$update public.refund_policies set version_tag = 'v2.9-food' where version_tag = 'v2.0-food'$$,
+  'P0001', null, 'version_tag cannot be edited');
+select throws_ok($$update public.refund_policies set published_at = now() - interval '1 day' where version_tag = 'v2.1-food'$$,
+  'P0001', null, 'published_at cannot move outside activation');
+select throws_ok($$delete from public.refund_policies where version_tag = 'v2.0-food'$$,
+  'P0001', 'refund policy versions cannot be deleted; publish a new version and activate it instead',
+  'versions cannot be deleted');
+set local client_min_messages = warning;  -- the cascade NOTICEs, before the trigger refuses
+select throws_ok($$truncate public.refund_policies cascade$$, 'P0001', null, 'versions cannot be truncated');
+reset client_min_messages;
+select is((select content from public.refund_policies where version_tag = 'v2.0-food'),
+  (select content from pol0), 'the consented text is unchanged');
+
+-- toggling is allowed, and activation may stamp published_at
+update public.refund_policies set is_active = false where version_tag = 'v2.1-food';
+update public.refund_policies set is_active = true, published_at = timestamptz '2026-11-01 00:00:00+00'
+ where version_tag = 'v2.0-food';
+select is(public.web_active_refund_policy() ->> 'version_tag', 'v2.0-food', 'deactivate and reactivate work');
+select is((select published_at from public.refund_policies where version_tag = 'v2.0-food'),
+  timestamptz '2026-11-01 00:00:00+00', 'activation stamps published_at');
+
+-- ══ retention: web_phone_verifications older than 7 days go ═════════════
+insert into public.web_phone_verifications (phone, code_hash, expires_at, created_at) values
+  ('+2348055500001', 'x', now() - interval '8 days', now() - interval '8 days'),
+  ('+2348055500002', 'x', now() - interval '30 days', now() - interval '30 days'),
+  ('+2348055500003', 'x', now() - interval '6 days', now() - interval '6 days');
+select is(public.cleanup_web_phone_verifications(), 2, 'cleanup deletes the two rows older than 7 days');
+select is((select count(*) from public.web_phone_verifications where phone like '+23480555000%'), 1::bigint,
+  'a 6-day-old row is kept');
+select is((select schedule from cron.job where jobname = 'cleanup-web-phone-verifications'), '50 0 * * *',
+  'the retention job runs nightly at 00:50');
+select is((select command from cron.job where jobname = 'cleanup-web-phone-verifications'),
+  'select public.cleanup_web_phone_verifications()', 'the job calls the cleanup');
 
 select * from finish();
 rollback;

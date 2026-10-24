@@ -75,7 +75,7 @@ $$;
 -- A dead or exhausted verification RAISES. A WRONG CODE RETURNS
 -- {verified:false, error:'That code is not right.', attempts_left} instead
 -- of raising, like verify_otp: a raise would roll back the failed_attempts
--- increment and the 5-attempt limit would never bite. The gateway maps it to 400.
+-- increment and the 5-attempt limit would never bite. The gateway maps it to 422.
 create function public.confirm_web_phone_verification(p_verification_id uuid, p_code text, p_token_hash text)
 returns jsonb
 language plpgsql
@@ -331,3 +331,28 @@ grant execute on function public.start_web_phone_verification(text, text, inet) 
 grant execute on function public.confirm_web_phone_verification(uuid, text, text) to service_role;
 grant execute on function public.place_web_order(uuid, text, jsonb, jsonb, jsonb, text, numeric, jsonb, uuid, boolean, text, inet, text)
   to service_role;
+
+-- ── cleanup_web_phone_verifications (cron) ──────────────────────────────
+-- Retention: a verification is useful for its 10-minute code, its 30-minute
+-- token and the 1-hour throttle windows. After 7 days the row (phone, code
+-- hash, client IP) goes; the order's consent facts stay in order_contacts.
+-- Transient rows: no audit. Internal: no grant. Returns the rows deleted.
+create function public.cleanup_web_phone_verifications()
+returns integer
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_count integer;
+begin
+  delete from public.web_phone_verifications where created_at < now() - interval '7 days';
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+revoke all on function public.cleanup_web_phone_verifications() from public, anon, authenticated, service_role;
+
+-- cron.schedule upserts by name, so re-running this migration is harmless.
+select cron.schedule('cleanup-web-phone-verifications', '50 0 * * *',
+  $$select public.cleanup_web_phone_verifications()$$);

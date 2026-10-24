@@ -27,10 +27,10 @@ function setup(opts: { human?: boolean; sendError?: Error; rpcError?: Error } = 
   return { handler, rpcCalls, sent };
 }
 
-const post = (handler: (r: Request) => Promise<Response>, body: unknown) =>
+const post = (handler: (r: Request) => Promise<Response>, body: unknown, ip = "1.2.3.4") =>
   handler(new Request("http://x/checkout-phone-verify-start", {
     method: "POST",
-    headers: { Origin: ORIGIN, "cf-connecting-ip": "1.2.3.4" },
+    headers: { Origin: ORIGIN, "cf-connecting-ip": ip },
     body: JSON.stringify(body),
   }));
 
@@ -84,4 +84,20 @@ Deno.test("the throttle (P0001) reaches the buyer as 422 with its copy and nothi
   const res = await post(handler, body());
   assertEquals([res.status, sent.length], [422, 0]);
   assertStringIncludes((await res.json()).error.message, "Too many messages");
+});
+
+Deno.test("a non-IP client address header gives p_client_ip null and no 500 (R19)", async () => {
+  const { handler, rpcCalls } = setup();
+  const res = await post(handler, body(), "unknown");
+  assertEquals(res.status, 200);
+  await res.body?.cancel();
+  assertEquals(rpcCalls[0][1].p_client_ip, null);
+});
+
+Deno.test("an IPv6 client address is passed through for the per-IP throttle (R19)", async () => {
+  const { handler, rpcCalls } = setup();
+  const res = await post(handler, body(), "2001:db8::42");
+  assertEquals(res.status, 200);
+  await res.body?.cancel();
+  assertEquals(rpcCalls[0][1].p_client_ip, "2001:db8::42");
 });

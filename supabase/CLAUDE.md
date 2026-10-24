@@ -185,7 +185,11 @@ functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
   (GET, cached 5 min) returns the active policy. **The policy text is a
   placeholder and needs legal review before go-live.** Food copy: "Opened food
   items can't be refunded. Report transit damage within 24 hours of delivery
-  with photos."
+  with photos." **Versions are immutable (R20):** a trigger refuses DELETE,
+  TRUNCATE and any UPDATE except `is_active` (and `published_at` when
+  activating). New wording ships as a new version (`v2.1-food`, and so on),
+  inserted inactive and then activated while the old one is deactivated.
+  Orders keep pointing at the version their buyer accepted.
 - **Verified, consenting checkout.** `web-checkout` now requires
   `accept_refund_policy: true`, `policy_version_tag` and
   `phone_verification_token` (43 chars). The token comes from
@@ -193,11 +197,20 @@ functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
   3 per phone and 10 per IP per hour) and `checkout-phone-verify-confirm` (a
   wrong code is 422, not a raise, so the attempt counter commits). Consent IP
   and verification facts live in `order_contacts`. The cut-off constant for
-  ONLINE orders is 2026-10-23.
+  ONLINE orders is 2026-10-23. `web_phone_verifications` rows go after 7
+  days (`cleanup_web_phone_verifications`, cron
+  `cleanup-web-phone-verifications`, 00:50 UTC; no grant).
+- **Client IP (R19).** `_shared/commerce/client-ip.ts` is the only reader:
+  `cf-connecting-ip`, else the first `x-forwarded-for` hop, and only if it
+  parses as an IPv4 or IPv6 literal; anything else is null. Every public
+  gateway uses it (checkout, phone verification, ticket open).
 - **Message router.** `_shared/messaging/router.ts` tries the Meta WhatsApp
   Cloud API first and falls back to SMS (not for PHONE_VERIFY). Each attempt is
   logged in `notification_logs` (last four digits only). `otp-issue` now uses
-  it.
+  it. The entry carries the caller's active tenant (R18) for DELIVERY_CODE,
+  DELIVERY_CODE_RESEND and OTP, so the tenant's ZSMs read it under RLS;
+  PHONE_VERIFY is platform-level and logs a null tenant (readable by no API
+  role).
 - **Support photos.** Private buckets `support-attachments` and
   `delivery-proofs` (JPEG/PNG/WebP, 5 MiB, 3 per message). A photo needs an
   `upload_slots` row first: `support-ticket-attachment` (buyer),
@@ -207,7 +220,12 @@ functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
   opened with photos. `support-ticket-read` signs download URLs for 600 s.
   **Signed upload URLs live 2 hours** (Storage fixes this; each allows one
   upload because there is no upsert; the DB slot checks size and mime at claim
-  and cleanup runs at 24 h). Storage has SELECT policies only. Deleting is
+  and cleanup runs at 24 h). Storage has SELECT policies only. **Staff hold
+  long-lived read access:** because staff read through the Storage SELECT
+  policies, a staff member can mint a signed download URL of any lifetime with
+  their own JWT, and it works until the object is purged (slot redaction or
+  cleanup). The spec §9 fallback, gateway-signed staff URLs with no staff
+  SELECT policy, would remove this. Deleting is
   asynchronous: slot deletion enqueues paths in `storage_purge_queue`, and the
   cron-invoked `storage-purge` function (every 15 min, `x-cron-secret`) drains
   it through the Storage API.
@@ -241,9 +259,28 @@ functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
 3. Pre-push check on the remote; it must return 0 before pushing
    `20261023120100`: `select count(*) from orders where channel = 'ONLINE' and created_at >= '2026-10-23' and policy_version_tag is null;`
    If not, move the cut-off constant to the push date in a new migration.
-4. Create `gateway_secret` in Vault and set `GATEWAY_SECRET` and the
+4. **Pre-push catalogue check (R21).** `sale_category` defaults to `FOOD`, so
+   every existing product becomes sellable under `v2.0-food` on push. List the
+   active catalogue per tenant first:
+   `select t.code, p.sku_code, p.product_name, p.category from central_products p join tenants t on t.id = p.tenant_id where p.is_active order by t.code, p.category, p.sku_code;`
+   Every SKU that is not food or tea gets reclassified to `ELECTRONICS` or
+   `TELECOM`, or deactivated, in the same release window. **Post-push:** rerun
+   it with `p.sale_category` added and confirm that only food is `FOOD`. Every
+   later catalogue load must set `sale_category` explicitly; never rely on the
+   default.
+5. **Pre-deploy staging check on the client IP (R19).** On staging, call a
+   public gateway with forged `cf-connecting-ip` and `x-forwarded-for` headers
+   and log which value reaches `clientIp`. Establish which header hosted
+   Supabase sets and overwrites, and change `_shared/commerce/client-ip.ts` to
+   trust only that header (or that hop of `x-forwarded-for`). Until then the
+   per-IP throttle and the consent IP are spoofable; Turnstile and the
+   per-phone throttle are the backstop.
+6. Create `gateway_secret` in Vault and set `GATEWAY_SECRET` and the
    `WHATSAPP_*` secrets as function secrets; then deploy the functions.
-5. Legal review of the placeholder policy text.
+7. Legal review of the placeholder policy text. Versions are immutable (R20),
+   so counsel's text ships as a **new version**, e.g. `v2.1-food`, in a new
+   migration that inserts it inactive, deactivates `v2.0-food` and activates
+   the new one in the same transaction.
 
 **For Spec B (client).** Checkout must send the consent fields and run the
 verification flow first (start, then confirm, then checkout with the token;
@@ -272,6 +309,17 @@ the 422 for a wrong or locked code.
 - R15: the 2-hour signed upload URL lifetime is accepted (Storage-fixed).
 - R16: gateway-only proof through Vault `gateway_secret` for dispatch, resend and mark-sent.
 - R17: `add_ticket_message` stays service_role-only; `reply_ticket` and `redact_ticket_customer_data` keep their A3 grants. Flagged for final review.
+- R18: `notification_logs` gets the tenant from `caller.activeTenantId` for DELIVERY_CODE/_RESEND/OTP, after the RPC succeeded (which proved it is the order's tenant); PHONE_VERIFY stays null; the integration test reads the log as the ZSM through PostgREST.
+- R19: the client IP must parse as an IPv4/IPv6 literal, else null; one shared helper everywhere; the trusted header is a pre-deploy staging check (deploy note 5); Turnstile and the per-phone throttle are the backstop.
+- R20: `refund_policies` rows are immutable except `is_active` (and `published_at` when activating); a trigger refuses other updates and deletes; counsel's text ships as a new version.
+- R21: `sale_category` keeps its `FOOD` default; the deploy notes carry a pre-push and post-push catalogue classification check (deploy note 4).
+- R22: user gateways use the service role only for Storage signing and removal and for the `log_message_delivery` write (spec §7, plan Decision 4); see the exception note under "Writing an Edge Function".
+
+**Follow-up outside A5 (Spec A scope).** Spec A's `issue_otp` takes the code
+as `p_code` and is granted to `authenticated`, so a DSA or fintech agent can
+call it over PostgREST with a code of their own choosing and skip `otp-issue`.
+This is the same class of problem R16 fixed for the delivery PIN (a gateway
+proof through Vault would close it). Not changed in A5.
 
 ## Layout
 
@@ -362,7 +410,11 @@ one responsibility per file. Third-party versions appear only in
 - **User gateways** use `userGateway(schema, handle, liveUserGatewayDeps())`.
   The pipeline: POST only → JWT (`auth.getClaims`) → tenant keys stripped →
   Zod → handler → §3.5 error mapping. The handler's `rpc` forwards the
-  caller's JWT. Never import `serviceRpc` into a user gateway.
+  caller's JWT. Never import `serviceRpc` into a user gateway. **The one
+  exception (A5, R22):** user gateways use the service role only to sign and
+  remove Storage objects (`_shared/storage/`) and for the message router's
+  `log_message_delivery` write. Every RPC that does the user's work still runs
+  on the caller's JWT.
 - **PIN-gated operations** call `requirePin(rpc, body.pin)` (from
   `_shared/auth/pin.ts`) before their RPC.
 - **System functions** use `serviceRpc()` and authenticate the caller
@@ -390,15 +442,16 @@ one responsibility per file. Third-party versions appear only in
 supabase functions serve --env-file supabase/functions/.env     # serve locally
 deno test --allow-env supabase/functions/                       # unit tests
 supabase status -o env > supabase/.env.test.local               # then:
-deno test --allow-net --allow-env --allow-run=psql --env-file=supabase/.env.test.local \
+deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
   --env-file=supabase/functions/.env supabase/functions/_tests/gateway.integration.ts
 ```
 
 Before the integration run: `supabase db reset` wipes Vault, so run
 `select vault.create_secret('<GATEWAY_SECRET>', 'gateway_secret');` (A5, R16),
 and put `GATEWAY_SECRET` and the `WHATSAPP_*` test values in
-`supabase/functions/.env` (gitignored; see `.env.example`). `psql` must be on
-the PATH (the SMS-fallback test reads `notification_logs`, which no API role can).
+`supabase/functions/.env` (gitignored; see `.env.example`). The SMS-fallback
+test reads `notification_logs` as the TEAFAIR ZSM through PostgREST, so RLS is
+exercised (R18).
 
 **Secrets:** copy `supabase/.env.example` and
 `supabase/functions/.env.example`; `AUTH_HOOK_SECRET` must match in both. Set
@@ -441,7 +494,9 @@ function secret `CRON_SECRET`. Without them each job logs
 `supabase db reset` wipes Vault, so recreate them after a reset if you want
 the jobs to run locally.
 
-A5 adds the `storage-purge` job (every 15 min, same two secrets) and the Vault
+A5 adds the `storage-purge` job (every 15 min, same two secrets), the
+pure-SQL jobs `cleanup-upload-slots` (00:45) and
+`cleanup-web-phone-verifications` (00:50), and the Vault
 secret `gateway_secret` (see Addendum A5); create `gateway_secret` the same way,
 once per environment and after every `db reset`.
 
