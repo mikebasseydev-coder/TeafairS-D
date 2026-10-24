@@ -213,10 +213,10 @@ select throws_ok(
 
 -- ── brand tiers (§5.4) ──────────────────────────────────────────────────
 reset role;
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price) values
-  ('10000000-0000-0000-0000-000000000001', 'MILO-400', 'Milo 400g',        'MILO',         'Beverages', 2500, 2200),
-  ('10000000-0000-0000-0000-000000000001', 'MAGGI-1',  'Maggi cube',       'Maggi',        'Seasoning',   50,   40),
-  ('10000000-0000-0000-0000-000000000001', 'GP-SEMO',  'Golden Penny Semo','Golden Penny', 'Staples',   1200, 1100);
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number) values
+  ('10000000-0000-0000-0000-000000000001', 'MILO-400', 'Milo 400g',        'MILO',         'Beverages', 2500, 2200, 'A1-0001'),
+  ('10000000-0000-0000-0000-000000000001', 'MAGGI-1',  'Maggi cube',       'Maggi',        'Seasoning',   50,   40, 'A1-0004'),
+  ('10000000-0000-0000-0000-000000000001', 'GP-SEMO',  'Golden Penny Semo','Golden Penny', 'Staples',   1200, 1100, 'A1-0005');
 
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select lives_ok(

@@ -33,9 +33,9 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000001', 'DSA', null, '40000000-0000-0000-0000-000000000002',
    '50000000-0000-0000-0000-000000000002', 'ACTIVE');
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price) values
-  ('7eaf0000-0000-4000-8000-000000000001', 'TF-TEA-50', 'Teafair Black Tea 50s', 'Teafair', 'Beverages', 900, 800),
-  ('10000000-0000-0000-0000-000000000001', 'MILO-400',  'Milo 400g',              'Milo',    'Beverages', 2500, 2200);
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number) values
+  ('7eaf0000-0000-4000-8000-000000000001', 'TF-TEA-50', 'Teafair Black Tea 50s', 'Teafair', 'Beverages', 900, 800, 'A1-0006'),
+  ('10000000-0000-0000-0000-000000000001', 'MILO-400',  'Milo 400g',              'Milo',    'Beverages', 2500, 2200, 'A1-0001');
 
 insert into public.audit_logs (tenant_id, operation, entity_type, entity_id, source) values
   ('10000000-0000-0000-0000-000000000001', 'TEST', 'tenants', 'nestle', 'SYSTEM');

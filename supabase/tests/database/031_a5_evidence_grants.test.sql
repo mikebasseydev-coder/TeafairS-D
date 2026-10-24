@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(176);
+select plan(178);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
 -- TEAFAIR: ZSM (1), Ikeja TM (2), Ikeja DSA (4), DSM (5, manages warehouse W).
@@ -35,8 +35,8 @@ insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005');
 update public.territories set tm_id = '20000000-0000-0000-0000-000000000002'
  where id = '40000000-0000-0000-0000-000000000001';
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price)
-values ('7eaf0000-0000-4000-8000-000000000001', 'TEA-1', 'Black tea', 'Teafair', 'Beverages', 500, 400);
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number)
+values ('7eaf0000-0000-4000-8000-000000000001', 'TEA-1', 'Black tea', 'Teafair', 'Beverages', 500, 400, 'A1-0007');
 
 -- one delivered, paid, part-refunded web order with a ticket and two photos
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
@@ -106,6 +106,8 @@ create temp table ev as select pg_temp.ev() as b;
 grant select on ev to authenticated;
 select is((select b -> 'order' ->> 'public_reference' from ev), 'TF-AAAAAA', 'order header');
 select is((select b -> 'lines' -> 0 ->> 'sale_category' from ev), 'FOOD', 'lines carry sale_category');
+select is((select b -> 'lines' -> 0 ->> 'nafdac_number' from ev), 'A1-0007', 'lines carry the NAFDAC number');
+select is((select (b -> 'lines' -> 0 ->> 'nafdac_regulated')::boolean from ev), true, 'lines flag NAFDAC-regulated categories');
 select is((select b -> 'lines' -> 0 ->> 'line_total' from ev), '1000.00', 'line total');
 select is((select b -> 'payments' -> 0 ->> 'paystack_reference' from ev), 'TFW-EVIDENCE-1', 'payment reference');
 select is((select b -> 'payments' -> 0 ->> 'payment_status' from ev), 'SUCCESS', 'payment status');

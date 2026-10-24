@@ -204,8 +204,8 @@ Deno.test({
       terminal_id: `IT-${run}`, territory_id: ids.territory,
     }));
     await must(admin.from("central_products").insert([
-      { tenant_id: ids.tenant, sku_code: "MILO-400", product_name: "Milo 400g", brand: "Milo", category: "Beverages", unit_price: 2500, wholesale_price: 2000 },
-      { tenant_id: ids.tenant, sku_code: "MAGGI-12", product_name: "Maggi 12 cubes", brand: "Maggi", category: "Seasoning", unit_price: 1200, wholesale_price: 1000 },
+      { tenant_id: ids.tenant, sku_code: "MILO-400", product_name: "Milo 400g", brand: "Milo", category: "Beverages", unit_price: 2500, wholesale_price: 2000, nafdac_number: "A1-0001" },
+      { tenant_id: ids.tenant, sku_code: "MAGGI-12", product_name: "Maggi 12 cubes", brand: "Maggi", category: "Seasoning", unit_price: 1200, wholesale_price: 1000, nafdac_number: "A1-0004" },
     ]));
 
     // D1 routing: the territory ships web orders from its own regional warehouse
@@ -235,7 +235,7 @@ Deno.test({
     ]));
     await must(admin.from("territories").update({ tm_id: users.tfTm.id, web_fulfilment_warehouse_id: ids.tfWarehouse }).eq("id", ids.tfTerritory));
     await must(admin.from("central_products").insert({
-      tenant_id: TEAFAIR, sku_code: TF_SKU, product_name: `IT Tea ${run}`, brand: "Teafair", category: "Beverages", unit_price: 1500, wholesale_price: 1200,
+      tenant_id: TEAFAIR, sku_code: TF_SKU, product_name: `IT Tea ${run}`, brand: "Teafair", category: "Beverages", unit_price: 1500, wholesale_price: 1200, nafdac_number: "A1-0007",
     }));
     await must(admin.from("territory_coverage").upsert(
       { tenant_id: TEAFAIR, state_code: "LA", lga_id: IKEJA, territory_id: ids.tfTerritory },

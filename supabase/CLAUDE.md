@@ -17,6 +17,7 @@ the authority; this file is the working summary.
 | A3. Web chat & ticketing — support tables, buyer gateways, staff RPCs, system tickets | done (local) |
 | A4. Internal staff messaging — chat channels, direct chats, team/zone rooms, announcements | done (local) |
 | A5. Refund policy, WhatsApp-verified checkout, fulfilment and delivery code, support photos, dispute evidence | done (local) |
+| Tenant sale categories (NCC licence) and NAFDAC numbers | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -327,6 +328,45 @@ as `p_code` and is granted to `authenticated`, so a DSA or fintech agent can
 call it over PostgREST with a code of their own choosing and skip `otp-issue`.
 This is the same class of problem R16 fixed for the delivery PIN (a gateway
 proof through Vault would close it). Not changed in A5.
+
+### Tenant sale categories and NAFDAC numbers
+
+One migration (`20261024120000_tenant_categories_nafdac`), local only. It
+deploys with or after A5, which it extends.
+
+- **`tenant_allowed_categories`** `(tenant_id, category, enabled)` decides
+  which categories each tenant may sell. Every tenant starts with `FOOD` and
+  `COSMETICS` (trigger on `tenants`). Rows are written by migration only, with
+  no RPC, like `refund_policies`; members read their own tenant's rows.
+- **TELECOM is Sureach's alone.** Sureach Nigeria Limited holds the NCC
+  licence. It is seeded as tenant `SUREACH` with fixed id
+  `5eac0000-0000-4000-8000-000000000001`, allowed all four categories. A
+  trigger refuses TELECOM for any other tenant: "Only Sureach Nigeria Limited
+  holds the NCC licence to sell TELECOM products." TELECOM still needs a
+  policy version that covers it before it is sellable on the web.
+- **Product guard.** A trigger on `central_products` checks the category on
+  insert, on a category or tenant change, and on activation: P0001 "Tenant is
+  not authorized to sell products in category <C>." A category cannot be
+  withdrawn (disabled or deleted) while the tenant has active products in it;
+  deactivate them first.
+- **NAFDAC numbers.** `central_products.nafdac_number`: upper-case letters and
+  digits in 2 to 6 hyphenated groups, at most 32 characters (`A7-0123`,
+  `LG-IKJ-02-2134`). An active `FOOD` or `COSMETICS` product must have one
+  (CHECK `central_products_nafdac_required`, 23514). The dispute evidence
+  bundle shows `nafdac_number` and `nafdac_regulated` on each line (the
+  product's current values).
+- **Purerigin Coconut Oil** is seeded on TEAFAIR as SKU
+  `PURERIGIN-COCONUT-OIL`, `COSMETICS`, NAFDAC `LG-IKJ-02-2134`, **inactive at
+  price 0**. Set the real unit and wholesale prices, then activate it.
+- **The NAFDAC requirement is `NOT VALID` on push.** Products that already
+  exist are not checked, so the push cannot fail on them, but any update to
+  such a row fails until it has a number. **Pre-push:** confirm that no remote
+  tenant uses the code `SUREACH` (`select id from tenants where code = 'SUREACH';`
+  must return 0 rows). **Post-push**, list the products still missing a number:
+  `select t.code, p.sku_code, p.product_name from central_products p join tenants t on t.id = p.tenant_id where p.is_active and p.sale_category in ('FOOD','COSMETICS') and p.nafdac_number is null;`
+  Load their numbers (or deactivate them; until then they stay on sale). When
+  the list is empty, close the gap in a new migration:
+  `alter table public.central_products validate constraint central_products_nafdac_required;`
 
 ## Layout
 

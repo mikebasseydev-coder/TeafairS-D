@@ -317,9 +317,9 @@ update public.territories set web_fulfilment_warehouse_id = '70000000-0000-0000-
  where id = '40000000-0000-0000-0000-000000000011';
 insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id) values
   ('7eaf0000-0000-4000-8000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000011');
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, is_active) values
-  ('7eaf0000-0000-4000-8000-000000000001', 'TF-TEA-50', 'Teafair Tea 50 bags', 'Teafair', 'Beverages', 1000, 800, true),
-  ('10000000-0000-0000-0000-000000000001', 'T1-SKU', 'T1 product', 'T1', 'Beverages', 1000, 800, true);
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, is_active, nafdac_number) values
+  ('7eaf0000-0000-4000-8000-000000000001', 'TF-TEA-50', 'Teafair Tea 50 bags', 'Teafair', 'Beverages', 1000, 800, true, 'A1-0101'),
+  ('10000000-0000-0000-0000-000000000001', 'T1-SKU', 'T1 product', 'T1', 'Beverages', 1000, 800, true, 'A1-0102');
 
 insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values

@@ -5,8 +5,8 @@ create extension if not exists pgtap with schema extensions;
 select plan(58);
 
 -- the TEAFAIR tenant is seeded in every environment (005)
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price)
-select t.id, v.sku, v.name, 'Teafair', v.cat, v.price, v.wholesale
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number)
+select t.id, v.sku, v.name, 'Teafair', v.cat, v.price, v.wholesale, 'A1-0007'
   from public.tenants t,
        (values ('TEA-1', 'Black tea', 'Beverages', 500, 400),
                ('GAD-1', 'Charger',   'Gadgets',    900, 700),
@@ -31,8 +31,11 @@ select ok(public.web_category_sellable('FOOD') and public.web_category_sellable(
           and not public.web_category_sellable('TELECOM'), 'only FOOD and COSMETICS sellable');
 select throws_ok(
   $$update public.central_products set sale_category = 'TOYS' where sku_code = 'TEA-1'$$,
-  '23514', null, 'category set is fixed');
+  'P0001', 'Tenant is not authorized to sell products in category TOYS.', 'category set is fixed');
 
+-- allowed for the tenant, but not covered by the policy: still hidden
+insert into public.tenant_allowed_categories (tenant_id, category)
+select id, 'ELECTRONICS' from public.tenants where code = 'TEAFAIR';
 update public.central_products set sale_category = 'ELECTRONICS' where sku_code = 'GAD-1';
 update public.central_products set sale_category = 'COSMETICS' where sku_code = 'OIL-1';
 select ok(exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e

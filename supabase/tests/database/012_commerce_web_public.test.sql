@@ -126,12 +126,12 @@ insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, termi
    '20000000-0000-0000-0000-000000000007', 'MP-0007', '40000000-0000-0000-0000-000000000008', true,
    null, null, null, null, null);
 
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, is_active) values
-  ('10000000-0000-0000-0000-000000000001', 'MILO-400',  'Milo 400g',        'Milo',  'Beverages', 2500, 2000, true),
-  ('10000000-0000-0000-0000-000000000001', 'MAGGI-12',  'Maggi 12 cubes',   'Maggi', 'Seasoning', 1200, 1000, true),
-  ('10000000-0000-0000-0000-000000000001', 'SACHET-15', 'Coconut oil 15ml', 'Teafair', 'Oils',     500,  400, true),
-  ('10000000-0000-0000-0000-000000000001', 'OLD-SKU',   'Discontinued',     'Milo',  'Beverages',  500,  400, false),
-  ('10000000-0000-0000-0000-000000000002', 'OMO-1KG',   'Omo 1kg',          'Omo',   'Laundry',   3000, 2500, true);
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, is_active, nafdac_number) values
+  ('10000000-0000-0000-0000-000000000001', 'MILO-400',  'Milo 400g',        'Milo',  'Beverages', 2500, 2000, true, 'A1-0101'),
+  ('10000000-0000-0000-0000-000000000001', 'MAGGI-12',  'Maggi 12 cubes',   'Maggi', 'Seasoning', 1200, 1000, true, 'A1-0102'),
+  ('10000000-0000-0000-0000-000000000001', 'SACHET-15', 'Coconut oil 15ml', 'Teafair', 'Oils',     500,  400, true, 'A1-0103'),
+  ('10000000-0000-0000-0000-000000000001', 'OLD-SKU',   'Discontinued',     'Milo',  'Beverages',  500,  400, false, 'A1-0104'),
+  ('10000000-0000-0000-0000-000000000002', 'OMO-1KG',   'Omo 1kg',          'Omo',   'Laundry',   3000, 2500, true, 'A1-0105');
 
 insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, discount_type, discount_value,
                                 max_redemptions, expires_at, is_active, created_by) values

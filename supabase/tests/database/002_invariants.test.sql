@@ -118,9 +118,9 @@ select throws_ok(
   '23503', null, 'a territory cannot sit in another tenant''s zone');
 
 -- ── catalogue, brand tiers, inventory ───────────────────────────────────
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price) values
-  ('10000000-0000-0000-0000-000000000001', 'MILO-400', 'Milo 400g', 'Milo', 'Beverages', 2500, 2200),
-  ('10000000-0000-0000-0000-000000000002', 'OMO-1KG',  'Omo 1kg',   'Omo',  'Detergent', 1800, 1600);
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number) values
+  ('10000000-0000-0000-0000-000000000001', 'MILO-400', 'Milo 400g', 'Milo', 'Beverages', 2500, 2200, 'A1-0001'),
+  ('10000000-0000-0000-0000-000000000002', 'OMO-1KG',  'Omo 1kg',   'Omo',  'Detergent', 1800, 1600, 'A1-0002');
 insert into public.warehouses (id, tenant_id, name, kind) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Apapa Central', 'CENTRAL'),
   ('60000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'Ikeja Stockist', 'STOCKIST');
@@ -138,8 +138,8 @@ select throws_ok(
     values ('10000000-0000-0000-0000-000000000001', 'MILO', 'ZSM', '20000000-0000-0000-0000-000000000001')$$,
   '23505', null, 'brand policies are unique per tenant regardless of case');
 select throws_ok(
-  $$insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price)
-    values ('10000000-0000-0000-0000-000000000001', 'X-1', 'X', '  ', 'Misc', 1, 1)$$,
+  $$insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number)
+    values ('10000000-0000-0000-0000-000000000001', 'X-1', 'X', '  ', 'Misc', 1, 1, 'A1-0003')$$,
   '23514', null, 'a product needs a non-blank brand');
 select throws_ok(
   $$insert into public.inventory_batches (tenant_id, warehouse_id, sku_code, batch_number, quantity)

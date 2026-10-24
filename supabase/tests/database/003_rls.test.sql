@@ -43,9 +43,9 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
    'TM', null, '40000000-0000-0000-0000-000000000001', null, 'DISABLED', null);
 
-insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price) values
-  ('10000000-0000-0000-0000-000000000001', 'MILO-400', 'Milo 400g', 'Milo', 'Beverages', 2500, 2200),
-  ('10000000-0000-0000-0000-000000000002', 'OMO-1KG',  'Omo 1kg',   'Omo',  'Detergent', 1800, 1600);
+insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number) values
+  ('10000000-0000-0000-0000-000000000001', 'MILO-400', 'Milo 400g', 'Milo', 'Beverages', 2500, 2200, 'A1-0001'),
+  ('10000000-0000-0000-0000-000000000002', 'OMO-1KG',  'Omo 1kg',   'Omo',  'Detergent', 1800, 1600, 'A1-0002');
 
 insert into public.user_secure_profiles (user_id, bvn_nin_hash, bvn_hash_version) values
   ('20000000-0000-0000-0000-000000000003', 'hash-dsa', 1);
