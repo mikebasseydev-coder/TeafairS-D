@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(119);
+select plan(130);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
@@ -88,13 +88,13 @@ create function pg_temp.o(n integer) returns uuid language sql as
   $$ select ('90000000-0000-0000-0000-00000000000' || n)::uuid $$;
 create function pg_temp.dispatch(p_key integer, p_order integer, p_pin text, p_tracking text default null)
 returns jsonb language sql as
-  $$ select public.mark_order_dispatched(pg_temp.k(p_key), pg_temp.o(p_order), p_tracking, p_pin) $$;
+  $$ select public.mark_order_dispatched(pg_temp.k(p_key), pg_temp.o(p_order), p_tracking, p_pin, 'test-gw-secret') $$;
 create function pg_temp.sent(p_key integer, p_order integer, p_channel text default 'WHATSAPP')
 returns jsonb language sql as
-  $$ select public.mark_delivery_pin_sent(pg_temp.k(p_key), pg_temp.o(p_order), p_channel) $$;
+  $$ select public.mark_delivery_pin_sent(pg_temp.k(p_key), pg_temp.o(p_order), p_channel, 'test-gw-secret') $$;
 create function pg_temp.resend(p_key integer, p_order integer, p_pin text)
 returns jsonb language sql as
-  $$ select public.resend_delivery_pin(pg_temp.k(p_key), pg_temp.o(p_order), p_pin) $$;
+  $$ select public.resend_delivery_pin(pg_temp.k(p_key), pg_temp.o(p_order), p_pin, 'test-gw-secret') $$;
 create function pg_temp.deliver(p_key integer, p_order integer, p_pin text, p_photo uuid default null)
 returns jsonb language sql as
   $$ select public.mark_order_delivered(pg_temp.k(p_key), pg_temp.o(p_order), p_pin, p_photo) $$;
@@ -148,20 +148,20 @@ select is((select array_agg(policyname::text) from pg_policies where schemaname 
   array['order_fulfilments_select'], 'one policy');
 select is((select cmd::text from pg_policies where schemaname = 'public' and tablename = 'order_fulfilments'),
   'SELECT', 'and it is SELECT');
-select ok(has_function_privilege('authenticated', 'public.mark_order_dispatched(uuid,uuid,text,text)', 'execute')
-      and has_function_privilege('authenticated', 'public.mark_delivery_pin_sent(uuid,uuid,text)', 'execute')
-      and has_function_privilege('authenticated', 'public.resend_delivery_pin(uuid,uuid,text)', 'execute')
+select ok(has_function_privilege('authenticated', 'public.mark_order_dispatched(uuid,uuid,text,text,text)', 'execute')
+      and has_function_privilege('authenticated', 'public.mark_delivery_pin_sent(uuid,uuid,text,text)', 'execute')
+      and has_function_privilege('authenticated', 'public.resend_delivery_pin(uuid,uuid,text,text)', 'execute')
       and has_function_privilege('authenticated', 'public.mark_order_delivered(uuid,uuid,text,uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.request_delivery_photo(uuid,uuid,text,bigint)', 'execute')
       and has_function_privilege('authenticated', 'public.my_fulfilment_order_ids()', 'execute')
       and has_function_privilege('authenticated', 'public.my_delivery_proof_paths()', 'execute'),
   'staff RPCs and helpers are granted to authenticated');
-select ok(not has_function_privilege('anon', 'public.mark_order_dispatched(uuid,uuid,text,text)', 'execute')
-      and not has_function_privilege('service_role', 'public.mark_order_dispatched(uuid,uuid,text,text)', 'execute')
+select ok(not has_function_privilege('anon', 'public.mark_order_dispatched(uuid,uuid,text,text,text)', 'execute')
+      and not has_function_privilege('service_role', 'public.mark_order_dispatched(uuid,uuid,text,text,text)', 'execute')
       and not has_function_privilege('anon', 'public.mark_order_delivered(uuid,uuid,text,uuid)', 'execute')
       and not has_function_privilege('service_role', 'public.mark_order_delivered(uuid,uuid,text,uuid)', 'execute')
-      and not has_function_privilege('anon', 'public.resend_delivery_pin(uuid,uuid,text)', 'execute')
-      and not has_function_privilege('anon', 'public.mark_delivery_pin_sent(uuid,uuid,text)', 'execute')
+      and not has_function_privilege('anon', 'public.resend_delivery_pin(uuid,uuid,text,text)', 'execute')
+      and not has_function_privilege('anon', 'public.mark_delivery_pin_sent(uuid,uuid,text,text)', 'execute')
       and not has_function_privilege('anon', 'public.request_delivery_photo(uuid,uuid,text,bigint)', 'execute'),
   'not for anon or service_role');
 select ok(not has_function_privilege('authenticated', 'public.fulfilment_can_dispatch(public.tenant_users,public.orders)', 'execute')
@@ -188,6 +188,33 @@ select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,
       and not has_function_privilege('anon', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute'),
   'open_support_ticket keeps its A3 signature and grants');
 select has_column('public', 'support_tickets', 'within_damage_window', 'tickets carry within_damage_window');
+
+-- ── the gateway proof (ruling R16) ──────────────────────────────────────
+select ok(not has_function_privilege('anon', 'public.assert_gateway_proof(text)', 'execute')
+      and not has_function_privilege('authenticated', 'public.assert_gateway_proof(text)', 'execute')
+      and not has_function_privilege('service_role', 'public.assert_gateway_proof(text)', 'execute'),
+  'assert_gateway_proof is internal');
+select ok((select prosecdef and proconfig @> array['search_path=public, pg_temp'] from pg_proc
+            where oid = 'public.assert_gateway_proof(text)'::regprocedure), 'and SECURITY DEFINER with a pinned search_path');
+delete from vault.secrets where name = 'gateway_secret';
+call pg_temp.as_user(5);
+select throws_ok($$select pg_temp.dispatch(100, 1, '1234')$$, '42501', null, 'dispatch fails closed with no vault secret');
+select throws_ok($$select pg_temp.resend(101, 1, '1234')$$, '42501', null, 'resend fails closed with no vault secret');
+select throws_ok($$select pg_temp.sent(102, 1, 'SMS')$$, '42501', null, 'mark-sent fails closed with no vault secret');
+reset role;
+do $$ begin perform vault.create_secret('', 'gateway_secret'); end $$;
+call pg_temp.as_user(5);
+select throws_ok($$select public.mark_order_dispatched(pg_temp.k(103), pg_temp.o(1), null, '1234', '')$$, '42501', null,
+  'an empty secret matches nothing');
+reset role;
+delete from vault.secrets where name = 'gateway_secret';
+do $$ begin perform vault.create_secret('test-gw-secret', 'gateway_secret'); end $$;
+call pg_temp.as_user(5);
+select throws_ok($$select public.mark_order_dispatched(pg_temp.k(104), pg_temp.o(1), null, '1234', 'wrong-secret')$$,
+  '42501', null, 'dispatch with a wrong proof');
+select throws_ok($$select public.mark_order_dispatched(pg_temp.k(105), pg_temp.o(1), null, '1234', null)$$,
+  '42501', null, 'dispatch with no proof');
+reset role;
 
 -- ── dispatch ────────────────────────────────────────────────────────────
 call pg_temp.as_user(4);
@@ -230,6 +257,10 @@ select is((select after from public.audit_logs where operation = 'mark_order_dis
 select ok((select response from public.idempotency_logs where key = pg_temp.k(10)) ? 'buyer_phone' = false,
   'the stored reply holds no phone');
 call pg_temp.as_user(5);
+select throws_ok($$select public.resend_delivery_pin(pg_temp.k(106), pg_temp.o(1), '1111', 'wrong-secret')$$,
+  '42501', null, 'resend with a wrong proof');
+select throws_ok($$select public.mark_delivery_pin_sent(pg_temp.k(107), pg_temp.o(1), 'SMS', 'test-gw-secreT')$$,
+  '42501', null, 'mark-sent with a wrong proof');
 select is(pg_temp.sent(12, 1, 'WHATSAPP') ->> 'order_id', pg_temp.o(1)::text, 'the gateway marks the code sent');
 select throws_ok($$select pg_temp.sent(13, 1, 'EMAIL')$$, 'P0001', null, 'channel must be WHATSAPP or SMS');
 reset role;
@@ -486,6 +517,10 @@ select ok(not exists(select 1 from public.audit_logs
 select ok(not exists(select 1 from public.audit_logs
                       where coalesce(before::text, '') || coalesce(after::text, '') ~ '\+23480111111|orders/'),
   'no buyer phone or storage path in audit');
+select ok(not exists(select 1 from public.audit_logs
+                      where coalesce(before::text, '') || coalesce(after::text, '') like '%test-gw-secret%')
+      and not exists(select 1 from public.idempotency_logs where response::text like '%test-gw-secret%'),
+  'the gateway proof never appears in audit rows or stored replies');
 select ok(not exists(select 1 from public.idempotency_logs
                       where operation in ('mark_order_dispatched', 'resend_delivery_pin')
                         and response::text like '%+23480111111%'),

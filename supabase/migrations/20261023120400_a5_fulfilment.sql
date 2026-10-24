@@ -18,6 +18,10 @@
 --   attempt is returned as data ({error: WRONG_PIN | LOCKED}) and completes
 --   idempotency, so the counters commit; raising would roll them back.
 --
+-- Gateway proof (ruling R16): dispatch, resend and mark-sent set or send the
+-- PIN, so they also require the gateway's secret (assert_gateway_proof).
+-- Delivery and the photo slot stay directly callable: they need the PIN.
+--
 -- No PIN, PIN hash, phone or storage path reaches an audit row or a stored
 -- idempotency reply. buyer_phone is returned to the gateway on the first call
 -- only; a replay omits it, which is how the gateway knows to send nothing.
@@ -221,12 +225,43 @@ set search_path = public, pg_temp
 as $$ select (now() at time zone 'Africa/Lagos')::date $$;
 revoke all on function public.fulfilment_today() from public, anon, authenticated, service_role;
 
+-- ── assert_gateway_proof (internal, ruling R16) ─────────────────────────
+-- The PIN-setting and PIN-sending RPCs must come through their gateway, which
+-- generates the PIN and sends it to the buyer: a staff member calling
+-- PostgREST directly must not choose a PIN or read the buyer's phone. The
+-- gateway passes GATEWAY_SECRET, which equals the Vault secret
+-- 'gateway_secret' (created out of band per environment; never in a
+-- migration). Fails closed: a missing, empty or different secret is 42501.
+-- sha256 of both sides gives a fixed-length comparison.
+create or replace function public.assert_gateway_proof(p_proof text)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_secret text;
+begin
+  select decrypted_secret into v_secret
+    from vault.decrypted_secrets where name = 'gateway_secret'
+   order by created_at desc
+   limit 1;
+  if v_secret is null or v_secret = ''
+     or extensions.digest(coalesce(p_proof, ''), 'sha256') <> extensions.digest(v_secret, 'sha256') then
+    raise exception 'this operation must come through its gateway' using errcode = '42501';
+  end if;
+end;
+$$;
+revoke all on function public.assert_gateway_proof(text) from public, anon, authenticated, service_role;
+
 -- ── mark_order_dispatched (§5.3) ────────────────────────────────────────
 create or replace function public.mark_order_dispatched(
   p_idempotency_key    uuid,
   p_order_id           uuid,
   p_tracking_reference text,
-  p_pin                text
+  p_pin                text,
+  p_gateway_proof      text
 )
 returns jsonb
 language plpgsql
@@ -240,7 +275,8 @@ declare
   v_track text := nullif(btrim(coalesce(p_tracking_reference, '')), '');
   v_reply jsonb;
 begin
-  -- the PIN is never part of the stored request
+  perform public.assert_gateway_proof(p_gateway_proof);
+  -- neither the PIN nor the proof is part of the stored request
   v_prior := public.idempotency_begin(p_idempotency_key, 'mark_order_dispatched',
     jsonb_build_object('order_id', p_order_id, 'tracking_reference', v_track));
   if v_prior is not null then
@@ -280,13 +316,14 @@ begin
     (select c.customer_phone from public.order_contacts c where c.tenant_id = v_order.tenant_id and c.order_id = v_order.id));
 end;
 $$;
-revoke all on function public.mark_order_dispatched(uuid, uuid, text, text) from public, anon, authenticated, service_role;
-grant execute on function public.mark_order_dispatched(uuid, uuid, text, text) to authenticated;
+revoke all on function public.mark_order_dispatched(uuid, uuid, text, text, text) from public, anon, authenticated, service_role;
+grant execute on function public.mark_order_dispatched(uuid, uuid, text, text, text) to authenticated;
 
 -- ── mark_delivery_pin_sent (§5.2) ───────────────────────────────────────
 -- Called by the gateway after a successful send. A send that follows a
 -- resend counts toward the day's limit; the first send after dispatch does not.
-create or replace function public.mark_delivery_pin_sent(p_idempotency_key uuid, p_order_id uuid, p_channel text)
+create or replace function public.mark_delivery_pin_sent(p_idempotency_key uuid, p_order_id uuid, p_channel text,
+                                                         p_gateway_proof text)
 returns jsonb
 language plpgsql
 security definer
@@ -300,6 +337,7 @@ declare
   v_today  date := public.fulfilment_today();
   v_resend boolean;
 begin
+  perform public.assert_gateway_proof(p_gateway_proof);
   v_prior := public.idempotency_begin(p_idempotency_key, 'mark_delivery_pin_sent',
     jsonb_build_object('order_id', p_order_id, 'channel', p_channel));
   if v_prior is not null then
@@ -338,13 +376,14 @@ begin
     'order_id', v_order.id, 'channel', p_channel, 'resend', v_resend, 'resends_today', v_f.pin_resends_today));
 end;
 $$;
-revoke all on function public.mark_delivery_pin_sent(uuid, uuid, text) from public, anon, authenticated, service_role;
-grant execute on function public.mark_delivery_pin_sent(uuid, uuid, text) to authenticated;
+revoke all on function public.mark_delivery_pin_sent(uuid, uuid, text, text) from public, anon, authenticated, service_role;
+grant execute on function public.mark_delivery_pin_sent(uuid, uuid, text, text) to authenticated;
 
 -- ── resend_delivery_pin (§5.3) ──────────────────────────────────────────
 -- Anyone who may dispatch or deliver; 3 sent resends a day, a ZSM unlimited.
 -- Only a ZSM resend clears the counters and both locks.
-create or replace function public.resend_delivery_pin(p_idempotency_key uuid, p_order_id uuid, p_pin text)
+create or replace function public.resend_delivery_pin(p_idempotency_key uuid, p_order_id uuid, p_pin text,
+                                                      p_gateway_proof text)
 returns jsonb
 language plpgsql
 security definer
@@ -358,6 +397,7 @@ declare
   v_zsm   boolean := v_me.role = 'ZSM';
   v_reply jsonb;
 begin
+  perform public.assert_gateway_proof(p_gateway_proof);
   v_prior := public.idempotency_begin(p_idempotency_key, 'resend_delivery_pin',
     jsonb_build_object('order_id', p_order_id));
   if v_prior is not null then
@@ -403,8 +443,8 @@ begin
     (select c.customer_phone from public.order_contacts c where c.tenant_id = v_order.tenant_id and c.order_id = v_order.id));
 end;
 $$;
-revoke all on function public.resend_delivery_pin(uuid, uuid, text) from public, anon, authenticated, service_role;
-grant execute on function public.resend_delivery_pin(uuid, uuid, text) to authenticated;
+revoke all on function public.resend_delivery_pin(uuid, uuid, text, text) from public, anon, authenticated, service_role;
+grant execute on function public.resend_delivery_pin(uuid, uuid, text, text) to authenticated;
 
 -- ── request_delivery_photo (§5.3) ───────────────────────────────────────
 -- A pending DELIVERY_PROOF slot for someone allowed to deliver the order,
