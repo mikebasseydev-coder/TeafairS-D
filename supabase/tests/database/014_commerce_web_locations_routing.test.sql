@@ -364,7 +364,7 @@ select throws_ok($$select public.quote_web_order(null, '[{"sku_code":"TF-TEA-50"
 select is(public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'codeless has no split');
 select is(public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) ->> 'total',
-  '1000.00', 'codeless quote prices TEAFAIR''s catalogue');
+  '1750.00', 'codeless quote prices TEAFAIR''s catalogue');
 select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'a 0-bps partner gets no split');
 select is(public.quote_web_order('POSIKEJA', '[{"sku_code":"T1-SKU","qty":2}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
@@ -383,7 +383,7 @@ update public.fintech_partners set commission_bps = 0 where id = '60000000-0000-
 select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Ada Obi","phone":"+2348030000001","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
-    '{}', 'PAYSTACK_WEB', 1000.00,
+    '{}', 'PAYSTACK_WEB', 1750.00,
     '{"reference":"TFW-cl1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'codeless order placed');
 select is((select coalesce(agent_code_id::text, 'none') || '|' || territory_id || '|' || fulfilment_warehouse_id
@@ -400,18 +400,18 @@ select is((select num_nulls(split_subaccount_code, split_bps, split_amount) from
 select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000002', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
-    null, 'POS_AGENT', 1000.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+    null, 'POS_AGENT', 1750.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'paying at an agent needs a link from a POS agent', 'codeless must pay online');
 select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000003', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
-    null, 'PAYSTACK_WEB', 1000.00,
+    null, 'PAYSTACK_WEB', 1750.00,
     '{"reference":"TFW-cl3","authorization_url":"https://x","split":null}', md5('ng_lga:KN:Fagge')::uuid)$$,
   'P0001', 'We don''t deliver to this area yet.', 'an unshippable order is refused at placement too');
 select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000004', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Bola","phone":"+2348030000002","delivery_address":"7 Toyin Street"}',
-    null, 'PAYSTACK_WEB', 1000.00,
+    null, 'PAYSTACK_WEB', 1750.00,
     '{"reference":"TFW-cl4","authorization_url":"https://x"}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Prices changed — refresh and try again', 'a missing split key is not JSON null');
 
@@ -456,7 +456,7 @@ select is((select num_nulls(split_subaccount_code, split_bps, split_amount) from
 select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',
     '{"name":"Ada Obi","phone":"+2348030000001","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
-    '{}', 'PAYSTACK_WEB', 1000.00,
+    '{}', 'PAYSTACK_WEB', 1750.00,
     '{"reference":"TFW-cl1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Epe')::uuid)$$,
   'TF002', null, 'lga_id is in the idempotency hash');
 
@@ -483,7 +483,7 @@ select is(pg_temp.lga_deliverable(public.storefront_locations('POSIKEJA'), 'KN',
 select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-cl1') ->> 'order_status',
   'PENDING', 'status read by the pair');
 select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-cl1') - 'public_reference',
-  '{"order_status":"PENDING","payment_status":"INITIATED","total":1000.00,"currency":"NGN",
+  '{"order_status":"PENDING","payment_status":"INITIATED","total":1750.00,"currency":"NGN",
     "lines":[{"name":"Teafair Tea 50 bags","qty":1,"unit_price":1000.00}]}'::jsonb,
   'status carries order and payment status, total, currency and lines only');
 select is(public.web_order_status(pg_temp.ref_of('eeeeeeee-0000-0000-0000-000000000001'), 'TFW-other'), null,

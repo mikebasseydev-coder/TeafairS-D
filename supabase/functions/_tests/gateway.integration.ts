@@ -515,10 +515,10 @@ Deno.test({
     assertEquals([order.tenant_id, order.territory_id, order.fulfilment_warehouse_id, order.teafair_agent_id, order.delivery_lga_id],
       [TEAFAIR, ids.tfTerritory, ids.tfWarehouse, users.tfTm.id, IKEJA]);
     const init = initialized.find((i) => i.reference === placed.paystack_reference)!;
-    assertEquals([init.amount, init.subaccount], [300000, undefined], "a codeless order has no split");
+    assertEquals([init.amount, init.subaccount], [375000, undefined], "a codeless order has no split");
 
     const reference = String(placed.paystack_reference);
-    paystackLedger.set(reference, verified(reference, 300000));
+    paystackLedger.set(reference, verified(reference, 375000));
     const settled = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
     assertEquals([settled.status, settled.body.outcome], [200, "updated"], JSON.stringify(settled.body));
     assertEquals((await orderOf(placed.order_id)).status, "PAID");
@@ -526,7 +526,7 @@ Deno.test({
     const status = await orderStatus({ public_reference: placed.public_reference, paystack_reference: reference });
     const read = await status.json();
     assertEquals(status.status, 200, JSON.stringify(read));
-    assertEquals([read.order_status, read.payment_status, Number(read.total)], ["PAID", "SUCCESS", 3000]);
+    assertEquals([read.order_status, read.payment_status, Number(read.total)], ["PAID", "SUCCESS", 3750]);
 
     const wrong = await orderStatus({ public_reference: placed.public_reference, paystack_reference: `TFW-${crypto.randomUUID()}` });
     assertEquals([wrong.status, (await wrong.json()).error.code], [404, "NOT_FOUND"]);
@@ -579,7 +579,7 @@ Deno.test({
     // further back than the last, so leftovers from earlier runs never crowd it out.
     const createdAt = new Date(Date.UTC(2000, 0, 1) - Math.floor(Date.now() / 1000) * 1000).toISOString();
     await must(admin.from("payments").update({ created_at: createdAt }).eq("paystack_reference", reference));
-    paystackLedger.set(reference, verified(reference, 300000));
+    paystackLedger.set(reference, verified(reference, 375000));
 
     const res = await cron("reconcile-funds", { mode: "sweep" });
     const counts = await res.json();
@@ -595,7 +595,7 @@ Deno.test({
   fn: async () => {
     const placed = await place(codeless());
     const reference = String(placed.paystack_reference);
-    const charge = verified(reference, 300000);
+    const charge = verified(reference, 375000);
     paystackLedger.set(reference, charge);
     const paid = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
     assertEquals(paid.body.outcome, "updated", JSON.stringify(paid.body));
@@ -603,13 +603,13 @@ Deno.test({
 
     // a refund id is an at-most-once key and the local database persists, so one per run
     refundLedger.push({
-      id: 900_000_000 + Math.floor(Math.random() * 100_000_000), status: "processed", amount: 300000, currency: "NGN",
+      id: 900_000_000 + Math.floor(Math.random() * 100_000_000), status: "processed", amount: 375000, currency: "NGN",
       transaction: charge.id, transaction_reference: reference,
     });
     // F4: the webhook carries no refund id and no event timestamp
     const refunded = await deliver({
       event: "refund.processed",
-      data: { status: "processed", transaction_reference: reference, refund_reference: null, amount: "300000", currency: "NGN" },
+      data: { status: "processed", transaction_reference: reference, refund_reference: null, amount: "375000", currency: "NGN" },
     });
     assertEquals([refunded.status, refunded.body.outcome], [200, "refunded"], JSON.stringify(refunded.body));
     assertEquals([(await paymentOf(reference)).payment_status, (await orderOf(placed.order_id)).status], ["REFUNDED", "REFUNDED"]);
@@ -723,7 +723,7 @@ const photoBytes = (n: number): Uint8Array<ArrayBuffer> => new Uint8Array(n).fil
 async function paidOrder(name: string, phoneNumber: string): Promise<Record<string, string | number | null>> {
   const placed = await place(codeless({ customer: { name, phone: phoneNumber, delivery_address: "5 Opebi Road, Ikeja" } }));
   const reference = String(placed.paystack_reference);
-  paystackLedger.set(reference, verified(reference, 300000));
+  paystackLedger.set(reference, verified(reference, 375000));
   const settled = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
   assertEquals(settled.body.outcome, "updated", JSON.stringify(settled.body));
   assertEquals((await orderOf(placed.order_id)).status, "PAID");

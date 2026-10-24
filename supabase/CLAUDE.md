@@ -19,6 +19,7 @@ the authority; this file is the working summary.
 | A5. Refund policy, WhatsApp-verified checkout, fulfilment and delivery code, support photos, dispute evidence | done (local) |
 | Tenant sale categories (NCC licence) and NAFDAC numbers | done (local) |
 | Cartons and break-bulk wholesale packs | done (local) |
+| Web transport fare | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -355,7 +356,7 @@ deploys with or after A5, which it extends.
   `LG-IKJ-02-2134`). An active `FOOD` or `COSMETICS` product must have one
   (CHECK `central_products_nafdac_required`, 23514). The dispute evidence
   bundle shows `nafdac_number` and `nafdac_regulated` on each line (the
-  product's current values).
+  product's current values; the function now lives in `20261024140000`).
 - **Purerigin Coconut Oil** (Teafair's own brand, tenant TEAFAIR) is seeded
   active as two SKUs, both `COSMETICS` with NAFDAC `LG-IKJ-02-2134`:
   `PURERIGIN-COCONUT-OIL-200ML` (retail 5,000, wholesale 4,000 a bottle) and
@@ -395,6 +396,27 @@ local only, after the one above.
 - **Purerigin break-bulk (user, 2026-10-24): a quarter carton.** 200ml:
   carton of 12 at 48,000, quarter carton of 3 at 12,000. 100ml: carton of 24
   at 60,000, quarter carton of 6 at 15,000.
+
+### Web transport fare
+
+One migration (`20261024140000_web_transport_fare`), local only. User
+decision 2026-10-24, with the recommended options:
+
+- **Flat fare per web order**, from `tenant_settings.web_transport_fare`:
+  TEAFAIR 750, every other tenant 0 until set. Set by migration only.
+- `web_price_cart` (and so `quote_web_order`) returns `subtotal`, `discount`,
+  `goods_total`, `transport_fare` and `total` (goods plus fare). **Discounts
+  apply to goods only, and the partner's commission (`split.partner_share`)
+  is cut from goods only**, so the fare stays in the merchant's main Paystack
+  account. `web-checkout` needed no change: it charges the quote total.
+- `orders.transport_fare` records it. CHECK: only `ONLINE` orders carry a
+  fare, and it never exceeds `total_amount`. `storefront_catalogue` shows
+  `transport_fare` up front; `place_web_order` returns it; the dispute
+  evidence order header carries it.
+- **Refunds (policy text):** the fare is refunded only if the order is
+  cancelled before dispatch or never delivered; once delivered, it is not
+  refunded, even when goods are. Refunds are issued in Paystack by staff, so
+  this is a policy rule, not a database check.
 
 ## Layout
 

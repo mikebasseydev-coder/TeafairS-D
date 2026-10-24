@@ -68,6 +68,7 @@ values (
 
 - Approved refunds are paid back to the original payment source through Paystack within 5 to 7 business days of approval.
 - If you have a problem with an order, contact Teafair support first, before you open a dispute with your bank. We will work to resolve it quickly.
+- Web orders carry a transport fare, shown at checkout before you pay. The fare is refunded only if the order is cancelled before it is dispatched, or is never delivered. Once an order has been delivered, the fare is not refunded, including when goods from it are refunded.
 - Products are sold for the use stated on their label and in their NAFDAC registration. A problem that arises from using a product any other way (for example, eating a product sold for skin, hair or body care) is not grounds for a refund.
 
 ## Food orders

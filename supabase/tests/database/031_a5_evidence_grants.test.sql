@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(178);
+select plan(179);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
 -- TEAFAIR: ZSM (1), Ikeja TM (2), Ikeja DSA (4), DSM (5, manages warehouse W).
@@ -105,6 +105,7 @@ call pg_temp.as_user(1);
 create temp table ev as select pg_temp.ev() as b;
 grant select on ev to authenticated;
 select is((select b -> 'order' ->> 'public_reference' from ev), 'TF-AAAAAA', 'order header');
+select is((select b -> 'order' ->> 'transport_fare' from ev), '0.00', 'the order header carries the transport fare');
 select is((select b -> 'lines' -> 0 ->> 'sale_category' from ev), 'FOOD', 'lines carry sale_category');
 select is((select b -> 'lines' -> 0 ->> 'nafdac_number' from ev), 'A1-0007', 'lines carry the NAFDAC number');
 select is((select (b -> 'lines' -> 0 ->> 'nafdac_regulated')::boolean from ev), true, 'lines flag NAFDAC-regulated categories');

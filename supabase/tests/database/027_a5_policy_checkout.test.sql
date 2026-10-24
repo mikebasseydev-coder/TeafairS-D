@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(58);
+select plan(59);
 
 -- the TEAFAIR tenant is seeded in every environment (005)
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number)
@@ -108,7 +108,7 @@ returns jsonb language sql as $$
   select public.place_web_order(p_key, 'ZSM-A5',
     jsonb_build_array(jsonb_build_object('sku_code', p_sku, 'qty', 1)),
     jsonb_build_object('name', 'Ada Obi', 'phone', p_phone, 'delivery_address', '5 Opebi Road, Ikeja'),
-    null, 'PAYSTACK_WEB', case when p_sku = 'GAD-1' then 900.00 else 500.00 end,
+    null, 'PAYSTACK_WEB', case when p_sku = 'GAD-1' then 1650.00 else 1250.00 end,
     jsonb_build_object('reference', 'TFW-' || p_key, 'access_code', 'ac', 'authorization_url', 'https://checkout.paystack.com/ac',
                        'split', null),
     md5('ng_lga:LA:Ikeja')::uuid, p_accept, p_tag, p_ip, p_token);
@@ -173,6 +173,11 @@ select throws_ok(
 select is(pg_temp.place('a5a50000-0000-0000-0000-000000000001', '+2348033333333', 'tok-C') ->> 'public_reference' is not null,
   true, 'verified, consenting order placed');
 reset role;
+select is(
+  (select o.transport_fare::text || '|' || o.total_amount::text || '|' || p.amount::text
+     from public.orders o join public.payments p on p.tenant_id = o.tenant_id and p.order_id = o.id
+    where p.paystack_reference = 'TFW-a5a50000-0000-0000-0000-000000000001'),
+  '750.00|1250.00|1250.00', 'the order records the 750 fare; order and payment carry goods plus fare');
 select is(
   (select host(c.consent_ip) || '|' || c.phone_verified_channel || '|' || (c.phone_verified_at is not null)
      from public.order_contacts c
