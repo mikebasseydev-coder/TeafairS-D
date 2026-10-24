@@ -352,10 +352,13 @@ begin
   if p_channel is null or p_channel not in ('WHATSAPP', 'SMS') then
     raise exception 'channel must be WHATSAPP or SMS' using errcode = 'P0001';
   end if;
-  if v_order.status <> 'IN_TRANSIT' then
+  if v_order.channel <> 'ONLINE' or v_order.status <> 'IN_TRANSIT' then
     raise exception 'only orders in transit have a delivery code' using errcode = 'P0001';
   end if;
   select * into v_f from public.order_fulfilments where order_id = v_order.id for update;
+  if v_f.order_id is null then
+    raise exception 'this order has no delivery record' using errcode = 'P0001';
+  end if;
   v_resend := v_f.pin_resend_pending;
 
   update public.order_fulfilments
@@ -409,13 +412,16 @@ begin
      and public.fulfilment_delivery_path(v_me, v_order) is null then
     raise exception 'not permitted to act on this order' using errcode = '42501';
   end if;
-  if v_order.status <> 'IN_TRANSIT' then
+  if v_order.channel <> 'ONLINE' or v_order.status <> 'IN_TRANSIT' then
     raise exception 'only orders in transit can get a new delivery code' using errcode = 'P0001';
   end if;
   if p_pin is null or p_pin !~ '^[0-9]{4}$' then
     raise exception 'the delivery code must be 4 digits' using errcode = 'P0001';
   end if;
   select * into v_f from public.order_fulfilments where order_id = v_order.id for update;
+  if v_f.order_id is null then
+    raise exception 'this order has no delivery record' using errcode = 'P0001';
+  end if;
   if not v_zsm and v_f.pin_resend_day = public.fulfilment_today() and v_f.pin_resends_today >= 3 then
     raise exception 'Too many codes sent today. Ask a ZSM.' using errcode = 'P0001';
   end if;
@@ -475,12 +481,16 @@ begin
   if public.fulfilment_delivery_path(v_me, v_order) is null then
     raise exception 'not permitted to deliver this order' using errcode = '42501';
   end if;
-  if v_order.status <> 'IN_TRANSIT' then
+  if v_order.channel <> 'ONLINE' or v_order.status <> 'IN_TRANSIT' then
     raise exception 'only orders in transit can have a delivery photo' using errcode = 'P0001';
+  end if;
+  if not exists (select 1 from public.order_fulfilments f where f.order_id = v_order.id) then
+    raise exception 'this order has no delivery record' using errcode = 'P0001';
   end if;
   v_ext := public.upload_slot_extension(p_mime_type, p_size_bytes);
   if (select count(*) from public.upload_slots s
-       where s.tenant_id = v_order.tenant_id and s.order_id = v_order.id and s.claimed_at is null
+       where s.tenant_id = v_order.tenant_id and s.order_id = v_order.id and s.purpose = 'DELIVERY_PROOF'
+         and s.claimed_at is null
          and s.created_at > now() - interval '1 hour') >= 10 then
     raise exception 'Too many messages. Please wait a few minutes.' using errcode = 'P0001';
   end if;
@@ -541,10 +551,13 @@ begin
   if p_pin is null or p_pin !~ '^[0-9]{4}$' then
     raise exception 'the delivery code must be 4 digits' using errcode = 'P0001';
   end if;
-  if v_order.status <> 'IN_TRANSIT' then
+  if v_order.channel <> 'ONLINE' or v_order.status <> 'IN_TRANSIT' then
     raise exception 'only orders in transit can be delivered' using errcode = 'P0001';
   end if;
   select * into v_f from public.order_fulfilments where order_id = v_order.id for update;
+  if v_f.order_id is null then
+    raise exception 'this order has no delivery record' using errcode = 'P0001';
+  end if;
 
   -- locked: refused without counting
   if v_f.pin_zsm_lock or v_f.pin_locked_until > now() then
@@ -553,7 +566,9 @@ begin
   end if;
 
   -- wrong code: count it, lock at 5 (window) and 10 (lifetime), reply
-  if v_f.delivery_pin_hash <> extensions.crypt(p_pin, v_f.delivery_pin_hash) then
+  -- null-safe: only a stored hash that matches is a right code
+  if not coalesce(v_f.delivery_pin_hash is not null
+                  and v_f.delivery_pin_hash = extensions.crypt(p_pin, v_f.delivery_pin_hash), false) then
     update public.order_fulfilments
        set pin_lifetime_failures = pin_lifetime_failures + 1,
            pin_zsm_lock = pin_zsm_lock or pin_lifetime_failures + 1 >= 10,

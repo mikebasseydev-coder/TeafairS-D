@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(130);
+select plan(138);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
@@ -313,6 +313,12 @@ reset role;
 select is((select row(pin_failed_attempts, pin_lifetime_failures)::text from pg_temp.f(1)), row(1, 1)::text,
   'and counts nothing more');
 call pg_temp.as_user(4);
+select is(pg_temp.deliver(20, 1, '1234') ->> 'error', 'WRONG_PIN',
+  'replaying a WRONG_PIN key with the right code returns the stored reply');
+reset role;
+select is((select status from public.orders where id = pg_temp.o(1)) || '/' || (select pin_lifetime_failures from pg_temp.f(1)),
+  'IN_TRANSIT/1', 'and neither delivers nor counts');
+call pg_temp.as_user(4);
 do $$ begin for i in 21..23 loop perform pg_temp.deliver(i, 1, '0000'); end loop; end $$;
 select is(pg_temp.deliver(24, 1, '0000') ->> 'error', 'LOCKED', 'locks after 5');
 select is(pg_temp.deliver(25, 1, '1234') ->> 'error', 'LOCKED', 'locked refuses right pin');
@@ -453,6 +459,33 @@ delete from public.upload_slots where id = (current_setting('t.p1')::jsonb ->> '
 call pg_temp.as_user(2);
 select is(pg_temp.visible_photo(3), 0, 'no live slot, no download');
 reset role;
+
+-- ── fail closed: no fulfilment row, or not a web order (set up as postgres) ─
+-- O6: ONLINE and IN_TRANSIT with no fulfilment row; O7: a FIELD_DSA order in
+-- transit with a fulfilment row and a known code
+insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
+                           public_reference, delivery_lga_id, territory_id, fulfilment_warehouse_id) values
+  (pg_temp.o(6), '7eaf0000-0000-4000-8000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000004', 2500,
+   'IN_TRANSIT', 'PAYSTACK_WEB', 'TF-AAAAA6', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001',
+   '70000000-0000-0000-0000-000000000001'),
+  (pg_temp.o(7), '7eaf0000-0000-4000-8000-000000000001', 'FIELD_DSA', '20000000-0000-0000-0000-000000000004', 2500,
+   'IN_TRANSIT', null, null, null, '40000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001');
+insert into public.order_fulfilments (order_id, tenant_id, dispatched_by, delivery_pin_hash)
+values (pg_temp.o(7), '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000005',
+        extensions.crypt('2222', extensions.gen_salt('bf')));
+call pg_temp.as_user(4);
+select throws_ok($$select pg_temp.deliver(61, 6, '1234')$$, 'P0001', 'this order has no delivery record',
+  'an in-transit web order with no fulfilment row is refused');
+select throws_ok($$select pg_temp.resend(62, 6, '1234')$$, 'P0001', 'this order has no delivery record',
+  'and gets no new code');
+select throws_ok($$select pg_temp.photo(63, 6)$$, 'P0001', 'this order has no delivery record', 'nor a photo slot');
+select throws_ok($$select pg_temp.deliver(64, 7, '2222')$$, 'P0001', 'only orders in transit can be delivered',
+  'a non-web order is refused by deliver');
+select throws_ok($$select pg_temp.resend(65, 7, '3333')$$, 'P0001', 'only orders in transit can get a new delivery code',
+  'and by resend');
+reset role;
+select is((select array_agg(status order by id) from public.orders where id in (pg_temp.o(6), pg_temp.o(7))),
+  array['IN_TRANSIT', 'IN_TRANSIT'], 'both stay in transit');
 
 -- ── the damage window on ORDER tickets ──────────────────────────────────
 do $$ begin
