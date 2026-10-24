@@ -385,8 +385,8 @@ One migration (`20261024130000_break_bulk`), local only, after the one above.
   "<product> sells to the trade in packs of N units; Q is not a whole number of
   packs." Web buyers still buy single units. The rule sits on the tables
   (triggers) because no RPC writes these lines yet; Spec C inherits it.
-  Ruling: `RETAIL`-channel orders count as trade sales (Spec A does not define
-  the channel); relax the trigger if `RETAIL` turns out to mean consumer sales.
+  **User decision 2026-10-24: web sales (`ONLINE`, the Teafair storefront) are
+  retail; every app sale (`FIELD_DSA`, `RETAIL`, pickups) is wholesale.**
   Requisitions (warehouse to warehouse) are not restricted.
 - **Purerigin break-bulk (user, 2026-10-24): a quarter carton.** 200ml:
   carton of 12 at 48,000, quarter carton of 3 at 12,000. 100ml: carton of 24
