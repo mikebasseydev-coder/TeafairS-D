@@ -1,23 +1,62 @@
--- Transport fare on web orders (user decision 2026-10-24).
+-- Teafairweb retail pricing (user decisions 2026-10-24).
 --
--- A flat fare per web order, set per tenant: TEAFAIR 750, every other tenant
--- 0 until set. It is added after any discount and is never discounted. The
--- payment partner's commission is cut from the goods only, so the fare stays
--- in the merchant's main Paystack account. Refunds: the fare is refunded only
--- when an order is cancelled before dispatch or never delivered (policy text).
--- Set by migration only, like the other platform settings.
+-- The web storefront is for consumers: full retail price, no discounts, plus
+-- a flat transport fare per order. A POS agent whose link brings the sale
+-- earns a flat bounty, not a percentage. Everything else goes to the
+-- merchant's main Paystack account.
+--
+-- * Transport fare: tenant_settings.web_transport_fare, TEAFAIR 750, others 0
+--   until set. Never discounted, never commissioned. Refunded only when an
+--   order is cancelled before dispatch or never delivered (policy text).
+-- * No web discounts: existing link discounts are cleared and new ones are
+--   refused. Web order lines are billed at unit_price.
+-- * Agent bounty: tenant_settings.web_agent_bounty, TEAFAIR 500. When set, a
+--   POS agent link pays its partner that flat amount through the Paystack
+--   split (bps_applied 0); when null, the partner's commission_bps applies to
+--   the goods, as in D1.
+-- Settings are written by migration only.
 
 alter table public.tenant_settings
-  add column web_transport_fare numeric(15,2) not null default 0 check (web_transport_fare >= 0);
-update public.tenant_settings set web_transport_fare = 750
+  add column web_transport_fare numeric(15,2) not null default 0 check (web_transport_fare >= 0),
+  add column web_agent_bounty numeric(15,2) check (web_agent_bounty > 0);
+update public.tenant_settings set web_transport_fare = 750, web_agent_bounty = 500
  where tenant_id = '7eaf0000-0000-4000-8000-000000000001';
 
 alter table public.orders
   add column transport_fare numeric(15,2) not null default 0 check (transport_fare >= 0),
   add constraint orders_transport_fare_web_only check (channel = 'ONLINE' or transport_fare = 0),
   add constraint orders_transport_fare_within_total check (transport_fare <= total_amount);
+-- web orders carry no discount from here on; A1-era orders may (NOT VALID)
+alter table public.orders
+  add constraint orders_web_no_discount check (channel <> 'ONLINE' or discount_amount = 0) not valid;
 
--- ── web_price_cart: the D1 body; the fare is added after the split ───────
+-- ── no web discounts on agent links ─────────────────────────────────────
+-- A1 links may carry a discount on the remote; clear them, then refuse new
+-- ones with copy the ZSM can act on (upsert_agent_code keeps its signature).
+update public.agent_codes set discount_type = null, discount_value = null
+ where discount_type is not null or discount_value is not null;
+
+create function public.agent_codes_no_discount()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.discount_type is not null or new.discount_value is not null then
+    raise exception 'Web discounts are switched off: Teafairweb sells at full retail price.'
+      using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.agent_codes_no_discount() from public, anon, authenticated, service_role;
+
+create trigger agent_codes_no_discount
+  before insert or update of discount_type, discount_value on public.agent_codes
+  for each row execute function public.agent_codes_no_discount();
+
+-- ── web_price_cart: the D1 body at retail, with the bounty and the fare ─
 create or replace function public.web_price_cart(p_code public.agent_codes, p_items jsonb)
 returns jsonb
 language plpgsql
@@ -69,13 +108,8 @@ begin
     raise exception 'a product in your cart is no longer available' using errcode = 'P0001';
   end if;
 
-  v_discount := case p_code.discount_type
-                  when 'PERCENT' then round(v_subtotal * p_code.discount_value / 100, 2)
-                  when 'FIXED'   then p_code.discount_value
-                  else 0
-                end;
-  v_discount := least(v_discount, v_subtotal);
-  v_total := v_subtotal - v_discount;
+  v_discount := 0;  -- no web discounts: every line at unit_price
+  v_total := v_subtotal;
   if v_total <= 0 then
     raise exception 'the order total must be more than zero' using errcode = 'P0001';
   end if;
@@ -83,11 +117,13 @@ begin
   select s.split into v_split
     from (select jsonb_build_object('fintech_partner_id', fp.id,
                                     'subaccount_code', fp.paystack_subaccount_code,
-                                    'commission_bps', fp.commission_bps,
-                                    'partner_share', round(v_total * fp.commission_bps / 10000, 2)) as split
+                                    'commission_bps', case when ts.web_agent_bounty is null then fp.commission_bps else 0 end,
+                                    'partner_share', coalesce(ts.web_agent_bounty,
+                                                              round(v_total * fp.commission_bps / 10000, 2))) as split
             from public.fintech_terminals ft
             join public.fintech_partners fp
               on fp.tenant_id = ft.tenant_id and fp.id = ft.partner_id and fp.status = 'ACTIVE'
+            left join public.tenant_settings ts on ts.tenant_id = ft.tenant_id
            where ft.tenant_id = p_code.tenant_id and ft.id = p_code.terminal_id) s
    where (s.split ->> 'partner_share')::numeric > 0
      and (s.split ->> 'partner_share')::numeric < v_total;
@@ -335,8 +371,6 @@ begin
     'tenant', (select jsonb_build_object('name', t.name, 'logo_url', t.logo_url)
                  from public.tenants t where t.id = v_code.tenant_id),
     'currency', coalesce((select s.currency from public.tenant_settings s where s.tenant_id = v_code.tenant_id), 'NGN'),
-    'discount', case when v_code.discount_type is null then null
-                     else jsonb_build_object('type', v_code.discount_type, 'value', v_code.discount_value) end,
     'venue', (select case when ft.venue_name is null then null
                           else jsonb_build_object('name', ft.venue_name, 'channel', ft.venue_channel) end
                 from public.fintech_terminals ft
@@ -393,7 +427,10 @@ begin
       'status', v_order.status,
       'payment_route', v_order.payment_route,
       'total_amount', v_order.total_amount,
+      'goods_total', v_order.total_amount - v_order.transport_fare,
+      'discount_amount', v_order.discount_amount,
       'transport_fare', v_order.transport_fare,
+      'agent_code_id', v_order.agent_code_id,
       'created_at', v_order.created_at),
     'lines', coalesce((
       select jsonb_agg(jsonb_build_object(
@@ -413,6 +450,7 @@ begin
                'paystack_reference', p.paystack_reference,
                'amount', p.amount,
                'payment_status', p.payment_status,
+               'agent_commission', p.split_amount,
                'created_at', p.created_at,
                'settlement', (select jsonb_build_object('status', c.status, 'settled_at', c.settled_at)
                                 from public.commission_records c

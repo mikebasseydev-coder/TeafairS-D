@@ -136,10 +136,10 @@ insert into public.central_products (tenant_id, sku_code, product_name, brand, c
 insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, discount_type, discount_value,
                                 max_redemptions, expires_at, is_active, created_by) values
   ('62000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'GRACE-01',
-   '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001', 'PERCENT', 10,
+   '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001', null, null,
    null, null, true, '20000000-0000-0000-0000-000000000002'),
   ('62000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'GRACE-FIX',
-   '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000003', 'FIXED', 1000,
+   '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000003', null, null,
    null, null, true, '20000000-0000-0000-0000-000000000002'),
   ('62000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'OFF-01',
    '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001', null, null,
@@ -199,8 +199,8 @@ select is(jsonb_array_length(public.storefront_catalogue('GRACE-01') -> 'product
   'only the active products of the code''s tenant');
 select ok(position('20000000-0000-0000-0000-000000000004' in public.storefront_catalogue('GRACE-01')::text) = 0,
   'no agent id leaks into the catalogue');
-select is(public.storefront_catalogue('GRACE-01') -> 'discount',
-  '{"type":"PERCENT","value":10}'::jsonb, 'the discount is shown');
+select ok(not (public.storefront_catalogue('GRACE-01') ? 'discount'),
+  'the storefront offers no discount');
 select is(public.storefront_catalogue(' grace-01 ') ->> 'code', 'GRACE-01',
   'a lower-case, padded code resolves');
 select is(public.storefront_catalogue('UNI-01') -> 'tenant' ->> 'name', 'Unilever Nigeria',
@@ -219,20 +219,20 @@ select throws_ok($$select public.storefront_catalogue('NOPE-99')$$,
   'P0001', 'This link is no longer valid', 'an unknown code is refused');
 
 -- ── quote_web_order ─────────────────────────────────────────────────────
--- 2 × 2500 + 1 × 1200 = 6200; 10% off = 620; total 5580; partner 150 bps = 83.70
+-- 2 × 2500 + 1 × 1200 = 6200 at full retail price; partner 150 bps = 93.00
 select is(public.quote_web_order('GRACE-01',
             '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) ->> 'total',
-  '5580.00', 'percentage discounts are applied on the server');
+  '6200.00', 'web orders are billed at full retail price');
 select is(public.quote_web_order('GRACE-01',
             '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
-  '{"fintech_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":83.70}'::jsonb,
+  '{"fintech_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":93.00}'::jsonb,
   'an active partner takes commission_bps of the total');
 select is(public.quote_web_order('GRACE-FIX', '[{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'a partner that is not ACTIVE gets no split');
 select is(public.quote_web_order('GRACE-FIX', '[{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) ->> 'total',
-  '200.00', 'fixed discounts are applied on the server');
-select throws_ok($$select public.quote_web_order('GRACE-FIX', '[{"sku_code":"SACHET-15","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid)$$,
-  'P0001', null, 'a discount that leaves nothing to pay is refused');
+  '1200.00', 'a link never discounts the price');
+select is(public.quote_web_order('GRACE-FIX', '[{"sku_code":"SACHET-15","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) ->> 'discount',
+  '0.00', 'the web discount is always zero');
 select throws_ok($$select public.quote_web_order('GRACE-01', '[{"sku_code":"OLD-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'an inactive product cannot be ordered');
 select throws_ok($$select public.quote_web_order('GRACE-01', '[{"sku_code":"OMO-1KG","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid)$$,
@@ -262,15 +262,15 @@ select lives_ok(
       '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
       '{"source":"whatsapp","medium":"social","campaign":"easter"}',
-      'PAYSTACK_WEB', 5580.00,
-      '{"reference":"TFW-r1","access_code":"ac_1","authorization_url":"https://checkout.paystack.com/ac_1","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":83.70}}', md5('ng_lga:LA:Ikeja')::uuid)$$,
+      'PAYSTACK_WEB', 6200.00,
+      '{"reference":"TFW-r1","access_code":"ac_1","authorization_url":"https://checkout.paystack.com/ac_1","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":93.00}}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'a web order is placed for the Paystack route');
 reset role;
 select is(
   (select channel || '|' || status || '|' || payment_route || '|' || total_amount || '|' || discount_amount
           || '|' || attributed_terminal_id || '|' || teafair_agent_id || '|' || utm_source
      from public.orders where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
-  'ONLINE|PENDING|PAYSTACK_WEB|5580.00|620.00|61000000-0000-0000-0000-000000000001|20000000-0000-0000-0000-000000000002|whatsapp',
+  'ONLINE|PENDING|PAYSTACK_WEB|6200.00|0.00|61000000-0000-0000-0000-000000000001|20000000-0000-0000-0000-000000000002|whatsapp',
   'the order carries attribution, discount, UTM and the territory''s TM as accountable agent');
 select is(
   (select sum(oi.line_total) from public.order_items oi join public.orders o on o.id = oi.order_id
@@ -279,7 +279,7 @@ select is(
 select is(
   (select payment_status || '|' || amount || '|' || paystack_reference || '|' || fintech_partner_id
      from public.payments where paystack_reference = 'TFW-r1'),
-  'INITIATED|5580.00|TFW-r1|60000000-0000-0000-0000-000000000001', 'an INITIATED payment holds the reference');
+  'INITIATED|6200.00|TFW-r1|60000000-0000-0000-0000-000000000001', 'an INITIATED payment holds the reference');
 select ok(
   (select public_reference ~ '^TF-[0-9A-HJKMNP-TV-Z]{6}$' from public.orders
     where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
@@ -297,8 +297,8 @@ select is(
       '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
       '{"source":"whatsapp","medium":"social","campaign":"easter"}',
-      'PAYSTACK_WEB', 5580.00,
-      '{"reference":"TFW-r2","access_code":"ac_2","authorization_url":"https://checkout.paystack.com/ac_2","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":83.70}}', md5('ng_lga:LA:Ikeja')::uuid) ->> 'authorization_url',
+      'PAYSTACK_WEB', 6200.00,
+      '{"reference":"TFW-r2","access_code":"ac_2","authorization_url":"https://checkout.paystack.com/ac_2","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":93.00}}', md5('ng_lga:LA:Ikeja')::uuid) ->> 'authorization_url',
   'https://checkout.paystack.com/ac_1', 'a retry with the same key returns the original checkout URL');
 reset role;
 select is(
@@ -311,7 +311,7 @@ select lives_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000002', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
-      null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'a pay-at-agent order is placed');
 reset role;
 select is(
@@ -338,7 +338,7 @@ select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000004', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
-      null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Prices changed — refresh and try again', 'a stale total is refused');
 select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000005', 'HOUSE-01',
@@ -356,31 +356,31 @@ select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000007', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"08031234568","delivery_address":"7 Toyin Street"}',
-      null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'the phone must already be E.164');
 select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000008', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568"}',
-      null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'a delivery address is required');
 select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000009', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
-      null, 'PAYSTACK_WEB', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'PAYSTACK_WEB', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'the Paystack route needs checkout details');
 select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-00000000000a', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
-      null, 'CASH', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'CASH', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', null, 'an unknown payment route is refused');
 select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-000000000001', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Bola","phone":"+2348031234568","delivery_address":"7 Toyin Street"}',
-      null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'TF002', null, 'a key reused for a different order is refused');
 reset role;
 
@@ -399,7 +399,7 @@ select throws_ok(
   $$select pg_temp.pwo('cccccccc-0000-0000-0000-00000000000b', 'GRACE-01',
       '[{"sku_code":"MAGGI-12","qty":1}]',
       '{"name":"Spam","phone":"+2348099999999","delivery_address":"1 Nowhere"}',
-      null, 'POS_AGENT', 1080.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 1200.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Too many unpaid orders for this phone number. Try again later.',
   'a sixth pending web order within the hour is refused');
 reset role;

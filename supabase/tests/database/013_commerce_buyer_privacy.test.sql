@@ -133,7 +133,7 @@ insert into public.central_products (tenant_id, sku_code, product_name, brand, c
 insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, discount_type, discount_value,
                                 max_redemptions, expires_at, is_active, created_by) values
   ('62000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'GRACE-01',
-   '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001', 'PERCENT', 10,
+   '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001', null, null,
    null, null, true, '20000000-0000-0000-0000-000000000002'),
   ('62000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'EPE-01',
    '20000000-0000-0000-0000-000000000007', '61000000-0000-0000-0000-000000000007', null, null,
@@ -174,7 +174,7 @@ select lives_ok(
   $$select pg_temp.pwo('dddddddd-0000-0000-0000-000000000001', 'GRACE-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Ada Obi","phone":"+2348031234567","email":"ada@example.com","delivery_address":"5 Opebi Road, Ikeja"}',
-      null, 'POS_AGENT', 2250.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 2500.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'a pay-at-agent order is placed');
 select lives_ok(
   $$select pg_temp.pwo('dddddddd-0000-0000-0000-000000000002', 'EPE-01',
@@ -195,9 +195,9 @@ select lives_ok(
   $$select pg_temp.pwo('dddddddd-0000-0000-0000-000000000004', 'GRACE-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Dayo","phone":"+2348031234570","delivery_address":"3 Allen Avenue"}',
-      null, 'PAYSTACK_WEB', 2250.00,
+      null, 'PAYSTACK_WEB', 2500.00,
       '{"reference":"TFW-g2","access_code":"ac_g2","authorization_url":"https://checkout.paystack.com/ac_g2",
-        "split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":33.75}}', md5('ng_lga:LA:Ikeja')::uuid)$$,
+        "split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":37.50}}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'a Paystack order on the agent''s code is placed');
 reset role;
 
@@ -266,7 +266,7 @@ select throws_ok(
   $$select pg_temp.pwo('dddddddd-0000-0000-0000-000000000009', 'GRACE-01',
       '[{"sku_code":"MILO-400","qty":1}]',
       '{"name":"Spam","phone":"+2348099999999","delivery_address":"1 Nowhere"}',
-      null, 'POS_AGENT', 2250.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
+      null, 'POS_AGENT', 2500.00, null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'Too many unpaid orders for this phone number. Try again later.',
   'a sixth pending web order within the hour is still refused');
 reset role;
@@ -281,7 +281,7 @@ select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-000
 select is(
   public.pos_order_lookup((select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001'))
     - 'public_reference',
-  '{"first_name":"Ada","phone_last4":"4567","total":2250.00,"currency":"NGN","status":"PENDING"}'::jsonb,
+  '{"first_name":"Ada","phone_last4":"4567","total":2500.00,"currency":"NGN","status":"PENDING"}'::jsonb,
   'the agent sees first name, phone last 4, total and status');
 select is(
   public.pos_order_lookup((select public_reference from refs where key = 'dddddddd-0000-0000-0000-000000000001'))

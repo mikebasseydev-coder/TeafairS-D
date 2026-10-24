@@ -335,7 +335,7 @@ Deno.test({
     const tm = createClient(API, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}` } } });
     const result = await must(tm.rpc("upsert_agent_code", {
       p_idempotency_key: crypto.randomUUID(), p_code: CODE, p_agent_id: users.agent.id, p_terminal_id: ids.terminal,
-      p_discount_type: "PERCENT", p_discount_value: 10, p_max_redemptions: null, p_expires_at: null, p_is_active: true,
+      p_discount_type: null, p_discount_value: null, p_max_redemptions: null, p_expires_at: null, p_is_active: true,
     })) as { code: string };
     assertEquals(result.code, CODE);
   },
@@ -447,11 +447,11 @@ Deno.test({
     assertEquals(placed.authorization_url, `https://checkout.paystack.test/${placed.paystack_reference}`);
 
     const init = initialized.find((i) => i.reference === placed.paystack_reference)!;
-    assertEquals([init.amount, init.subaccount, init.transaction_charge], [558000, "ACCT_it01", 558000 - 8370]);
+    assertEquals([init.amount, init.subaccount, init.transaction_charge], [620000, "ACCT_it01", 620000 - 9300]);
 
     const [payment] = (await must(admin.from("payments").select("payment_status, amount, split_subaccount_code, split_amount").eq("paystack_reference", placed.paystack_reference))) ?? [];
     assertEquals([payment.payment_status, Number(payment.amount), payment.split_subaccount_code, Number(payment.split_amount)],
-      ["INITIATED", 5580, "ACCT_it01", 83.7]);
+      ["INITIATED", 6200, "ACCT_it01", 93]);
 
     // a retry with the same key gets the same order and URL back
     const again = await (await checkout(body)).json();
@@ -540,22 +540,22 @@ Deno.test({
   fn: async () => {
     const placed = await place(webOrder());
     const reference = String(placed.paystack_reference);
-    // 5580.00 at 150 bps: the partner's share is 83.70
-    const charge = verified(reference, 558000, 8370);
+    // 6200.00 at 150 bps: the partner's share is 93.00
+    const charge = verified(reference, 620000, 9300);
     paystackLedger.set(reference, charge);
     const settled = await deliver({ event: "charge.success", data: { reference, paid_at: new Date().toISOString() } });
     assertEquals([settled.status, settled.body.outcome], [200, "updated"], JSON.stringify(settled.body));
 
     const payment = await paymentOf(reference);
     const [commission] = (await must(admin.from("commission_records").select("id, status, amount").eq("payment_id", payment.id))) ?? [];
-    assertEquals([commission.status, Number(commission.amount)], ["SPLIT", 83.7]);
+    assertEquals([commission.status, Number(commission.amount)], ["SPLIT", 93]);
     // the release reads only SPLIT rows older than 24 h
     await must(admin.from("commission_records").update({ created_at: new Date(Date.now() - 25 * 3_600_000).toISOString() }).eq("id", commission.id));
 
     const settlementId = 7_000_000 + Math.floor(Math.random() * 1_000_000);
     settlementLedger.push({
-      id: settlementId, status: "success", currency: "NGN", total_amount: 8370, settlement_date: new Date().toISOString(),
-      transactions: [{ id: charge.id, reference, amount: 558000, subaccount: { subaccount_code: "ACCT_it01" }, fees_split: charge.fees_split }],
+      id: settlementId, status: "success", currency: "NGN", total_amount: 9300, settlement_date: new Date().toISOString(),
+      transactions: [{ id: charge.id, reference, amount: 620000, subaccount: { subaccount_code: "ACCT_it01" }, fees_split: charge.fees_split }],
     });
     const res = await cron("fintech-commission-release", {});
     const counts = await res.json();

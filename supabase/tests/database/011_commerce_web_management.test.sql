@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(34);
+select plan(35);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -153,8 +153,14 @@ select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-000
 select lives_ok(
   $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000001', ' grace-01 ',
       '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001',
-      'PERCENT', 10, null, null, true)$$,
+      null, null, null, null, true)$$,
   'a TM issues a code for an agent in their territory');
+select throws_ok(
+  $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-00000000000d', 'GRACE-10',
+      '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001',
+      'PERCENT', 10, null, null, true)$$,
+  'P0001', 'Web discounts are switched off: Teafairweb sells at full retail price.',
+  'a code cannot carry a web discount');
 reset role;
 select is(
   (select code || '|' || created_by::text from public.agent_codes
@@ -202,7 +208,7 @@ select throws_ok(
 select lives_ok(
   $$select public.upsert_agent_code('bbbbbbbb-0000-0000-0000-000000000009', 'GRACE-01',
       '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001',
-      'PERCENT', 10, null, null, false)$$,
+      null, null, null, null, false)$$,
   'a TM deactivates a code');
 reset role;
 select is((select is_active from public.agent_codes where code = 'GRACE-01'), false,

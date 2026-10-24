@@ -397,26 +397,37 @@ local only, after the one above.
   carton of 12 at 48,000, quarter carton of 3 at 12,000. 100ml: carton of 24
   at 60,000, quarter carton of 6 at 15,000.
 
-### Web transport fare
+### Teafairweb retail pricing
 
-One migration (`20261024140000_web_transport_fare`), local only. User
-decision 2026-10-24, with the recommended options:
+One migration (`20261024140000_web_retail_pricing`), local only. User
+decisions 2026-10-24: the web is for consumers, at full retail price.
 
-- **Flat fare per web order**, from `tenant_settings.web_transport_fare`:
-  TEAFAIR 750, every other tenant 0 until set. Set by migration only.
-- `web_price_cart` (and so `quote_web_order`) returns `subtotal`, `discount`,
-  `goods_total`, `transport_fare` and `total` (goods plus fare). **Discounts
-  apply to goods only, and the partner's commission (`split.partner_share`)
-  is cut from goods only**, so the fare stays in the merchant's main Paystack
-  account. `web-checkout` needed no change: it charges the quote total.
-- `orders.transport_fare` records it. CHECK: only `ONLINE` orders carry a
-  fare, and it never exceeds `total_amount`. `storefront_catalogue` shows
-  `transport_fare` up front; `place_web_order` returns it; the dispute
-  evidence order header carries it.
-- **Refunds (policy text):** the fare is refunded only if the order is
-  cancelled before dispatch or never delivered; once delivered, it is not
-  refunded, even when goods are. Refunds are issued in Paystack by staff, so
-  this is a policy rule, not a database check.
+- **No web discounts.** Existing link discounts are cleared on push, and a
+  trigger on `agent_codes` refuses new ones: P0001 "Web discounts are switched
+  off: Teafairweb sells at full retail price." (`upsert_agent_code` keeps its
+  signature; pass null.) Web lines are billed at `unit_price`; the cart's
+  `discount` is always 0 and the catalogue has no `discount` key. CHECK
+  `orders_web_no_discount` (NOT VALID, so A1-era orders keep theirs).
+- **Transport fare:** a flat fare per web order from
+  `tenant_settings.web_transport_fare` (TEAFAIR 750, others 0). The cart
+  returns `subtotal`, `discount`, `goods_total`, `transport_fare` and `total`
+  (goods plus fare). `orders.transport_fare` records it; only `ONLINE` orders
+  carry one, never above the total. Refunded only if the order is cancelled
+  before dispatch or never delivered (policy text; staff refund in Paystack).
+- **POS agent bounty:** `tenant_settings.web_agent_bounty` (TEAFAIR 500). When
+  set, a link bound to a POS terminal pays the partner exactly that amount
+  through the Paystack split (`commission_bps` 0, `bps_applied` 0 on the
+  commission record); D1 settlement checks Paystack's share against it as
+  before. When null (other tenants), the partner's `commission_bps` applies to
+  the goods only. The fare is never commissioned. Codeless and DSA links pay
+  no bounty. Everything else goes to the merchant's main account.
+  `web-checkout` needed no change: it charges the quote total and splits
+  `partner_share`.
+- **Evidence bundle:** the order header shows `goods_total`,
+  `discount_amount`, `transport_fare`, `total_amount` and `agent_code_id`;
+  each payment shows `agent_commission`.
+- Ruling: the bounty is a per-tenant setting, like the fare; tenants without
+  one keep D1's percentage. Settings are written by migration only.
 
 ## Layout
 

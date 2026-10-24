@@ -95,10 +95,10 @@ select throws_ok(
 
 -- ── agent_codes ─────────────────────────────────────────────────────────
 select lives_ok(
-  $$insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, discount_type, discount_value, created_by)
+  $$insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, created_by)
     values ('62000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'GRACE-01',
             '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001',
-            'PERCENT', 10, '20000000-0000-0000-0000-000000000001')$$,
+            '20000000-0000-0000-0000-000000000001')$$,
   'a valid code is accepted');
 select throws_ok(
   $$insert into public.agent_codes (tenant_id, code, agent_id, created_by)
@@ -114,12 +114,14 @@ select throws_ok(
   $$insert into public.agent_codes (tenant_id, code, agent_id, discount_type, discount_value, created_by)
     values ('10000000-0000-0000-0000-000000000001', 'GRACE-03', '20000000-0000-0000-0000-000000000004',
             'PERCENT', 150, '20000000-0000-0000-0000-000000000001')$$,
-  '23514', null, 'a percentage discount is at most 100');
+  'P0001', 'Web discounts are switched off: Teafairweb sells at full retail price.',
+  'a code cannot carry a percentage discount');
 select throws_ok(
   $$insert into public.agent_codes (tenant_id, code, agent_id, discount_type, created_by)
     values ('10000000-0000-0000-0000-000000000001', 'GRACE-04', '20000000-0000-0000-0000-000000000004',
             'FIXED', '20000000-0000-0000-0000-000000000001')$$,
-  '23514', null, 'a discount type needs a value');
+  'P0001', 'Web discounts are switched off: Teafairweb sells at full retail price.',
+  'nor a fixed one');
 select throws_ok(
   $$insert into public.agent_codes (tenant_id, code, agent_id, terminal_id, created_by)
     values ('10000000-0000-0000-0000-000000000001', 'CROSS-01', '20000000-0000-0000-0000-000000000004',
