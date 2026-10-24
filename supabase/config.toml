@@ -469,3 +469,12 @@ verify_jwt = false
 
 [functions.web-order-status]
 verify_jwt = false
+
+[functions.support-ticket-attachment]
+verify_jwt = false
+
+[functions.storage-purge]
+verify_jwt = false
+
+[functions.support-staff-attachment]
+verify_jwt = false

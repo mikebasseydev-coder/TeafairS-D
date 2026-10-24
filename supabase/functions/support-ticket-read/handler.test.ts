@@ -11,7 +11,11 @@ function setup(reply: unknown) {
     calls.push([fn, args]);
     return Promise.resolve(reply as T);
   };
-  return { handler: createSupportTicketReadHandler({ rpc, allowedOrigins: [ORIGIN] }), calls };
+  return { handler: createSupportTicketReadHandler({
+      rpc,
+      allowedOrigins: [ORIGIN],
+      signDownload: (bucket, path) => Promise.resolve(`https://s/${bucket}/signed?p=${path.length}`),
+    }), calls };
 }
 
 const post = (handler: (r: Request) => Promise<Response>, b: unknown) =>
@@ -39,4 +43,22 @@ Deno.test("reply passes through and is no-store", async () => {
   assertEquals(await res.json(), reply);
   assertEquals(res.headers.get("cache-control"), "no-store");
   assertEquals(calls, [["read_support_ticket", { p_public_reference: "TK-7K3Q9X", p_secret: SECRET }]]);
+});
+
+Deno.test("read gateway swaps paths for signed URLs", async () => {
+  const reply = {
+    public_reference: "TK-7K3Q9X",
+    messages: [
+      { id: "m1", attachments: [{ attachment_id: "a1", mime_type: "image/png", storage_path: "t/k/p.png" }] },
+      { id: "m2", attachments: [] },
+    ],
+  };
+  const { handler } = setup(reply);
+  const res = await post(handler, { public_reference: "TK-7K3Q9X", secret: SECRET });
+  const text = await res.text();
+  assertEquals(text.includes("t/k/p.png"), false);
+  assertEquals(text.includes("storage_path"), false);
+  assertEquals(JSON.parse(text).messages[0].attachments, [
+    { attachment_id: "a1", mime_type: "image/png", url: "https://s/support-attachments/signed?p=9" },
+  ]);
 });

@@ -25,7 +25,7 @@ Deno.test("a message is forwarded and the reply passes through", async () => {
   const res = await post(handler, body);
   assertEquals([res.status, await res.json()], [200, { message_id: "m1", status: "OPEN" }]);
   assertEquals(calls, [["add_ticket_message", {
-    p_idempotency_key: KEY, p_public_reference: "TK-7K3Q9X", p_secret: SECRET, p_message: "Any update?",
+    p_idempotency_key: KEY, p_public_reference: "TK-7K3Q9X", p_secret: SECRET, p_message: "Any update?", p_attachment_ids: [],
   }]]);
 });
 
@@ -48,4 +48,21 @@ Deno.test("throttle copy is 422", async () => {
   const { handler } = setup(new GatewayError(422, "BUSINESS_RULE", copy));
   const res = await post(handler, body);
   assertEquals([res.status, (await res.json()).error.message], [422, copy]);
+});
+
+Deno.test("message gateway passes attachment_ids", async () => {
+  const ids = ["d0000000-0000-0000-0000-000000000001", "d0000000-0000-0000-0000-000000000002"];
+  const { handler, calls } = setup();
+  const res = await post(handler, { ...body, attachment_ids: ids });
+  assertEquals(res.status, 200);
+  await res.body?.cancel();
+  assertEquals(calls[0][1].p_attachment_ids, ids);
+});
+
+Deno.test("more than 3 attachment_ids is 400", async () => {
+  const id = "d0000000-0000-0000-0000-000000000001";
+  const { handler, calls } = setup();
+  const res = await post(handler, { ...body, attachment_ids: [id, id, id, id] });
+  assertEquals([res.status, calls.length], [400, 0]);
+  await res.body?.cancel();
 });

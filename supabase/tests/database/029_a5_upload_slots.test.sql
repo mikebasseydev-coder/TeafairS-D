@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(95);
+select plan(96);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
@@ -463,6 +463,9 @@ select ok(not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.p
                        where n.nspname = 'public'
                          and (p.prosrc ilike '%allow_delete_query%' or p.prosrc ~* 'delete\s+from\s+storage\.')),
   'no public function deletes from storage');
+
+select ok(exists(select 1 from cron.job where jobname = 'storage-purge' and schedule = '*/15 * * * *'),
+  'storage-purge cron runs every 15 minutes');
 
 select * from finish();
 rollback;
