@@ -8,14 +8,14 @@
 
 ## 1. Intent
 
-Teafair sells **only food and tea** today. Electronics, GSM and airtime are switched off; Teafair holds an NCC licence through one of its companies, which matters for airtime later. A5 does four things:
+Teafair sells **only food, tea and cosmetics** (its coconut oil, NAFDAC-registered for skin, hair and body care) today. Electronics, GSM and airtime are switched off; Teafair holds an NCC licence through one of its companies, which matters for airtime later. A5 does four things:
 1. It gives the web storefront a refund policy that Paystack chargebacks can be defended against.
 2. It lets buyers prove transit damage with photos inside the support chat.
 3. It records when a web order left the warehouse and when it reached the buyer.
 4. It sends buyer messages over WhatsApp first and falls back to SMS.
 
 **Goals**
-- A refund policy stored in the database with versions. The first version is `v2.0-food`.
+- A refund policy stored in the database with versions. The first version is `v2.0-food-cosmetics`.
 - Consent is required on every web order and recorded, with the buyer's IP kept A2-private.
 - A product category on every product. Only categories covered by an active policy can be sold.
 - Photo attachments on support-ticket messages, from buyers and staff.
@@ -41,8 +41,8 @@ Teafair sells **only food and tea** today. Electronics, GSM and airtime are swit
 
 ## 2. Decisions locked by the user (2026-10-23)
 
-1. **Categories.** Only food and tea are on sale. `FOOD` is live, while `ELECTRONICS` and `TELECOM` are defined but not sellable.
-2. **The policy lives in Postgres.** The first version is `v2.0-food`. The web checkout requires consent, and the consent record must satisfy Paystack's chargeback evidence standard.
+1. **Categories.** Only food, tea and cosmetics are on sale. `FOOD` and `COSMETICS` are live (user decision 2026-10-23, for the coconut oil), while `ELECTRONICS` and `TELECOM` are defined but not sellable.
+2. **The policy lives in Postgres.** The first version is `v2.0-food-cosmetics`. The web checkout requires consent, and the consent record must satisfy Paystack's chargeback evidence standard.
 3. **Photos.** Buyers and staff may attach photos inside the support chat: up to 3 per message, JPEG, PNG or WebP, at most 5 MB each. They live in a private Storage bucket and follow the existing ticket access rules.
 4. **Fulfilment.** Every web order goes `PAID → IN_TRANSIT → DELIVERED`.
    - Dispatch generates a 4-digit delivery PIN and sends it to the buyer.
@@ -69,13 +69,13 @@ The columns are:
 Rules:
 - Exactly one row may be active. A partial unique index on `(is_active) where is_active` enforces it.
 - Versions are written by migration or seed only. There is no RPC for them, because the platform has no policy-editing role.
-- The migration seeds `v2.0-food` as active with `{FOOD}`. It covers the general terms (Paystack refunds to the original source within 5–7 business days of approval, and contacting support before opening a bank dispute) and the food terms (opened items are non-refundable, and transit damage must be reported within 24 hours of delivery with photos).
+- The migration seeds `v2.0-food-cosmetics` as active with `{FOOD,COSMETICS}`. It covers the general terms (Paystack refunds to the original source within 5–7 business days of approval, contacting support before opening a bank dispute, and products being sold for the use on their label and NAFDAC registration, so other uses are not grounds for a refund) and the food terms (opened items are non-refundable, and transit damage must be reported within 24 hours of delivery with photos), and the cosmetics terms (opened or used items are non-refundable for hygiene, check ingredients and patch-test, a reaction to a listed ingredient is not grounds for a refund, natural oils solidifying in cool weather is not a defect, and damage or leaks must be reported within 24 hours with photos).
 - **The seeded wording is a placeholder that must be reviewed by counsel before go-live** *(builder's call)*.
 - Reads: there is no `anon` grant. The storefront reads the active policy through the public gateway `storefront-refund-policy`, a GET whose response has `cache-control: public, max-age=300`. It calls the service-role RPC `web_active_refund_policy()`, which returns `{version_tag, title, content, categories, published_at}`.
 
 ### 3.2 Product categories
 
-- Add `central_products.sale_category text not null default 'FOOD' check (sale_category in ('FOOD','ELECTRONICS','TELECOM'))`.
+- Add `central_products.sale_category text not null default 'FOOD' check (sale_category in ('FOOD','COSMETICS','ELECTRONICS','TELECOM'))`.
 - The existing free-text `category` stays as the merchandising label.
 - A category is **sellable** when the active policy's `categories` contains it.
 - `place_web_order` refuses any line whose product is not sellable, with P0001 `This product is not available to order yet.`
@@ -97,7 +97,7 @@ Rules:
 
 ### 3.5 WhatsApp phone verification at checkout
 
-**Policy clause.** `v2.0-food` states that the buyer must give a WhatsApp number they control. Order updates and the delivery code are sent there. An order that cannot be completed because the number given was not reachable on WhatsApp is not grounds for a refund dispute.
+**Policy clause.** `v2.0-food-cosmetics` states that the buyer must give a WhatsApp number they control. Order updates and the delivery code are sent there. An order that cannot be completed because the number given was not reachable on WhatsApp is not grounds for a refund dispute.
 
 **Table.** `web_phone_verifications` is a platform table with RLS on, no policy and no grant. Its columns are:
 - `id`;
@@ -135,7 +135,7 @@ Rules:
 
 ### 3.4 Category disclaimers
 
-The catalogue response carries `refund_note` per sellable category, taken from the active policy. For FOOD it reads: `Opened food items can't be refunded. Report transit damage within 24 hours of delivery with photos.` Telecom and electronics notes arrive with their policy versions. The client shows them in the checkout summary.
+The catalogue response carries `refund_note` per sellable category, taken from the active policy. For FOOD it reads: `Opened food items can't be refunded. Report transit damage within 24 hours of delivery with photos.` For COSMETICS: `Opened or used cosmetics can't be refunded. Patch-test before first use. Report damage or leaks within 24 hours of delivery with photos.` Telecom and electronics notes arrive with their policy versions. The client shows them in the checkout summary.
 
 ## 4. Support photo attachments (A3 extension)
 

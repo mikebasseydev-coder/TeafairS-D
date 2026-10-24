@@ -141,7 +141,7 @@ Test conventions:
 - **Produces `public.refund_policies`**, as in spec §3.1:
   - a `version_tag` CHECK;
   - a partial unique index `(is_active) where is_active`.
-- **Seeds `v2.0-food`**: active, `categories = '{FOOD}'`, `published_at = now()`.
+- **Seeds `v2.0-food-cosmetics`**: active, `categories = '{FOOD}'`, `published_at = now()`.
   - The placeholder Markdown covers the general terms (§3.1), the food terms (§3.1) and the WhatsApp clause (§3.5).
   - The first line reads `<!-- PLACEHOLDER: requires legal review before go-live -->`.
 - **Access to `refund_policies`:** RLS is on, with no policy and no grant.
@@ -159,7 +159,7 @@ Test conventions:
 
   ```sql
   select is((select count(*) from refund_policies where is_active), 1::bigint, 'one active policy');
-  select is(public.web_active_refund_policy() ->> 'version_tag', 'v2.0-food', 'v2.0-food is active');
+  select is(public.web_active_refund_policy() ->> 'version_tag', 'v2.0-food-cosmetics', 'v2.0-food-cosmetics is active');
   select throws_ok(<insert second active policy>, '23505', null, 'only one active policy');
   select throws_ok(<insert version_tag 'food'>, '23514', null, 'version tag format');
   select ok(public.web_category_sellable('FOOD') and not public.web_category_sellable('ELECTRONICS') and not public.web_category_sellable('TELECOM'), 'only FOOD sellable');
@@ -167,12 +167,12 @@ Test conventions:
   select ok(<storefront_catalogue(null) excludes a product set to ELECTRONICS>, 'unsellable products hidden');
   select is(<storefront_catalogue(null) -> 'refund_notes' ->> 'FOOD'>, 'Opened food items can''t be refunded. Report transit damage within 24 hours of delivery with photos.', 'food note');
   select ok(not has_table_privilege('anon', 'public.refund_policies', 'select') and not has_table_privilege('authenticated', 'public.refund_policies', 'select'), 'policy table not client-readable');
-  select ok(position('PLACEHOLDER' in (select content from refund_policies where version_tag='v2.0-food')) > 0, 'seed marked for legal review');
+  select ok(position('PLACEHOLDER' in (select content from refund_policies where version_tag='v2.0-food-cosmetics')) > 0, 'seed marked for legal review');
   ```
 - [ ] **Step 2: Run it** with `docker exec -i supabase_db_teafair psql -U postgres -qAt < supabase/tests/database/027_a5_policy_checkout.test.sql`. Expected: FAIL, because the relation does not exist.
 - [ ] **Step 3: Write the migration** and update 001.
 - [ ] **Step 4: Run** `supabase migration up`, then 027, then `supabase db reset && supabase test db`. Expected: PASS. Baseline: 26 files, 1065 tests.
-- [ ] **Step 5: Commit** with `feat(db): refund policy v2.0-food, sellable product categories (A5 §3.1–3.2)`.
+- [ ] **Step 5: Commit** with `feat(db): refund policy v2.0-food-cosmetics, sellable product categories (A5 §3.1–3.2)`.
 
 ---
 

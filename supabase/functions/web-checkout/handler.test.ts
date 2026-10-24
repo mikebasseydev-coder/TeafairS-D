@@ -59,7 +59,7 @@ const order = (over: Record<string, unknown> = {}) => ({
   payment_route: "PAYSTACK_WEB",
   turnstile_token: "tok",
   accept_refund_policy: true,
-  policy_version_tag: "v2.0-food",
+  policy_version_tag: "v2.0-food-cosmetics",
   phone_verification_token: TOKEN,
   ...over,
 });
@@ -94,7 +94,7 @@ Deno.test("Paystack route: verify, quote, initialize with split, then place", as
     p_payment_route: "PAYSTACK_WEB",
     p_expected_total: 5580,
     p_accepted_refund_policy: true,
-    p_policy_version_tag: "v2.0-food",
+    p_policy_version_tag: "v2.0-food-cosmetics",
     p_client_ip: "1.2.3.4",
     p_phone_verification_token: TOKEN,
     p_checkout: { reference: "TFW-FIXED", access_code: "ac_1", authorization_url: "https://checkout.paystack.com/ac_1",

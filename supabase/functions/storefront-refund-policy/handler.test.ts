@@ -4,7 +4,7 @@ import { createStorefrontRefundPolicyHandler } from "./handler.ts";
 
 const ORIGIN = "https://teafairweb.com";
 const POLICY = {
-  version_tag: "v2.0-food",
+  version_tag: "v2.0-food-cosmetics",
   title: "Refunds",
   content: "...",
   categories: ["FOOD"],

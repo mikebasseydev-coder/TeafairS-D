@@ -180,12 +180,14 @@ Seven migrations (`20261023120000`–`20261023120500`, plus `120310`) and the
 functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
 `open_support_ticket`, `add_ticket_message` and `reply_ticket`).
 
-- **Refund policy.** `refund_policies` holds `v2.0-food` (FOOD only, sellable
-  categories on `central_products.sale_category`). `storefront-refund-policy`
+- **Refund policy.** `refund_policies` holds `v2.0-food-cosmetics` (FOOD and COSMETICS sellable; the
+  category is `central_products.sale_category`). `storefront-refund-policy`
   (GET, cached 5 min) returns the active policy. **The policy text is a
   placeholder and needs legal review before go-live.** Food copy: "Opened food
   items can't be refunded. Report transit damage within 24 hours of delivery
-  with photos." **Versions are immutable (R20):** a trigger refuses DELETE,
+  with photos." Cosmetics copy: "Opened or used cosmetics can't be refunded.
+  Patch-test before first use. Report damage or leaks within 24 hours of
+  delivery with photos." **Versions are immutable (R20):** a trigger refuses DELETE,
   TRUNCATE and any UPDATE except `is_active` (and `published_at` when
   activating). New wording ships as a new version (`v2.1-food`, and so on),
   inserted inactive and then activated while the old one is deactivated.
@@ -260,12 +262,17 @@ functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
    `20261023120100`: `select count(*) from orders where channel = 'ONLINE' and created_at >= '2026-10-23' and policy_version_tag is null;`
    If not, move the cut-off constant to the push date in a new migration.
 4. **Pre-push catalogue check (R21).** `sale_category` defaults to `FOOD`, so
-   every existing product becomes sellable under `v2.0-food` on push. List the
+   every existing product becomes sellable under `v2.0-food-cosmetics` on push. List the
    active catalogue per tenant first:
    `select t.code, p.sku_code, p.product_name, p.category from central_products p join tenants t on t.id = p.tenant_id where p.is_active order by t.code, p.category, p.sku_code;`
-   Every SKU that is not food or tea gets reclassified to `ELECTRONICS` or
-   `TELECOM`, or deactivated, in the same release window. **Post-push:** rerun
-   it with `p.sale_category` added and confirm that only food is `FOOD`. Every
+   Every SKU that is not food or tea gets reclassified to `COSMETICS`,
+   `ELECTRONICS` or `TELECOM`, or deactivated, in the same release window. A
+   product's category follows its NAFDAC registration and label, not every
+   use buyers find for it (user decision 2026-10-23: the coconut oil is
+   registered and branded for skin, hair and body, so it is **`COSMETICS`**,
+   not `FOOD`). **Post-push:** rerun
+   it with `p.sale_category` added and confirm that only food is `FOOD` and
+   the coconut oil is `COSMETICS`. Every
    later catalogue load must set `sale_category` explicitly; never rely on the
    default.
 5. **Pre-deploy staging check on the client IP (R19).** On staging, call a
@@ -279,7 +286,7 @@ functions below are local only. **A5 deploys after A3 and A4** (it changes A3's
    `WHATSAPP_*` secrets as function secrets; then deploy the functions.
 7. Legal review of the placeholder policy text. Versions are immutable (R20),
    so counsel's text ships as a **new version**, e.g. `v2.1-food`, in a new
-   migration that inserts it inactive, deactivates `v2.0-food` and activates
+   migration that inserts it inactive, deactivates `v2.0-food-cosmetics` and activates
    the new one in the same transaction.
 
 **For Spec B (client).** Checkout must send the consent fields and run the

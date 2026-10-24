@@ -12,7 +12,7 @@ select plan(56);
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
 begin
   if new.channel = 'ONLINE' then
-    new.policy_version_tag := coalesce(new.policy_version_tag, 'v2.0-food');
+    new.policy_version_tag := coalesce(new.policy_version_tag, 'v2.0-food-cosmetics');
     new.policy_accepted_at := coalesce(new.policy_accepted_at, now());
   end if;
   return new;

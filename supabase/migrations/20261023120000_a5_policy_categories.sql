@@ -59,33 +59,41 @@ create trigger refund_policies_no_truncate
 -- PLACEHOLDER wording: counsel must review it before go-live.
 insert into public.refund_policies (version_tag, title, content, categories, is_active, published_at)
 values (
-  'v2.0-food',
-  'Refund policy for food orders',
+  'v2.0-food-cosmetics',
+  'Refund policy for food and cosmetics orders',
   $md$<!-- PLACEHOLDER: requires legal review before go-live -->
-# Refund policy for food orders
+# Refund policy for food and cosmetics orders
 
 ## General terms
 
 - Approved refunds are paid back to the original payment source through Paystack within 5 to 7 business days of approval.
 - If you have a problem with an order, contact Teafair support first, before you open a dispute with your bank. We will work to resolve it quickly.
+- Products are sold for the use stated on their label and in their NAFDAC registration. A problem that arises from using a product any other way (for example, eating a product sold for skin, hair or body care) is not grounds for a refund.
 
 ## Food orders
 
 - Opened food items cannot be refunded.
 - If food is damaged in transit, report it within 24 hours of delivery and include photos of the damage.
 
+## Cosmetics (skin, hair and body care)
+
+- For hygiene reasons, opened or used cosmetic items cannot be refunded.
+- Check the ingredient list before you buy, and patch-test a small area of skin before first use. Stop using the product if irritation occurs. A reaction to a listed ingredient is not grounds for a refund.
+- Natural oils such as coconut oil turn solid or cloudy in cool weather and melt again when warm. This is normal and is not a defect.
+- If a cosmetic item is damaged or leaking on arrival, report it within 24 hours of delivery and include photos.
+
 ## WhatsApp number
 
 - You must give a WhatsApp number that you control. Order updates and your delivery code are sent to that number.
 - If an order cannot be completed because the number you gave was not reachable on WhatsApp, that is not grounds for a refund dispute.
 $md$,
-  '{FOOD}', true, now());
+  '{FOOD,COSMETICS}', true, now());
 
 -- ── product categories ──────────────────────────────────────────────────
 -- The free-text `category` stays as the merchandising label.
 alter table public.central_products
   add column sale_category text not null default 'FOOD'
-    check (sale_category in ('FOOD', 'ELECTRONICS', 'TELECOM'));
+    check (sale_category in ('FOOD', 'COSMETICS', 'ELECTRONICS', 'TELECOM'));
 
 -- ── internal: is a category covered by the active policy? ───────────────
 create function public.web_category_sellable(p_category text)
@@ -151,9 +159,10 @@ begin
     'refund_notes', coalesce((
       select jsonb_object_agg(c, case c
                when 'FOOD' then 'Opened food items can''t be refunded. Report transit damage within 24 hours of delivery with photos.'
+               when 'COSMETICS' then 'Opened or used cosmetics can''t be refunded. Patch-test before first use. Report damage or leaks within 24 hours of delivery with photos.'
              end)
         from public.refund_policies rp, unnest(rp.categories) as c
-       where rp.is_active and c = 'FOOD'), '{}'::jsonb));
+       where rp.is_active and c in ('FOOD', 'COSMETICS')), '{}'::jsonb));
 end;
 $$;
 

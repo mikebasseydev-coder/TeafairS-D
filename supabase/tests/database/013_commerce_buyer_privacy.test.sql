@@ -11,7 +11,7 @@ select plan(35);
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
 begin
   if new.channel = 'ONLINE' then
-    new.policy_version_tag := coalesce(new.policy_version_tag, 'v2.0-food');
+    new.policy_version_tag := coalesce(new.policy_version_tag, 'v2.0-food-cosmetics');
     new.policy_accepted_at := coalesce(new.policy_accepted_at, now());
   end if;
   return new;
@@ -37,7 +37,7 @@ begin
             encode(extensions.digest(v_tok, 'sha256'), 'hex'), now() + interval '30 minutes');
   end if;
   return public.place_web_order(p_key, p_code, p_items, p_customer, p_utm, p_route, p_total, p_checkout, p_lga,
-                                true, 'v2.0-food', '10.0.0.9'::inet, v_tok);
+                                true, 'v2.0-food-cosmetics', '10.0.0.9'::inet, v_tok);
 end;
 $f$;
 grant execute on function pg_temp.pwo(uuid, text, jsonb, jsonb, jsonb, text, numeric, jsonb, uuid) to service_role;

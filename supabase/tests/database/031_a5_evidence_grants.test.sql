@@ -45,7 +45,7 @@ insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amoun
   ('90000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'ONLINE',
    '20000000-0000-0000-0000-000000000004', 1000, 'DELIVERED', 'PAYSTACK_WEB', 'TF-AAAAAA',
    md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',
-   'v2.0-food', '2026-10-23 10:00+00');
+   'v2.0-food-cosmetics', '2026-10-23 10:00+00');
 insert into public.order_items (tenant_id, order_id, sku_code, qty, unit_price) values
   ('7eaf0000-0000-4000-8000-000000000001', '90000000-0000-0000-0000-000000000001', 'TEA-1', 2, 500);
 insert into public.order_contacts (order_id, tenant_id, territory_id, customer_name, customer_phone, customer_email,
@@ -99,7 +99,7 @@ returns jsonb language sql as $$ select public.get_order_dispute_evidence(p_orde
 grant execute on function pg_temp.ev(uuid) to authenticated;
 
 -- ── the ZSM gets every block ────────────────────────────────────────────
-create temp table pol as select content from public.refund_policies where version_tag = 'v2.0-food';
+create temp table pol as select content from public.refund_policies where version_tag = 'v2.0-food-cosmetics';
 grant select on pol to authenticated;
 call pg_temp.as_user(1);
 create temp table ev as select pg_temp.ev() as b;
@@ -114,7 +114,7 @@ select is((select jsonb_array_length(b -> 'refunds') from ev), 1, 'one refund');
 select is((select b -> 'refunds' -> 0 ->> 'refund_id' from ev), 'rf_1', 'refund id');
 select is((select b -> 'refunds' -> 0 ->> 'kind' from ev), 'PARTIAL', 'refund kind');
 select is((select b -> 'refunds' -> 0 ->> 'amount_minor' from ev), '20000', 'refund amount');
-select is((select b -> 'consent' ->> 'policy_version_tag' from ev), 'v2.0-food', 'consent policy tag');
+select is((select b -> 'consent' ->> 'policy_version_tag' from ev), 'v2.0-food-cosmetics', 'consent policy tag');
 select ok((select b -> 'consent' ->> 'policy_accepted_at' from ev) is not null, 'consent accepted at');
 select is((select b -> 'consent' ->> 'consent_ip' from ev), '203.0.113.7', 'consent ip');
 select is((select b -> 'consent' ->> 'content' from ev),
@@ -148,7 +148,7 @@ insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amoun
   ('90000000-0000-0000-0000-000000000002', '7eaf0000-0000-4000-8000-000000000001', 'ONLINE',
    '20000000-0000-0000-0000-000000000004', 500, 'PAID', 'PAYSTACK_WEB', 'TF-AAAAAB',
    md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',
-   'v2.0-food', now());
+   'v2.0-food-cosmetics', now());
 call pg_temp.as_user(1);
 select is((select pg_temp.ev('90000000-0000-0000-0000-000000000002') -> 'tickets'), '[]'::jsonb, 'no tickets: empty array');
 select is((select pg_temp.ev('90000000-0000-0000-0000-000000000002') -> 'fulfilment'), 'null'::jsonb, 'no fulfilment: null');

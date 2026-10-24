@@ -2,21 +2,22 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(56);
+select plan(58);
 
 -- the TEAFAIR tenant is seeded in every environment (005)
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price)
 select t.id, v.sku, v.name, 'Teafair', v.cat, v.price, v.wholesale
   from public.tenants t,
        (values ('TEA-1', 'Black tea', 'Beverages', 500, 400),
-               ('GAD-1', 'Charger',   'Gadgets',    900, 700)) as v(sku, name, cat, price, wholesale)
+               ('GAD-1', 'Charger',   'Gadgets',    900, 700),
+               ('OIL-1', 'Coconut oil', 'Skin care', 1500, 1200)) as v(sku, name, cat, price, wholesale)
  where t.code = 'TEAFAIR';
 
-create temp table pol0 as select content from public.refund_policies where version_tag = 'v2.0-food';
+create temp table pol0 as select content from public.refund_policies where version_tag = 'v2.0-food-cosmetics';
 
 -- T1
 select is((select count(*) from public.refund_policies where is_active), 1::bigint, 'one active policy');
-select is(public.web_active_refund_policy() ->> 'version_tag', 'v2.0-food', 'v2.0-food is active');
+select is(public.web_active_refund_policy() ->> 'version_tag', 'v2.0-food-cosmetics', 'v2.0-food-cosmetics is active');
 select throws_ok(
   $$insert into public.refund_policies (version_tag, title, content, categories, is_active)
     values ('v2.1-food', 'Second', 'x', '{FOOD}', true)$$,
@@ -25,28 +26,36 @@ select throws_ok(
   $$insert into public.refund_policies (version_tag, title, content, categories)
     values ('food', 'Bad tag', 'x', '{FOOD}')$$,
   '23514', null, 'version tag format');
-select ok(public.web_category_sellable('FOOD') and not public.web_category_sellable('ELECTRONICS')
-          and not public.web_category_sellable('TELECOM'), 'only FOOD sellable');
+select ok(public.web_category_sellable('FOOD') and public.web_category_sellable('COSMETICS')
+          and not public.web_category_sellable('ELECTRONICS')
+          and not public.web_category_sellable('TELECOM'), 'only FOOD and COSMETICS sellable');
 select throws_ok(
   $$update public.central_products set sale_category = 'TOYS' where sku_code = 'TEA-1'$$,
   '23514', null, 'category set is fixed');
 
 update public.central_products set sale_category = 'ELECTRONICS' where sku_code = 'GAD-1';
+update public.central_products set sale_category = 'COSMETICS' where sku_code = 'OIL-1';
+select ok(exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e
+                   where e ->> 'sku_code' = 'OIL-1'),
+  'cosmetics products listed');
 select ok(
   exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e
            where e ->> 'sku_code' = 'TEA-1')
   and not exists (select 1 from jsonb_array_elements(public.storefront_catalogue(null) -> 'products') e
                    where e ->> 'sku_code' = 'GAD-1')
-  and public.storefront_catalogue(null) -> 'refund_policy' ->> 'version_tag' = 'v2.0-food',
+  and public.storefront_catalogue(null) -> 'refund_policy' ->> 'version_tag' = 'v2.0-food-cosmetics',
   'unsellable products hidden');
 select is(public.storefront_catalogue(null) -> 'refund_notes' ->> 'FOOD',
   'Opened food items can''t be refunded. Report transit damage within 24 hours of delivery with photos.',
   'food note');
+select is(public.storefront_catalogue(null) -> 'refund_notes' ->> 'COSMETICS',
+  'Opened or used cosmetics can''t be refunded. Patch-test before first use. Report damage or leaks within 24 hours of delivery with photos.',
+  'cosmetics note');
 select ok(not has_table_privilege('anon', 'public.refund_policies', 'select')
       and not has_table_privilege('authenticated', 'public.refund_policies', 'select')
       and not has_table_privilege('service_role', 'public.refund_policies', 'select'),
   'policy table not readable by any API role');
-select ok(position('PLACEHOLDER' in (select content from public.refund_policies where version_tag = 'v2.0-food')) > 0,
+select ok(position('PLACEHOLDER' in (select content from public.refund_policies where version_tag = 'v2.0-food-cosmetics')) > 0,
   'seed marked for legal review');
 
 -- ══ T2: WhatsApp verification and consent on web orders (§3.3, §3.5, §3.6) ═
@@ -90,7 +99,7 @@ $$;
 grant execute on function pg_temp.vid(text) to service_role;
 -- place a one-line Paystack order on the house code
 create function pg_temp.place(p_key uuid, p_phone text, p_token text,
-                              p_accept boolean default true, p_tag text default 'v2.0-food',
+                              p_accept boolean default true, p_tag text default 'v2.0-food-cosmetics',
                               p_sku text default 'TEA-1', p_ip inet default '10.0.0.9')
 returns jsonb language sql as $$
   select public.place_web_order(p_key, 'ZSM-A5',
@@ -171,9 +180,9 @@ select is(
   (select o.policy_version_tag || '|' || (o.policy_accepted_at is not null)
      from public.orders o join public.order_contacts c on c.order_id = o.id
     where c.customer_phone = '+2348033333333'),
-  'v2.0-food|true', 'the order records the policy it was accepted under');
+  'v2.0-food-cosmetics|true', 'the order records the policy it was accepted under');
 select ok(
-  (select a.after ->> 'policy_version_tag' = 'v2.0-food' and a.after ? 'policy_accepted_at'
+  (select a.after ->> 'policy_version_tag' = 'v2.0-food-cosmetics' and a.after ? 'policy_accepted_at'
           and (a.after ->> 'phone_verified')::boolean
           and a.after::text not like '%10.0.0.9%' and a.after::text not like '%consent_ip%'
      from public.audit_logs a
@@ -205,7 +214,7 @@ select throws_ok($$select pg_temp.place('a5a50000-0000-0000-0000-000000000005', 
   'P0001', 'You must accept the refund policy to place an order.', 'consent required');
 select throws_ok($$select pg_temp.place('a5a50000-0000-0000-0000-000000000006', '+2348044444444', 'tok-D', true, 'v1.0-old')$$,
   'P0001', 'The refund policy has changed. Please review it and try again.', 'stale policy refused');
-select throws_ok($$select pg_temp.place('a5a50000-0000-0000-0000-000000000007', '+2348044444444', 'tok-D', true, 'v2.0-food', 'GAD-1')$$,
+select throws_ok($$select pg_temp.place('a5a50000-0000-0000-0000-000000000007', '+2348044444444', 'tok-D', true, 'v2.0-food-cosmetics', 'GAD-1')$$,
   'P0001', 'This product is not available to order yet.', 'unsellable refused');
 
 -- the refused calls above did not burn the good token; D can still order
@@ -214,7 +223,7 @@ select is(pg_temp.place('a5a50000-0000-0000-0000-000000000008', '+2348044444444'
 
 -- replay keeps the original consent, even with a new policy and a new token/IP
 reset role;
-update public.refund_policies set is_active = false where version_tag = 'v2.0-food';
+update public.refund_policies set is_active = false where version_tag = 'v2.0-food-cosmetics';
 insert into public.refund_policies (version_tag, title, content, categories, is_active)
 values ('v2.1-food', 'Second', 'x', '{FOOD}', true);
 select pg_temp.as_service();
@@ -224,7 +233,7 @@ select is(pg_temp.place('a5a50000-0000-0000-0000-000000000001', '+2348033333333'
   'replay of the first key returns the original order');
 reset role;
 select is((select o.policy_version_tag from public.orders o join public.order_contacts c on c.order_id = o.id
-            where c.customer_phone = '+2348033333333'), 'v2.0-food', 'the original consent is kept');
+            where c.customer_phone = '+2348033333333'), 'v2.0-food-cosmetics', 'the original consent is kept');
 
 -- the cut-off CHECK and grants
 select throws_ok(
@@ -250,32 +259,32 @@ select ok(to_regprocedure('public.place_web_order(uuid,text,jsonb,jsonb,jsonb,te
 
 -- ══ R20: policy versions are immutable ══════════════════════════════════
 reset role;
-select throws_ok($$update public.refund_policies set content = 'edited' where version_tag = 'v2.0-food'$$,
-  'P0001', 'refund policy v2.0-food is immutable: publish a new version (e.g. v2.1-food) instead of editing it',
+select throws_ok($$update public.refund_policies set content = 'edited' where version_tag = 'v2.0-food-cosmetics'$$,
+  'P0001', 'refund policy v2.0-food-cosmetics is immutable: publish a new version (e.g. v2.1-food) instead of editing it',
   'content cannot be edited');
-select throws_ok($$update public.refund_policies set title = 'edited' where version_tag = 'v2.0-food'$$,
+select throws_ok($$update public.refund_policies set title = 'edited' where version_tag = 'v2.0-food-cosmetics'$$,
   'P0001', null, 'title cannot be edited');
-select throws_ok($$update public.refund_policies set categories = '{FOOD,ELECTRONICS}' where version_tag = 'v2.0-food'$$,
+select throws_ok($$update public.refund_policies set categories = '{FOOD,ELECTRONICS}' where version_tag = 'v2.0-food-cosmetics'$$,
   'P0001', null, 'categories cannot be edited');
-select throws_ok($$update public.refund_policies set version_tag = 'v2.9-food' where version_tag = 'v2.0-food'$$,
+select throws_ok($$update public.refund_policies set version_tag = 'v2.9-food' where version_tag = 'v2.0-food-cosmetics'$$,
   'P0001', null, 'version_tag cannot be edited');
 select throws_ok($$update public.refund_policies set published_at = now() - interval '1 day' where version_tag = 'v2.1-food'$$,
   'P0001', null, 'published_at cannot move outside activation');
-select throws_ok($$delete from public.refund_policies where version_tag = 'v2.0-food'$$,
+select throws_ok($$delete from public.refund_policies where version_tag = 'v2.0-food-cosmetics'$$,
   'P0001', 'refund policy versions cannot be deleted; publish a new version and activate it instead',
   'versions cannot be deleted');
 set local client_min_messages = warning;  -- the cascade NOTICEs, before the trigger refuses
 select throws_ok($$truncate public.refund_policies cascade$$, 'P0001', null, 'versions cannot be truncated');
 reset client_min_messages;
-select is((select content from public.refund_policies where version_tag = 'v2.0-food'),
+select is((select content from public.refund_policies where version_tag = 'v2.0-food-cosmetics'),
   (select content from pol0), 'the consented text is unchanged');
 
 -- toggling is allowed, and activation may stamp published_at
 update public.refund_policies set is_active = false where version_tag = 'v2.1-food';
 update public.refund_policies set is_active = true, published_at = timestamptz '2026-11-01 00:00:00+00'
- where version_tag = 'v2.0-food';
-select is(public.web_active_refund_policy() ->> 'version_tag', 'v2.0-food', 'deactivate and reactivate work');
-select is((select published_at from public.refund_policies where version_tag = 'v2.0-food'),
+ where version_tag = 'v2.0-food-cosmetics';
+select is(public.web_active_refund_policy() ->> 'version_tag', 'v2.0-food-cosmetics', 'deactivate and reactivate work');
+select is((select published_at from public.refund_policies where version_tag = 'v2.0-food-cosmetics'),
   timestamptz '2026-11-01 00:00:00+00', 'activation stamps published_at');
 
 -- ══ retention: web_phone_verifications older than 7 days go ═════════════
