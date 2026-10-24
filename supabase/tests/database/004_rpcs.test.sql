@@ -54,7 +54,8 @@ grant execute on function pg_temp.act_as(uuid, uuid) to authenticated;
 -- ── contract shape (§3.3) ───────────────────────────────────────────────
 -- every RPC the app may call takes the idempotency key first and no tenant;
 -- the exemptions are reads: pos_order_lookup (addendum A2 §4.2) and
--- list_my_chat_channels (addendum A4 §4.5)
+-- list_my_chat_channels (addendum A4 §4.5) and get_order_dispute_evidence
+-- (addendum A5 §6: a read that audits the view, so no idempotency)
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
@@ -62,6 +63,7 @@ select is(
       and p.prorettype = 'jsonb'::regtype
       and p.oid <> 'public.pos_order_lookup(text)'::regprocedure
       and p.oid <> 'public.list_my_chat_channels()'::regprocedure
+      and p.oid <> 'public.get_order_dispute_evidence(uuid)'::regprocedure
       and (p.proargnames[1] is distinct from 'p_idempotency_key'
            or p.proargtypes[0] <> 'uuid'::regtype)),
   0, 'every app-callable RPC takes p_idempotency_key uuid first');
