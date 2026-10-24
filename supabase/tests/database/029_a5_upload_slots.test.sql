@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(78);
+select plan(95);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
@@ -130,6 +130,12 @@ select is((select row(public, file_size_limit, allowed_mime_types)::text from st
   row(false, 5242880::bigint, array['image/jpeg', 'image/png', 'image/webp'])::text, 'support-attachments is private, 5 MB, images');
 select is((select row(public, file_size_limit, allowed_mime_types)::text from storage.buckets where id = 'delivery-proofs'),
   row(false, 5242880::bigint, array['image/jpeg', 'image/png', 'image/webp'])::text, 'delivery-proofs is private, 5 MB, images');
+select is((select count(*)::int from storage.buckets
+            where id in ('support-attachments', 'delivery-proofs') and public = false), 2, 'both buckets are private');
+select ok(has_function_privilege('authenticated', 'public.my_support_attachment_paths()', 'execute')
+      and not has_function_privilege('anon', 'public.my_support_attachment_paths()', 'execute')
+      and not has_function_privilege('service_role', 'public.my_support_attachment_paths()', 'execute'),
+  'my_support_attachment_paths is for authenticated');
 select ok(exists(select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects'
                   and policyname = 'support_attachments_select' and cmd = 'SELECT' and roles = '{authenticated}'),
   'staff download policy exists');
@@ -155,10 +161,11 @@ select ok(not has_function_privilege('authenticated', 'public.claim_support_atta
       and not has_function_privilege('service_role', 'public.cleanup_pending_upload_slots()', 'execute')
       and not has_function_privilege('anon', 'public.cleanup_pending_upload_slots()', 'execute'),
   'the claim and the cleanup are internal');
--- the re-created A3 RPCs keep their grants
-select ok(has_function_privilege('service_role', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute')
-      and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute')
-      and not has_function_privilege('anon', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute')
+-- the re-created A3 RPCs keep their grants; open_support_ticket keeps its A3 signature
+select ok(has_function_privilege('service_role', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute')
+      and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute')
+      and not has_function_privilege('anon', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute')
+      and to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])') is null
       and has_function_privilege('service_role', 'public.add_ticket_message(uuid,text,text,text,uuid[])', 'execute')
       and not has_function_privilege('authenticated', 'public.add_ticket_message(uuid,text,text,text,uuid[])', 'execute')
       and not has_function_privilege('anon', 'public.add_ticket_message(uuid,text,text,text,uuid[])', 'execute'),
@@ -167,8 +174,7 @@ select ok(has_function_privilege('authenticated', 'public.reply_ticket(uuid,uuid
       and has_function_privilege('service_role', 'public.reply_ticket(uuid,uuid,text,uuid[])', 'execute')
       and not has_function_privilege('anon', 'public.reply_ticket(uuid,uuid,text,uuid[])', 'execute'),
   'reply_ticket keeps its grants');
-select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)') is null
-      and to_regprocedure('public.add_ticket_message(uuid,text,text,text)') is null
+select ok(to_regprocedure('public.add_ticket_message(uuid,text,text,text)') is null
       and to_regprocedure('public.reply_ticket(uuid,uuid,text)') is null,
   'the old signatures are gone');
 
@@ -237,13 +243,9 @@ select throws_ok($$select public.add_ticket_message(pg_temp.k(35), current_setti
 select throws_ok($$select public.add_ticket_message(pg_temp.k(36), current_setting('t.r1'), 's3cret', 'see photo',
                                                     array[pg_temp.slot(12), pg_temp.slot(12)])$$,
   'P0001', 'That photo isn''t available.', 'the same slot twice');
--- fix the object for slot 10 (re-upload with the right size)
-do $$ begin
-  perform set_config('storage.allow_delete_query', 'true', true);
-  delete from storage.objects where name = (select storage_path from public.upload_slots where id = pg_temp.slot(10));
-  perform set_config('storage.allow_delete_query', 'false', true);
-end $$;
-do $$ begin perform pg_temp.upload(pg_temp.slot(10)); end $$;
+-- fix the object for slot 10 (an overwrite with the right size)
+update storage.objects set metadata = jsonb_set(metadata, '{size}', '1000')
+ where name = (select storage_path from public.upload_slots where id = pg_temp.slot(10));
 select lives_ok($$select set_config('t.m1', public.add_ticket_message(pg_temp.k(37), current_setting('t.r1'), 's3cret',
                                                     'see photo', array[pg_temp.slot(10)]) ->> 'message_id', false)$$,
   'buyer attaches a photo');
@@ -275,18 +277,6 @@ select is((select count(*)::int
              from jsonb_array_elements(public.read_support_ticket(current_setting('t.r1'), 's3cret') -> 'messages') m
             where jsonb_array_length(m -> 'attachments') = 0),
           2, 'messages without photos carry an empty list');
-
--- ── open_support_ticket takes ids too ───────────────────────────────────
-select throws_ok($$select public.open_support_ticket(pg_temp.k(40), 'ORDER', 'DELIVERY', 'Hi',
-                     jsonb_build_object('name', 'Ada', 'phone', '+2348011111112'),
-                     'TF-AAAAAA', 'TFW-00000000-0000-0000-0000-00000000000a', null, pg_temp.h('x'),
-                     array[pg_temp.slot(11)])$$,
-  'P0001', 'That photo isn''t available.', 'a new ticket cannot claim another ticket''s slot');
-select throws_ok($$select public.open_support_ticket(pg_temp.k(41), 'ORDER', 'DELIVERY', 'Hi',
-                     jsonb_build_object('name', 'Ada', 'phone', '+2348011111112'),
-                     'TF-AAAAAA', 'TFW-00000000-0000-0000-0000-00000000000a', null, pg_temp.h('x'),
-                     array[gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid()])$$,
-  'P0001', 'You can attach up to 3 photos.', 'open: max 3');
 
 -- ── who downloads: Storage RLS ──────────────────────────────────────────
 create function pg_temp.visible_object(p_slot uuid) returns integer language sql as $$
@@ -393,14 +383,24 @@ call pg_temp.as_user(1);
 select lives_ok($$select public.redact_ticket_customer_data(pg_temp.k(60), current_setting('t.t1')::uuid)$$, 'ZSM redacts');
 reset role;
 select is((select count(*)::int from public.upload_slots
-            where ticket_id = current_setting('t.t1')::uuid and uploaded_by_type = 'CUSTOMER')
-          + (select count(*)::int from storage.objects o where o.bucket_id = 'support-attachments'
-              and o.name like 'tickets/' || current_setting('t.t1') || '/%'
-              and o.name <> (select storage_path from public.upload_slots where id = pg_temp.slot(50))),
-          0, 'redaction deletes buyer photos');
-select is((select count(*)::int from public.upload_slots s join storage.objects o
-             on o.bucket_id = s.bucket and o.name = s.storage_path
-            where s.id = pg_temp.slot(50)), 1, 'the staff photo stays');
+            where ticket_id = current_setting('t.t1')::uuid and uploaded_by_type = 'CUSTOMER'),
+          0, 'redaction deletes the buyer''s slots');
+select is((select array_agg(q.path order by q.path) from public.storage_purge_queue q
+            where q.bucket = 'support-attachments' and q.path like 'tickets/' || current_setting('t.t1') || '/%'),
+          (select array_agg(p order by p) from unnest(array[pg_temp.slot(10), pg_temp.slot(11), pg_temp.slot(12), pg_temp.slot(18)]) s,
+                  lateral (select 'tickets/' || current_setting('t.t1') || '/' || s ||
+                                  case when s = pg_temp.slot(11) then '.png' when s = pg_temp.slot(12) then '.webp' else '.jpg' end) as x (p)),
+          'and queues exactly their paths for the Storage purge');
+select is((select count(*)::int from storage.objects o where o.bucket_id = 'support-attachments'
+            and o.name like 'tickets/' || current_setting('t.t1') || '/%'),
+          4, 'no storage.objects row is deleted in SQL');
+call pg_temp.as_user(2);
+select is(pg_temp.visible_object(current_setting('t.s10')::uuid), 0, 'a redacted photo is invisible to the handler TM at once');
+select is(pg_temp.visible_object(current_setting('t.s50')::uuid), 1, 'the staff photo stays visible');
+reset role;
+call pg_temp.as_user(1);
+select is(pg_temp.visible_object(current_setting('t.s10')::uuid), 0, 'and to the ZSM');
+reset role;
 select is((select (after ->> 'attachments_deleted')::int from public.audit_logs
             where operation = 'TICKET_DATA_REDACTED' and idempotency_key = pg_temp.k(60)),
           4, 'the redaction audit counts the deleted photos');
@@ -409,14 +409,60 @@ select is((select (after ->> 'attachments_deleted')::int from public.audit_logs
 update public.upload_slots set created_at = now() - interval '25 hours'
  where ticket_id = '60000000-0000-0000-0000-000000000004';
 do $$ begin perform pg_temp.upload((select id from public.upload_slots where ticket_id = '60000000-0000-0000-0000-000000000004' limit 1)); end $$;
+-- an old object with no slot (uploaded after its slot went) and a fresh one
+insert into storage.objects (bucket_id, name, metadata, created_at) values
+  ('support-attachments', 'tickets/60000000-0000-0000-0000-000000000004/old-orphan.jpg',
+   '{"size": 1, "mimetype": "image/jpeg"}', now() - interval '25 hours'),
+  ('support-attachments', 'tickets/60000000-0000-0000-0000-000000000004/fresh-orphan.jpg',
+   '{"size": 1, "mimetype": "image/jpeg"}', now());
 select is(public.cleanup_pending_upload_slots(), 10, 'stale pending slots cleaned');
-select is((select count(*)::int from storage.objects where name like 'tickets/60000000-0000-0000-0000-000000000004/%')
-          + (select count(*)::int from public.upload_slots where ticket_id = '60000000-0000-0000-0000-000000000004'),
-          0, 'with their objects');
+select is((select count(*)::int from public.upload_slots where ticket_id = '60000000-0000-0000-0000-000000000004'),
+          0, 'their rows are gone');
+select is((select count(*)::int from public.storage_purge_queue
+            where path like 'tickets/60000000-0000-0000-0000-000000000004/%' and path not like '%orphan%'),
+          10, 'their paths are queued');
+select is((select array_agg(path) from public.storage_purge_queue where path like '%orphan%'),
+          array['tickets/60000000-0000-0000-0000-000000000004/old-orphan.jpg'],
+          'an old object with no slot is queued; a fresh one is not');
+select is((select count(*)::int from storage.objects where name like 'tickets/60000000-0000-0000-0000-000000000004/%'),
+          3, 'the cleanup deletes no storage.objects row');
 select is((select count(*)::int from public.upload_slots where id in (pg_temp.slot(21), pg_temp.slot(50))),
           2, 'fresh pending and claimed slots stay');
+select is(public.cleanup_pending_upload_slots(), 0, 'a second run finds nothing new');
+select is((select count(*)::int from public.storage_purge_queue), 15, 'and queues nothing twice');
 select ok(exists(select 1 from cron.job where jobname = 'cleanup-upload-slots' and schedule = '45 0 * * *'),
   'cleanup scheduled');
+
+-- ── the purge queue API (service_role) ──────────────────────────────────
+insert into public.storage_purge_queue (bucket, path, queued_at)
+values ('delivery-proofs', 'orders/x/oldest.jpg', now() - interval '2 days');
+set local role service_role;
+select is(public.storage_purge_batch(1) -> 0 ->> 'path', 'orders/x/oldest.jpg', 'batch is oldest first');
+select is(jsonb_array_length(public.storage_purge_batch()), 16, 'the default batch takes up to 100');
+select is((select array_agg(k order by k) from jsonb_object_keys(public.storage_purge_batch(1) -> 0) k),
+          array['bucket', 'id', 'path'], 'each item is {id, bucket, path}');
+select is(public.storage_purge_done((select array_agg((e ->> 'id')::uuid)
+                                       from jsonb_array_elements(public.storage_purge_batch(5)) e)),
+          5, 'done removes the finished rows');
+select is(jsonb_array_length(public.storage_purge_batch(1000)), 11, 'the rest stay queued');
+reset role;
+select ok(not has_function_privilege('anon', 'public.storage_purge_batch(integer)', 'execute')
+      and not has_function_privilege('authenticated', 'public.storage_purge_batch(integer)', 'execute')
+      and not has_function_privilege('anon', 'public.storage_purge_done(uuid[])', 'execute')
+      and not has_function_privilege('authenticated', 'public.storage_purge_done(uuid[])', 'execute')
+      and has_function_privilege('service_role', 'public.storage_purge_batch(integer)', 'execute')
+      and has_function_privilege('service_role', 'public.storage_purge_done(uuid[])', 'execute'),
+  'the purge RPCs are service_role only');
+select ok(not has_table_privilege('anon', 'public.storage_purge_queue', 'select')
+      and not has_table_privilege('authenticated', 'public.storage_purge_queue', 'select')
+      and not has_table_privilege('service_role', 'public.storage_purge_queue', 'select')
+      and (select relrowsecurity from pg_class where oid = 'public.storage_purge_queue'::regclass)
+      and not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'storage_purge_queue'),
+  'nobody reads the queue directly');
+select ok(not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                       where n.nspname = 'public'
+                         and (p.prosrc ilike '%allow_delete_query%' or p.prosrc ~* 'delete\s+from\s+storage\.')),
+  'no public function deletes from storage');
 
 select * from finish();
 rollback;

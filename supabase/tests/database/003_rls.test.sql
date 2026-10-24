@@ -86,6 +86,8 @@ select is(
      and t.tablename <> 'refund_policies'
      -- A5: phone verifications are written and read only by service_role RPCs
      and t.tablename <> 'web_phone_verifications'
+     -- A5: the Storage purge queue is internal, touched only by SECURITY DEFINER functions
+     and t.tablename <> 'storage_purge_queue'
      and not exists (select 1 from pg_policies p
                      where p.schemaname = 'public' and p.tablename = t.tablename and p.cmd = 'SELECT')),
   0, 'every public table has a SELECT policy');

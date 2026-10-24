@@ -264,9 +264,9 @@ select is((select count(*)::int from public.support_ticket_secrets s
   0, 'and no secret');
 
 -- ── grants across A3 ────────────────────────────────────────────────────
-select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])') is not null and not has_function_privilege('anon', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute'),
+select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)') is not null and not has_function_privilege('anon', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute'),
   'anon cannot execute open_support_ticket');
-select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])') is not null and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text,uuid[])', 'execute'),
+select ok(to_regprocedure('public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)') is not null and not has_function_privilege('authenticated', 'public.open_support_ticket(uuid,text,text,text,jsonb,text,text,uuid,text)', 'execute'),
   'authenticated cannot execute open_support_ticket');
 select ok(to_regprocedure('public.read_support_ticket(text,text)') is not null and not has_function_privilege('anon', 'public.read_support_ticket(text,text)', 'execute'),
   'anon cannot execute read_support_ticket');
