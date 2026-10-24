@@ -44,15 +44,17 @@ select tables_are('public', array[
   -- photo upload slots (1, addendum A5)
   'upload_slots',
   -- Storage purge queue (1, addendum A5)
-  'storage_purge_queue'
-], 'public holds exactly the 50 tables');
+  'storage_purge_queue',
+  -- web-order fulfilment (1, addendum A5)
+  'order_fulfilments'
+], 'public holds exactly the 51 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  50, 'RLS is enabled on all 50 tables');
+  51, 'RLS is enabled on all 51 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN']);
