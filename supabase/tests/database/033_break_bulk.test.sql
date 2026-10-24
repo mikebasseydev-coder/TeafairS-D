@@ -1,9 +1,9 @@
--- Cartons and break-bulk wholesale packs (migration 20261024130000), with the
+-- Cartons and break-bulk wholesale packs (migrations 20261024130000 and 130100), with the
 -- Purerigin Coconut Oil sizes as the reference.
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(24);
+select plan(27);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
 -- TEAFAIR: a DSA (user 1) who sells to Mama Nkechi's shop.
@@ -86,6 +86,21 @@ select lives_ok(
   $$insert into public.order_items (tenant_id, order_id, sku_code, qty, unit_price)
     values ('7eaf0000-0000-4000-8000-000000000001', '80000000-0000-0000-0000-000000000003', 'PURERIGIN-COCONUT-OIL-200ML', 1, 5000)$$,
   'a web buyer buys a single bottle');
+
+-- ── app sales are at the wholesale price ────────────────────────────────
+select throws_ok(
+  $$insert into public.order_items (tenant_id, order_id, sku_code, qty, unit_price)
+    values ('7eaf0000-0000-4000-8000-000000000001', '80000000-0000-0000-0000-000000000002', 'PURERIGIN-COCONUT-OIL-100ML', 6, 3000)$$,
+  'P0001', 'App sales are at the wholesale price: Purerigin Coconut Oil - 100ml is 2500.00 a unit, not 3000.00.',
+  'an app order line cannot use the retail price');
+select throws_ok(
+  $$update public.order_items set unit_price = 3500
+     where order_id = '80000000-0000-0000-0000-000000000001' and sku_code = 'PURERIGIN-COCONUT-OIL-200ML'$$,
+  'P0001', 'App sales are at the wholesale price: Purerigin Coconut Oil - 200ml is 4000.00 a unit, not 3500.00.',
+  'nor be repriced');
+select is((select unit_price from public.order_items
+            where order_id = '80000000-0000-0000-0000-000000000003'),
+  5000.00, 'the web line keeps the retail price');
 
 -- ── pickups ─────────────────────────────────────────────────────────────
 select throws_ok(

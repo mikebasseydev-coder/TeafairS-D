@@ -179,13 +179,13 @@ select throws_ok(
 
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount) values
   ('80000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
-   'FIELD_DSA', '20000000-0000-0000-0000-000000000003', 5000);
+   'FIELD_DSA', '20000000-0000-0000-0000-000000000003', 4400);
 insert into public.order_items (tenant_id, order_id, sku_code, qty, unit_price) values
-  ('10000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001', 'MILO-400', 2, 2500);
+  ('10000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001', 'MILO-400', 2, 2200);
 
 select is(
   (select line_total from public.order_items where order_id = '80000000-0000-0000-0000-000000000001'),
-  5000.00::numeric(15,2), 'line_total is derived from qty × unit_price');
+  4400.00::numeric(15,2), 'line_total is derived from qty × unit_price');
 select throws_ok(
   $$insert into public.orders (tenant_id, channel, total_amount)
     values ('10000000-0000-0000-0000-000000000001', 'ONLINE', 1)$$,

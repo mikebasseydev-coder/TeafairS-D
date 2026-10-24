@@ -29,7 +29,7 @@ integrations. Its implementation runs in four phases (§14).
 
 | Path | Status |
 |---|---|
-| `supabase/` | **Phases 1–3 done**: 54 migrations, 1607 pgTAP assertions in 33 files, 24 Edge Functions; addenda A1 (web storefront) and A2 (buyer contact privacy) pushed to the remote on 2026-10-15; Spec D1 (web money loop), addendum A3 (web chat and ticketing), addendum A4 (internal staff messaging) and addendum A5 (refund policy, WhatsApp-verified checkout, fulfilment, support photos) and per-tenant sale categories with NAFDAC numbers and break-bulk wholesale packs built locally, not pushed. See `supabase/CLAUDE.md` |
+| `supabase/` | **Phases 1–3 done**: 55 migrations, 1610 pgTAP assertions in 33 files, 24 Edge Functions; addenda A1 (web storefront) and A2 (buyer contact privacy) pushed to the remote on 2026-10-15; Spec D1 (web money loop), addendum A3 (web chat and ticketing), addendum A4 (internal staff messaging) and addendum A5 (refund policy, WhatsApp-verified checkout, fulfilment, support photos) and per-tenant sale categories with NAFDAC numbers and break-bulk wholesale packs built locally, not pushed. See `supabase/CLAUDE.md` |
 | `docs/superpowers/specs/2026-10-05-…` | Spec A — the authority |
 | `docs/superpowers/specs/2026-10-15-web-…` | Addendum A1 to Spec A — web storefront, agent codes, terminal venues |
 | `docs/superpowers/specs/2026-10-15-buyer-…` | Addendum A2 to Spec A — buyer contact privacy |

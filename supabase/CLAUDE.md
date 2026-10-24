@@ -372,7 +372,8 @@ deploys with or after A5, which it extends.
 
 ### Cartons and break-bulk packs
 
-One migration (`20261024130000_break_bulk`), local only, after the one above.
+Two migrations (`20261024130000_break_bulk`, `20261024130100_app_wholesale_price`),
+local only, after the one above.
 
 - Prices stay **per unit**: `unit_price` is retail, `wholesale_price` is
   wholesale. `central_products.carton_units` is the number of units in a
@@ -387,6 +388,9 @@ One migration (`20261024130000_break_bulk`), local only, after the one above.
   (triggers) because no RPC writes these lines yet; Spec C inherits it.
   **User decision 2026-10-24: web sales (`ONLINE`, the Teafair storefront) are
   retail; every app sale (`FIELD_DSA`, `RETAIL`, pickups) is wholesale.**
+  App order lines must also be priced at the product's per-unit
+  `wholesale_price` (`20261024130100`): P0001 "App sales are at the wholesale
+  price: <product> is W a unit, not P." Web lines keep the retail price.
   Requisitions (warehouse to warehouse) are not restricted.
 - **Purerigin break-bulk (user, 2026-10-24): a quarter carton.** 200ml:
   carton of 12 at 48,000, quarter carton of 3 at 12,000. 100ml: carton of 24
