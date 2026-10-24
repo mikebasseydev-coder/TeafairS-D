@@ -4,6 +4,7 @@ import { allowedOriginsFromEnv } from "../_shared/core/public-gateway.ts";
 import { turnstileVerifier } from "../_shared/commerce/turnstile.ts";
 import { ticketSecretFor } from "../_shared/support/secret.ts";
 import { createSupportTicketOpenHandler } from "./handler.ts";
+import { observe } from "../_shared/core/observability.ts";
 
 // public-flavoured (A1 §5): anonymous callers, gated by Turnstile; the RPC is service_role only.
 // Fail closed: without SUPPORT_TICKET_SECRET_KEY every request is 503 (the
@@ -15,7 +16,7 @@ const rawTicketSecretKey = Deno.env.get("SUPPORT_TICKET_SECRET_KEY") ?? "";
 const ticketSecretKey = rawTicketSecretKey.length >= 32 ? rawTicketSecretKey : "";
 if (!ticketSecretKey) console.error("SUPPORT_TICKET_SECRET_KEY is missing or shorter than 32 characters");
 
-Deno.serve(createSupportTicketOpenHandler({
+Deno.serve(observe("support-ticket-open", createSupportTicketOpenHandler({
   rpc: serviceRpc(),
   allowedOrigins: allowedOriginsFromEnv(),
   verifyTurnstile: turnstileVerifier({
@@ -26,4 +27,4 @@ Deno.serve(createSupportTicketOpenHandler({
     ticketSecretKey
       ? ticketSecretFor(ticketSecretKey, idempotencyKey)
       : Promise.reject(new Error("SUPPORT_TICKET_SECRET_KEY is not usable")),
-}));
+})));

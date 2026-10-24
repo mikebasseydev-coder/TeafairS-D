@@ -82,9 +82,15 @@ let whatsappFailures = 0;
 const page = (data: unknown[]) =>
   Response.json({ status: true, message: "Retrieved", data, meta: { total: data.length, perPage: 100, page: 1, pageCount: 1 } });
 const notFound = (message: string) => Response.json({ status: false, message }, { status: 404 });
+// fake Sentry ingest (SENTRY_DSN=http://public@host.docker.internal:54399/1): keeps raw envelopes
+const sentryEnvelopes: string[] = [];
 const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {} }, async (req) => {
   const url = new URL(req.url);
   const path = url.pathname;
+  if (path === "/api/1/envelope/" && req.method === "POST") {
+    sentryEnvelopes.push(await req.text());
+    return Response.json({ id: crypto.randomUUID().replaceAll("-", "") });
+  }
   if (path === "/turnstile/v0/siteverify") {
     const form = await req.formData();
     return Response.json({ success: form.get("response") === "pass" });
@@ -700,8 +706,8 @@ Deno.test({
 // ── A5: verified checkout → dispatch → delivery → damage ticket → evidence ──
 async function asUser(email: string) {
   const jwt = await signIn(email);
-  const post = (fn: string, body: unknown) =>
-    fetch(`${FN}/${fn}`, { method: "POST", headers: { Authorization: `Bearer ${jwt}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const post = (fn: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${FN}/${fn}`, { method: "POST", headers: { Authorization: `Bearer ${jwt}`, "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
   const db = createClient(API, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}` } } });
   return { post, db };
 }
@@ -843,6 +849,53 @@ Deno.test({
     const fetched = await fetch(fromHost(String(evidence.fulfilment.delivery_photo.url)), { headers: { apikey: ANON } });
     assertEquals(fetched.status, 200);
     assertEquals((await fetched.arrayBuffer()).byteLength, 2048);
+  },
+});
+
+Deno.test({
+  name: "Sentry: a refused RPC reaches Sentry on the caller's trace, tagged with tenant and role, scrubbed",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  ignore: !Deno.env.get("SENTRY_DSN"),
+  fn: async () => {
+    const traceId = crypto.randomUUID().replaceAll("-", "");
+    const parentSpan = traceId.slice(0, 16);
+    const wm = await asUser(users.tfWm.email);
+    const res = await wm.post("order-dispatch", { idempotency_key: crypto.randomUUID(), order_id: crypto.randomUUID() }, {
+      "sentry-trace": `${traceId}-${parentSpan}-1`,
+      baggage: `sentry-trace_id=${traceId},sentry-sample_rate=1,sentry-sampled=true`,
+    });
+    await res.body?.cancel();
+    assert(res.status === 422 || res.status === 403, `a refused dispatch, got ${res.status}`);
+
+    type Item = { type: string; payload: Record<string, unknown> };
+    const parse = (): Item[] => sentryEnvelopes.flatMap((body) => {
+      const lines = body.split("\n").filter(Boolean);
+      const out: Item[] = [];
+      for (let i = 1; i + 1 < lines.length; i += 2) out.push({ type: JSON.parse(lines[i]).type, payload: JSON.parse(lines[i + 1]) });
+      return out;
+    });
+    const onTrace = (i: Item) => (i.payload.contexts as { trace?: { trace_id?: string } } | undefined)?.trace?.trace_id === traceId;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && !(parse().some((i) => i.type === "event" && onTrace(i)) && parse().some((i) => i.type === "transaction" && onTrace(i)))) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const event = parse().find((i) => i.type === "event" && onTrace(i))?.payload;
+    const tx = parse().find((i) => i.type === "transaction" && onTrace(i))?.payload;
+    assert(event && tx, "an event and a transaction arrive on the caller's trace within 20 s");
+
+    const tags = event.tags as Record<string, string>;
+    assertEquals([event.level, event.environment, tags.function, tags.gateway, tags.tenant_id, tags.tenant_role],
+      ["warning", "local-integration", "order-dispatch", "user", TEAFAIR, "ASM"]);
+    assert(["P0001", "42501"].includes(tags["db.sqlstate"]), tags["db.sqlstate"]);
+    assertEquals(tags["rpc.function"], "mark_order_dispatched");
+    const trace = (tx.contexts as { trace: { parent_span_id: string; op: string } }).trace;
+    assertEquals([trace.parent_span_id, trace.op], [parentSpan, "http.server"]);
+    assert((tx.spans as Array<{ op: string; description: string }>).some((s) => s.op === "db.rpc" && s.description === "rpc mark_order_dispatched"),
+      "the RPC is a child span of the request");
+    const raw = sentryEnvelopes.join("\n");
+    assert(!raw.includes("eyJ"), "no JWT leaves the runtime");
+    assert(!raw.includes(Deno.env.get("GATEWAY_SECRET") ?? "<unset>"), "the gateway secret never leaves the runtime");
   },
 });
 

@@ -6,16 +6,17 @@ import {
   paystackSubaccountFetcher,
 } from "../_shared/fintech-liquidity/paystack-settlements.ts";
 import { createCommissionReleaseHandler } from "./handler.ts";
+import { observe } from "../_shared/core/observability.ts";
 
 // system-flavoured (§3.4): invoked by pg_cron via pg_net with x-cron-secret
 const cronSecret = requireEnv("CRON_SECRET");
 const secretKey = requireEnv("PAYSTACK_SECRET_KEY");
 const baseUrl = Deno.env.get("PAYSTACK_API_BASE") || undefined;
 
-Deno.serve(createCommissionReleaseHandler({
+Deno.serve(observe("fintech-commission-release", createCommissionReleaseHandler({
   cronSecret,
   rpc: serviceRpc(),
   fetchSubaccountId: paystackSubaccountFetcher({ secretKey, baseUrl }),
   listSettlements: paystackSettlementLister({ secretKey, baseUrl }),
   listSettlementTransactions: paystackSettlementTransactionLister({ secretKey, baseUrl }),
-}));
+})));

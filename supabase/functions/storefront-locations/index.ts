@@ -1,6 +1,7 @@
 import { serviceRpc } from "../_shared/core/db.ts";
 import { allowedOriginsFromEnv } from "../_shared/core/public-gateway.ts";
 import { createStorefrontLocationsHandler } from "./handler.ts";
+import { observe } from "../_shared/core/observability.ts";
 
 // public-flavoured (A1 §5): anonymous callers; the RPC is granted to service_role only
-Deno.serve(createStorefrontLocationsHandler({ rpc: serviceRpc(), allowedOrigins: allowedOriginsFromEnv() }));
+Deno.serve(observe("storefront-locations", createStorefrontLocationsHandler({ rpc: serviceRpc(), allowedOrigins: allowedOriginsFromEnv() })));

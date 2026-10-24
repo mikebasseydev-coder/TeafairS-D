@@ -7,6 +7,7 @@ import type { Rpc } from "./db.ts";
 import type { z } from "./deps.ts";
 import { errorResponse, GatewayError } from "./errors.ts";
 import { json } from "./http.ts";
+import { tagRequest } from "./observability.ts";
 import { parseJsonBody, stripTenantKeys } from "./validate.ts";
 
 export type PublicGatewayDeps = { rpc: Rpc; allowedOrigins: string[] };
@@ -56,6 +57,7 @@ export function publicGateway<S extends z.ZodTypeAny>(
   deps: PublicGatewayDeps,
 ): (req: Request) => Promise<Response> {
   return async (req) => {
+    tagRequest({ gateway: "public" });
     const origin = req.headers.get("origin");
     const allowed = origin !== null && deps.allowedOrigins.includes(origin);
     const cors = allowed ? corsHeaders(origin) : {};

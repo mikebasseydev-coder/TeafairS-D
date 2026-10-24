@@ -5,6 +5,7 @@ import { authenticate, type Caller, supabaseTokenVerifier, type TokenVerifier } 
 import { type Rpc, userRpc } from "./db.ts";
 import { errorResponse, GatewayError } from "./errors.ts";
 import { json } from "./http.ts";
+import { tagCaller, tagRequest } from "./observability.ts";
 import { parseJsonBody } from "./validate.ts";
 
 export type UserGatewayDeps = {
@@ -21,8 +22,10 @@ export function userGateway<S extends z.ZodTypeAny>(
 ): (req: Request) => Promise<Response> {
   return async (req) => {
     try {
+      tagRequest({ gateway: "user" });
       if (req.method !== "POST") throw new GatewayError(405, "METHOD_NOT_ALLOWED", "Use POST.");
       const caller = await authenticate(req, deps.verifyToken);
+      tagCaller(caller);
       const body = await parseJsonBody(req, schema);
       return json(200, await handle({ caller, body, rpc: deps.rpcFor(caller.authorization) }));
     } catch (e) {

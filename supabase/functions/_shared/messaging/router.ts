@@ -2,6 +2,7 @@
 // API under a timeout, falls back to SMS, and logs every attempt that ends a
 // send. A log entry never holds the message, the code, the full phone number
 // or any secret.
+import { traced } from "../core/observability.ts";
 import type { Rpc } from "../core/db.ts";
 import { serviceRpc } from "../core/db.ts";
 import type { SmsSender } from "../core/sms.ts";
@@ -86,13 +87,13 @@ export function createMessageRouter(deps: {
       let abort: (() => void) | undefined;
       try {
         // Race the send against the signal so a transport that ignores it still times out.
-        await Promise.race([
-          sendWhatsApp(deps.whatsapp, to, msg.template, signal),
+        await traced("whatsapp.send", "message.send", { channel: "WHATSAPP", purpose: msg.purpose }, () => Promise.race([
+          sendWhatsApp(deps.whatsapp!, to, msg.template, signal),
           new Promise<never>((_, reject) => {
             abort = () => reject(signal.reason);
             signal.addEventListener("abort", abort, { once: true });
           }),
-        ]);
+        ]));
         await record("WHATSAPP", "SENT");
         return { channel: "WHATSAPP", sent: true };
       } catch (e) {
@@ -105,7 +106,7 @@ export function createMessageRouter(deps: {
 
     if (msg.whatsappOnly) throw new MessageDeliveryError("WhatsApp delivery failed");
     try {
-      await deps.sms(to, msg.smsText);
+      await traced("sms.send", "message.send", { channel: "SMS", purpose: msg.purpose }, () => deps.sms(to, msg.smsText));
     } catch {
       await record("SMS", "FAILED");
       throw new MessageDeliveryError("SMS delivery failed");

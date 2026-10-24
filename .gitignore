@@ -3,3 +3,6 @@
 # Environment — never commit Supabase URLs or keys
 .env
 .env*.local
+
+# Package installs (the app gets its own setup under Spec B)
+node_modules/

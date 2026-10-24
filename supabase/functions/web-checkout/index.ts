@@ -4,9 +4,10 @@ import { allowedOriginsFromEnv } from "../_shared/core/public-gateway.ts";
 import { turnstileVerifier } from "../_shared/commerce/turnstile.ts";
 import { paystackInitializer } from "../_shared/fintech-liquidity/paystack.ts";
 import { createWebCheckoutHandler } from "./handler.ts";
+import { observe } from "../_shared/core/observability.ts";
 
 // public-flavoured (A1 §5): anonymous callers, gated by Turnstile; RPCs are service_role only
-Deno.serve(createWebCheckoutHandler({
+Deno.serve(observe("web-checkout", createWebCheckoutHandler({
   rpc: serviceRpc(),
   allowedOrigins: allowedOriginsFromEnv(),
   verifyTurnstile: turnstileVerifier({
@@ -19,4 +20,4 @@ Deno.serve(createWebCheckoutHandler({
   }),
   newReference: () => `TFW-${crypto.randomUUID()}`,
   callbackUrl: requireEnv("WEB_CHECKOUT_CALLBACK_URL"),
-}));
+})));

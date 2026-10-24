@@ -4,17 +4,27 @@
 import { createClient, type SupabaseClient } from "./deps.ts";
 import { requireEnv } from "./env.ts";
 import { mapPostgresError } from "./errors.ts";
+import { annotateSpan, traced } from "./observability.ts";
 
 export type Rpc = <T = unknown>(fn: string, args: Record<string, unknown>) => Promise<T>;
 
 const noSession = { persistSession: false, autoRefreshToken: false };
 
+// Each call is a db.rpc span named after the function. Arguments never go on
+// the span: they carry PINs, phones and proofs.
 export function rpcFrom(client: SupabaseClient): Rpc {
-  return async <T>(fn: string, args: Record<string, unknown>) => {
-    const { data, error } = await client.rpc(fn, args);
-    if (error) throw mapPostgresError(error);
-    return data as T;
-  };
+  return <T>(fn: string, args: Record<string, unknown>) =>
+    traced(`rpc ${fn}`, "db.rpc", { "db.system": "postgresql", "db.operation.name": fn }, async () => {
+      const { data, error } = await client.rpc(fn, args);
+      if (error) {
+        if (error.code) annotateSpan({ "db.sqlstate": error.code });
+        const mapped = mapPostgresError(error);
+        mapped.sqlstate = error.code || undefined;
+        mapped.rpcFunction = fn;
+        throw mapped;
+      }
+      return data as T;
+    });
 }
 
 export function userRpc(authorization: string): Rpc {

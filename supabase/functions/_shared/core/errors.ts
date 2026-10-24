@@ -1,8 +1,13 @@
 // Spec A §3.5 — the error contract. The offline queue decides retry vs stop
 // from the status alone, so this table is the contract, not a convenience.
 import { json } from "./http.ts";
+import { reportError } from "./observability.ts";
 
 export class GatewayError extends Error {
+  /** Set when the error came from a database RPC (for observability only). */
+  sqlstate?: string;
+  rpcFunction?: string;
+
   constructor(
     readonly status: number,
     readonly code: string,
@@ -56,6 +61,7 @@ function parseDetails(details: string | null | undefined): unknown {
 }
 
 export function errorResponse(e: unknown): Response {
+  reportError(e);
   if (e instanceof GatewayError) {
     return json(e.status, { error: { code: e.code, message: e.message, details: e.details } });
   }
