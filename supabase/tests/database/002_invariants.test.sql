@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(42);
+select plan(43);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 -- These fixtures insert ONLINE orders directly and are not about consent, so
@@ -43,6 +43,11 @@ select is(
 select throws_ok(
   $$insert into auth.users (id, email) values ('20000000-0000-0000-0000-0000000000ff', 'nophone@example.com')$$,
   'P0001', null, 'an auth user without a phone number is refused');
+select throws_ok(
+  $$insert into auth.users (id, email, raw_user_meta_data) values
+      ('20000000-0000-0000-0000-0000000000fe', 'squat@example.com', '{"phone":"+2348000000001"}')$$,
+  'P0001', 'a phone number is required to create a Teafair account',
+  'a phone in client-written user metadata is ignored (audit H1)');
 
 insert into public.zones (id, tenant_id, zone_name) values
   ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos'),

@@ -1,4 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
+import { hookResultCode } from "../_shared/auth/hook.ts";
 import { createAuthHookHandler } from "./handler.ts";
 
 const event = {
@@ -22,7 +23,7 @@ Deno.test("an unsigned or forged hook call is refused", async () => {
     claimsFor: () => Promise.resolve(tenantClaims),
   });
   const res = await handler(post(event));
-  assertEquals(res.status, 401);
+  assertEquals(await hookResultCode(res), 401);
 });
 
 Deno.test("tenant claims are merged into app_metadata, keeping every existing claim", async () => {
@@ -47,7 +48,7 @@ Deno.test("a signed payload of the wrong shape is 400", async () => {
     verifyHook: () => ({ nope: true }),
     claimsFor: () => Promise.resolve(tenantClaims),
   });
-  assertEquals((await handler(post({}))).status, 400);
+  assertEquals(await hookResultCode(await handler(post({}))), 400);
 });
 
 Deno.test("a database failure fails the sign-in closed, in the hook error shape", async () => {
@@ -56,6 +57,6 @@ Deno.test("a database failure fails the sign-in closed, in the hook error shape"
     claimsFor: () => Promise.reject(new Error("db down")),
   });
   const res = await handler(post(event));
-  assertEquals(res.status, 500);
+  assertEquals(await hookResultCode(res), 500);
   assertEquals((await res.json()).error.http_code, 500);
 });

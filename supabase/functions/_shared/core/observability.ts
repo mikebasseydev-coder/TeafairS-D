@@ -160,7 +160,13 @@ export function tagCaller(caller: {
   });
 }
 
-const DB_REFUSALS = new Set(["P0001", "42501", "23505", "23514", "TF001", "TF002"]);
+/** An Auth hook's subject: the user id only (no email, phone or code). */
+export function tagUserId(userId: string): void {
+  if (!enabled()) return;
+  Sentry.getIsolationScope().setUser({ id: userId });
+}
+
+const DB_REFUSALS =new Set(["P0001", "42501", "23505", "23514", "TF001", "TF002"]);
 
 type Reportable = { status?: unknown; code?: unknown; sqlstate?: unknown; rpcFunction?: unknown; message?: unknown };
 

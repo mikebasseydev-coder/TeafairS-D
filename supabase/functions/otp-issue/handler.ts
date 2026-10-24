@@ -1,6 +1,8 @@
-// Spec A §6.11 — issue the shop-owner OTP. The code is generated here, stored
-// only as a bcrypt hash by issue_otp, and sent to the phone (WhatsApp first, SMS fallback) on the owner's
-// profile (never a number from the request).
+// Spec A §6.11 — issue the shop-owner OTP. issue_otp draws the code, stores
+// only its bcrypt hash and hands the code to this gateway once (audit H2: the
+// gateway proof keeps an agent from calling it through PostgREST with a code
+// of their own). The code goes to the phone (WhatsApp first, SMS fallback) on
+// the owner's profile (never a number from the request).
 //
 // A replayed key returns the original challenge, whose code this request does
 // not know, so a replay never sends a message. If delivery fails on every
@@ -14,7 +16,8 @@ import { maskPhone } from "./code.ts";
 
 export type OtpIssueDeps = UserGatewayDeps & {
   sendMessage: MessageSender;
-  generateCode: () => string;
+  /** Must equal the Vault secret `gateway_secret`. */
+  gatewaySecret: string;
 };
 
 const schema = z.object({
@@ -23,23 +26,30 @@ const schema = z.object({
   purpose: z.enum(["PICKUP_CONFIRM", "POS_SETTLEMENT"]),
 });
 
-type Issued = { challenge_id: string; expires_at: string; destination_phone: string; replayed: boolean };
+type Issued = {
+  challenge_id: string;
+  expires_at: string;
+  destination_phone: string;
+  replayed: boolean;
+  /** Present on the first call only; never stored, never returned to the agent. */
+  code?: string;
+};
 
 const message = (code: string) =>
   `Your Teafair code is ${code}. Give it to the agent only once you have your goods. It expires in 5 minutes.`;
 
 export function createOtpIssueHandler(deps: OtpIssueDeps): (req: Request) => Promise<Response> {
   return userGateway(schema, async ({ caller, body, rpc }) => {
-    const code = deps.generateCode();
     const issued = await rpc<Issued>("issue_otp", {
       p_idempotency_key: body.idempotency_key,
       p_subject_id: body.subject_id,
       p_purpose: body.purpose,
-      p_code: code,
+      p_gateway_proof: deps.gatewaySecret,
     });
 
     let channel: "WHATSAPP" | "SMS" | null = null;
-    if (!issued.replayed) {
+    const code = issued.code;
+    if (!issued.replayed && code) {
       try {
         ({ channel } = await deps.sendMessage(issued.destination_phone, {
           purpose: "OTP",
@@ -60,7 +70,7 @@ export function createOtpIssueHandler(deps: OtpIssueDeps): (req: Request) => Pro
       expires_at: issued.expires_at,
       destination: maskPhone(issued.destination_phone),
       // "sent on any channel", kept under its old name for compatibility
-      sms_sent: !issued.replayed,
+      sms_sent: channel !== null,
       channel,
     };
   }, deps);

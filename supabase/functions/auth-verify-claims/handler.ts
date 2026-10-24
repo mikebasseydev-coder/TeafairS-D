@@ -2,11 +2,12 @@
 // with Standard Webhooks, every time it mints an access token. The claim rules
 // live in public.access_token_claims (pgTAP-tested); this is the HTTP shell.
 // Claims PROPOSE; every RPC re-checks tenant_users live.
+import { hookError, type HookVerifier } from "../_shared/auth/hook.ts";
 import { z } from "../_shared/core/deps.ts";
 import { json } from "../_shared/core/http.ts";
 
 export type AuthHookDeps = {
-  verifyHook: (payload: string, headers: Record<string, string>) => unknown;
+  verifyHook: HookVerifier;
   claimsFor: (userId: string) => Promise<Record<string, unknown>>;
 };
 
@@ -14,8 +15,6 @@ const hookEvent = z.object({
   user_id: z.string().uuid(),
   claims: z.record(z.unknown()),
 }).passthrough();
-
-const hookError = (status: number, message: string) => json(status, { error: { http_code: status, message } });
 
 export function createAuthHookHandler(deps: AuthHookDeps): (req: Request) => Promise<Response> {
   return async (req) => {

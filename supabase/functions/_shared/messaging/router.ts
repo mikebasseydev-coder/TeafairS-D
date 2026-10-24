@@ -15,7 +15,7 @@ import {
   type WhatsAppTemplate,
 } from "./whatsapp.ts";
 
-export type Purpose = "OTP" | "DELIVERY_CODE" | "DELIVERY_CODE_RESEND" | "PHONE_VERIFY";
+export type Purpose = "OTP" | "DELIVERY_CODE" | "DELIVERY_CODE_RESEND" | "PHONE_VERIFY" | "AUTH_OTP";
 
 export type OutboundMessage = {
   purpose: Purpose;

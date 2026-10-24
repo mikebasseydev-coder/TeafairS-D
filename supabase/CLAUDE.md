@@ -21,6 +21,7 @@ the authority; this file is the working summary.
 | Cartons and break-bulk wholesale packs | done (local) |
 | Web transport fare | done (local) |
 | Sentry observability (Edge Functions) | done (local) |
+| Auth hardening (audit H1, H2, M1, L1) and the Send SMS / Send Email hooks | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -326,11 +327,9 @@ the 422 for a wrong or locked code.
 - R21: `sale_category` keeps its `FOOD` default; the deploy notes carry a pre-push and post-push catalogue classification check (deploy note 4).
 - R22: user gateways use the service role only for Storage signing and removal and for the `log_message_delivery` write (spec §7, plan Decision 4); see the exception note under "Writing an Edge Function".
 
-**Follow-up outside A5 (Spec A scope).** Spec A's `issue_otp` takes the code
-as `p_code` and is granted to `authenticated`, so a DSA or fintech agent can
-call it over PostgREST with a code of their own choosing and skip `otp-issue`.
-This is the same class of problem R16 fixed for the delivery PIN (a gateway
-proof through Vault would close it). Not changed in A5.
+**Follow-up outside A5 (Spec A scope), now closed.** Spec A's `issue_otp`
+took the code as `p_code`, so a DSA or fintech agent could choose it over
+PostgREST. Fixed by the auth hardening below (H2).
 
 ### Tenant sale categories and NAFDAC numbers
 
@@ -496,6 +495,114 @@ unless `SENTRY_DSN` is set**, so tests and plain local runs send nothing.
 **Deploy:** set `SENTRY_DSN`, `SENTRY_ENVIRONMENT` and `SENTRY_RELEASE` as
 remote function secrets; nothing else changes.
 
+### Auth hardening and the Supabase Auth hooks
+
+Three migrations (`20261024150000_auth_verified_phone`,
+`20261024160000_secure_otp_generation`, `20261024170000_auth_hooks`) and the
+functions `send-auth-sms` and `send-auth-email`, local only. From the
+2026-10-24 auth audit.
+
+- **H1, verified phones only.** `handle_new_user` takes the phone from
+  `auth.users.phone` only, never `raw_user_meta_data` (client-written at
+  sign-up). `invite_tenant_user` only finds an account whose phone Supabase
+  Auth confirmed (`phone_confirmed_at`). Self-serve sign-up is off
+  (`[auth] enable_signup = false`): accounts come from the Admin API with
+  `phone` and `phone_confirm: true`. **Gotcha:** in `config.toml`,
+  `[auth.email] enable_signup` and `[auth.sms] enable_signup` are the email and
+  phone *provider* switches; turning them off disables those logins
+  entirely. Keep both on; the global switch blocks new accounts.
+- **H2, the database draws the shop-owner OTP.** `issue_otp(p_idempotency_key,
+  p_subject_id, p_purpose, p_gateway_proof)` checks `assert_gateway_proof` (the
+  Vault `gateway_secret`, as R16), draws 6 digits from `gen_random_bytes`
+  (rejection-sampled), stores the bcrypt hash, and returns `code` to the
+  gateway on the first call only. The code is never in `idempotency_logs`, so
+  a replay carries none and sends nothing. The audit row no longer holds
+  `destination_phone`. `otp-issue` now needs `GATEWAY_SECRET`.
+- **M1, phone sign-in codes (`send-auth-sms`).** Supabase Auth's Send SMS hook
+  (Standard Webhooks, `SEND_SMS_HOOK_SECRET`). It sends a code only when
+  `auth_sms_allowed(user, phone)` holds: the account's own profile phone, and
+  a platform role or an ACTIVE or INVITED membership. It refuses phone
+  changes, because the profile would not follow them. It sends through the A5
+  router, purpose `AUTH_OTP` (platform-level log, no tenant). **User decision
+  2026-10-24: WhatsApp only** (trusted; Nigerian SMS delivery is poor; Twilio
+  is too expensive). `AUTH_OTP_SMS_FALLBACK=true` adds the KudiSMS fallback.
+  **Twilio is never used.** Locally `[auth.sms.twilio]` is enabled with inert
+  `local-unused` values only because the CLI turns the phone provider on only
+  with a built-in provider; with the hook on, Auth never calls it.
+- **Email (`send-auth-email`, Resend).** Supabase Auth's Send Email hook
+  (`SEND_EMAIL_HOOK_SECRET`) handles `recovery`, `signup`, `invite` and
+  `email_change` (both addresses under secure change; Supabase's
+  `token_hash_new` goes to the *current* address). Magic links, email OTPs
+  and reauthentication are refused (not a Teafair sign-in route). Links go
+  to `<AUTH_EMAIL_LINK_BASE or SUPABASE_URL>/auth/v1/verify?token=<token_hash>&type=...&redirect_to=...`.
+  `redirect_to` is kept only when its origin and path exactly match
+  `AUTH_SITE_URL`, `<AUTH_SITE_URL>/reset-password` or
+  `AUTH_EMAIL_REDIRECT_URLS` (query and fragment dropped); otherwise the reset
+  page (recovery) or the site URL is used. Resend gets an `Idempotency-Key`
+  from the hook's `webhook-id`, so a retried hook never sends twice. Copy is
+  fixed text: nothing a user typed is rendered.
+- **Hook errors travel as HTTP 200** with `{error:{http_code,message}}`
+  (`_shared/auth/hook.ts`). Supabase Auth turns any other status into a bare
+  500 ("Unexpected status code returned from hook") and drops the message.
+- **L1.** `SMS_PROVIDER=log` refuses to start unless `SUPABASE_URL` is the
+  local stack (`assertSafeSmsProvider`). Optional `KUDISMS_GATEWAY` is sent as
+  KudiSMS's `gateway` field. Its value for the corporate (DND) route is
+  unconfirmed: ask KudiSMS before setting it.
+- **Config (local):** passwords at least 12 characters, email confirmations
+  on, one email per 60 s per user, and exact redirect URLs including
+  `/reset-password`.
+- **Sentry:** both hooks tag `gateway=auth-hook` and `user.id` only.
+  Delivery failures are `error` events with fixed text, never an address,
+  number or code.
+- **Tests:** pgTAP 002, 004, 008 and 035. Unit tests for both hooks, `sms.ts`
+  and `otp-issue`. Integration covers:
+  - anonymous sign-up refused;
+  - phone sign-in end to end (WhatsApp code, `verifyOtp`, tenant claims);
+  - a non-member refused with the hook's own 403;
+  - the recovery email via the fake Resend, with a one-time link landing on
+    `/reset-password`;
+  - a hostile `redirectTo` kept out of the email;
+  - the DSA's direct `issue_otp` call refused (42501);
+  - the shop-owner code verifying.
+
+  The Sentry integration test runs only when `SENTRY_DSN` points at the fake
+  (`host.docker.internal:54399`); with a real DSN, events go to real Sentry.
+
+**Deploy (after A5 and the pricing migrations; deploy `otp-issue` straight after the push).**
+
+1. Pre-push on the remote: find profiles whose phone Supabase Auth never
+   confirmed (they came through the old metadata path and can no longer be
+   invited), and decide on each before the push:
+   `select p.id from public.profiles p join auth.users u on u.id = p.id where u.phone is null or u.phone_confirmed_at is null;`
+2. Push the three migrations, then deploy `otp-issue` immediately: the old
+   `otp-issue` sends `p_code`, which the new `issue_otp` no longer accepts.
+3. Function secrets:
+   - `SEND_SMS_HOOK_SECRET`, `SEND_EMAIL_HOOK_SECRET`;
+   - `RESEND_API_KEY`, `AUTH_EMAIL_FROM` (a Resend-verified domain);
+   - `AUTH_SITE_URL`, optional `AUTH_EMAIL_REDIRECT_URLS`;
+   - `AUTH_OTP_SMS_FALLBACK`.
+
+   Leave `AUTH_EMAIL_LINK_BASE` unset. `GATEWAY_SECRET` is now also needed by
+   `otp-issue`.
+4. Deploy `send-auth-sms` and `send-auth-email` (`--no-verify-jwt`, as every
+   function here).
+5. Dashboard (never `config push`):
+   - Authentication > Sign In / Providers: "Allow new users to sign up" off,
+     Email on with "Confirm email" on, Phone on;
+   - Auth Hooks: Send SMS -> `https://<ref>.supabase.co/functions/v1/send-auth-sms`
+     and Send Email -> `.../send-auth-email`, each with its secret (generate
+     there, then copy to the function secret);
+   - URL Configuration: the site URL and the exact redirect URLs, including
+     `/reset-password`, no wildcards;
+   - minimum password length 12;
+   - a short SMS OTP expiry (the local default is 6000 s).
+
+   If the dashboard insists on an SMS provider before Phone can be switched
+   on, check Supabase's current guidance: the hook replaces the provider, and
+   Twilio must not be bought for this.
+6. Meta: the `teafair_otp` authentication template is now also the sign-in
+   code. With no SMS fallback, a number not on WhatsApp cannot sign in.
+
 ## Layout
 
 ```
@@ -593,7 +700,7 @@ one responsibility per file. Third-party versions appear only in
 - **PIN-gated operations** call `requirePin(rpc, body.pin)` (from
   `_shared/auth/pin.ts`) before their RPC.
 - **System functions** use `serviceRpc()` and authenticate the caller
-  themselves: `auth-verify-claims` and `process-payment` (`charge.success`,
+  themselves: the Auth hooks `auth-verify-claims`, `send-auth-sms` and `send-auth-email`, and `process-payment` (`charge.success`,
   `refund.processed`) by signature; the cron-invoked `reconcile-funds`
   (`{mode: "sweep" | "refunds"}`) and `fintech-commission-release` (`{}`;
   Spec D1) by the `x-cron-secret` header, compared in constant time against

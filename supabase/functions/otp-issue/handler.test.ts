@@ -17,12 +17,13 @@ function setup(opts: { replayed?: boolean; smsFails?: boolean; channel?: "WHATSA
       expires_at: "2026-10-07T12:05:00+00:00",
       destination_phone: "+2348000000005",
       replayed: opts.replayed ?? false,
+      ...(opts.replayed ? {} : { code: "042917" }),
     } as T);
   };
   const handler = createOtpIssueHandler({
     verifyToken: () => Promise.resolve({ sub: "u3", role: "authenticated", app_metadata: { active_tenant_id: TENANT } }),
     rpcFor: () => rpc,
-    generateCode: () => "042917",
+    gatewaySecret: "gw-secret",
     sendMessage: (to, message) => {
       if (opts.smsFails) return Promise.reject(new MessageDeliveryError("down"));
       sms.push([to, message]);
@@ -35,7 +36,7 @@ function setup(opts: { replayed?: boolean; smsFails?: boolean; channel?: "WHATSA
 const call = (handler: (r: Request) => Promise<Response>, body: unknown) =>
   handler(new Request("http://x", { method: "POST", body: JSON.stringify(body), headers: { Authorization: "Bearer tok" } }));
 
-Deno.test("a fresh challenge stores the code via the RPC and texts it to the owner's phone", async () => {
+Deno.test("a fresh challenge sends the code the database drew to the owner's phone", async () => {
   const { handler, rpcCalls, sms } = setup();
   const res = await call(handler, { idempotency_key: KEY, subject_id: SUBJECT, purpose: "POS_SETTLEMENT" });
   assertEquals(res.status, 200);
@@ -47,7 +48,7 @@ Deno.test("a fresh challenge stores the code via the RPC and texts it to the own
     channel: "SMS",
   });
   assertEquals(rpcCalls, [["issue_otp",
-    { p_idempotency_key: KEY, p_subject_id: SUBJECT, p_purpose: "POS_SETTLEMENT", p_code: "042917" }]]);
+    { p_idempotency_key: KEY, p_subject_id: SUBJECT, p_purpose: "POS_SETTLEMENT", p_gateway_proof: "gw-secret" }]]);
   assertEquals(sms.length, 1);
   assertEquals(sms[0][0], "+2348000000005");
   assertEquals(sms[0][1].smsText.includes("042917"), true);
@@ -55,6 +56,12 @@ Deno.test("a fresh challenge stores the code via the RPC and texts it to the own
   assertEquals(sms[0][1].template, { name: "teafair_otp", language: "en", params: ["042917"], kind: "authentication" });
   assertEquals(sms[0][1].relatedId, "60000000-0000-0000-0000-000000000001");
   assertEquals(sms[0][1].tenantId, TENANT); // R18: the caller's active tenant goes to notification_logs
+});
+
+Deno.test("the code never reaches the agent's response", async () => {
+  const { handler } = setup();
+  const res = await call(handler, { idempotency_key: KEY, subject_id: SUBJECT, purpose: "POS_SETTLEMENT" });
+  assertEquals(JSON.stringify(await res.json()).includes("042917"), false);
 });
 
 Deno.test("a replay never texts a code the database does not hold", async () => {

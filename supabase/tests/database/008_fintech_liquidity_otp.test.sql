@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(24);
+select plan(28);
 
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria',   'NESTLE'),
@@ -72,16 +72,25 @@ select ok(not has_function_privilege('anon', 'public.issue_otp(uuid,uuid,public.
   'anon cannot issue codes');
 
 -- ── issue ────────────────────────────────────────────────────────────────
+-- Audit H2: the database draws the code and only the gateway (holding the
+-- Vault gateway_secret) may ask for one.
+-- replaced inside this transaction only (rolled back at the end)
+delete from vault.secrets where name = 'gateway_secret';
+do $$ begin perform vault.create_secret('test-gw-secret', 'gateway_secret'); end $$;
+
 select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
-select is(public.issue_otp('b0000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
-                           'POS_SETTLEMENT', '123456') ->> 'replayed',
-  'false', 'a DSA issues a code to a shop owner');
+do $$ begin perform set_config('test.issued', public.issue_otp('b0000000-0000-0000-0000-000000000001',
+  '20000000-0000-0000-0000-000000000005', 'POS_SETTLEMENT', 'test-gw-secret')::text, true); end $$;
+select is(current_setting('test.issued')::jsonb ->> 'replayed', 'false', 'a DSA issues a code to a shop owner');
+select ok(current_setting('test.issued')::jsonb ->> 'code' ~ '^[0-9]{6}$',
+  'the database generates a 6-digit code and hands it to the gateway');
 
 reset role;
 select is((select destination_phone from public.otp_challenges
             where subject_id = '20000000-0000-0000-0000-000000000005' and purpose = 'POS_SETTLEMENT'),
   '+2348000000005', 'the code goes to the owner''s phone from their profile, never from the request');
-select ok((select code_hash <> '123456' and extensions.crypt('123456', code_hash) = code_hash
+select ok((select code_hash <> (current_setting('test.issued')::jsonb ->> 'code')
+                  and extensions.crypt(current_setting('test.issued')::jsonb ->> 'code', code_hash) = code_hash
              from public.otp_challenges
             where subject_id = '20000000-0000-0000-0000-000000000005' and purpose = 'POS_SETTLEMENT'),
   'the code is stored as a bcrypt hash');
@@ -89,13 +98,18 @@ select ok((select expires_at = created_at + interval '5 minutes' from public.otp
             where subject_id = '20000000-0000-0000-0000-000000000005' and purpose = 'POS_SETTLEMENT'),
   'a code lives five minutes');
 select is((select count(*)::int from public.audit_logs
-            where operation = 'issue_otp' and not (after ? 'code_hash')),
-  1, 'issuance is audited without the hash');
+            where operation = 'issue_otp' and not (after ? 'code_hash') and not (after ? 'destination_phone')),
+  1, 'issuance is audited without the hash or the phone number');
+select ok((select not (response ? 'code') from public.idempotency_logs
+            where key = 'b0000000-0000-0000-0000-000000000001'),
+  'the code is never stored in the idempotency response');
 
 select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
-select is(public.issue_otp('b0000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
-                           'POS_SETTLEMENT', '999999') ->> 'replayed',
-  'true', 'a replay returns the first challenge, flagged as a replay');
+do $$ begin perform set_config('test.replay', public.issue_otp('b0000000-0000-0000-0000-000000000001',
+  '20000000-0000-0000-0000-000000000005', 'POS_SETTLEMENT', 'test-gw-secret')::text, true); end $$;
+select is(current_setting('test.replay')::jsonb ->> 'replayed', 'true',
+  'a replay returns the first challenge, flagged as a replay');
+select ok(not (current_setting('test.replay')::jsonb ? 'code'), 'a replay carries no code');
 reset role;
 select is((select count(*)::int from public.otp_challenges
             where subject_id = '20000000-0000-0000-0000-000000000005' and purpose = 'POS_SETTLEMENT'),
@@ -104,28 +118,33 @@ select is((select count(*)::int from public.otp_challenges
 select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
 do $$ begin
   perform public.issue_otp('b0000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000005',
-                           'POS_SETTLEMENT', '111111');
+                           'POS_SETTLEMENT', 'test-gw-secret');
   perform public.issue_otp('b0000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000005',
-                           'POS_SETTLEMENT', '222222');
+                           'POS_SETTLEMENT', 'test-gw-secret');
 end $$;
 select throws_ok($$ select public.issue_otp('b0000000-0000-0000-0000-000000000004',
-                   '20000000-0000-0000-0000-000000000005', 'POS_SETTLEMENT', '333333') $$,
+                   '20000000-0000-0000-0000-000000000005', 'POS_SETTLEMENT', 'test-gw-secret') $$,
   'P0001', 'too many codes requested for this shop owner; try again later',
   'a fourth code within ten minutes is refused');
 select throws_ok($$ select public.issue_otp('b0000000-0000-0000-0000-000000000005',
-                   '20000000-0000-0000-0000-000000000002', 'POS_SETTLEMENT', '123456') $$,
+                   '20000000-0000-0000-0000-000000000002', 'POS_SETTLEMENT', 'test-gw-secret') $$,
   'P0001', 'subject is not an active shop owner in this tenant', 'only shop owners receive codes');
 select throws_ok($$ select public.issue_otp('b0000000-0000-0000-0000-000000000006',
-                   '20000000-0000-0000-0000-000000000006', 'POS_SETTLEMENT', '123456') $$,
+                   '20000000-0000-0000-0000-000000000006', 'POS_SETTLEMENT', 'test-gw-secret') $$,
   'P0001', 'subject is not an active shop owner in this tenant',
   'a shop owner of another tenant cannot be targeted');
 select throws_ok($$ select public.issue_otp('b0000000-0000-0000-0000-000000000007',
-                   '20000000-0000-0000-0000-000000000005', 'PICKUP_CONFIRM', '12ab') $$,
-  'P0001', 'code must be 6 digits', 'a malformed code is refused');
+                   '20000000-0000-0000-0000-000000000005', 'PICKUP_CONFIRM', null) $$,
+  '42501', 'this operation must come through its gateway',
+  'a direct PostgREST call without the gateway proof is refused');
+select throws_ok($$ select public.issue_otp('b0000000-0000-0000-0000-000000000009',
+                   '20000000-0000-0000-0000-000000000005', 'PICKUP_CONFIRM', '123456') $$,
+  '42501', 'this operation must come through its gateway',
+  'a caller-chosen code passed as the proof is refused');
 
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok($$ select public.issue_otp('b0000000-0000-0000-0000-000000000008',
-                   '20000000-0000-0000-0000-000000000005', 'PICKUP_CONFIRM', '123456') $$,
+                   '20000000-0000-0000-0000-000000000005', 'PICKUP_CONFIRM', 'test-gw-secret') $$,
   '42501', 'role TM may not perform this operation', 'a TM cannot issue codes');
 
 -- ── verify ───────────────────────────────────────────────────────────────

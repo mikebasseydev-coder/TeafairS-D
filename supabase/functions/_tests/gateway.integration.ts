@@ -3,7 +3,8 @@
 // SERVICE_ROLE_KEY (from `supabase status -o env`), PAYSTACK_SECRET_KEY and
 // CRON_SECRET (from supabase/functions/.env). The functions must be served with
 // WHATSAPP_API_URL pointing at this file's fake (host.docker.internal:54399) and
-// GATEWAY_SECRET equal to the Vault secret `gateway_secret` (A5, R16).
+// GATEWAY_SECRET equal to the Vault secret `gateway_secret` (A5, R16), and with
+// RESEND_API_URL pointing at the same fake for the send-auth-email hook.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createClient } from "../_shared/core/deps.ts";
 
@@ -47,7 +48,9 @@ async function createUser(n: number): Promise<{ id: string; email: string }> {
   const email = `it-${run}-${n}@teafair.test`;
   const { user } = await must(admin.auth.admin.createUser({
     email, password: "integration-pass-1", email_confirm: true,
-    user_metadata: { phone: phone(n), full_name: `IT ${n}` },
+    // audit H1: the phone comes from Supabase Auth's own column, confirmed by the Admin API
+    phone: phone(n), phone_confirm: true,
+    user_metadata: { full_name: `IT ${n}` },
   }));
   return { id: user!.id, email };
 }
@@ -84,12 +87,18 @@ const page = (data: unknown[]) =>
 const notFound = (message: string) => Response.json({ status: false, message }, { status: 404 });
 // fake Sentry ingest (SENTRY_DSN=http://public@host.docker.internal:54399/1): keeps raw envelopes
 const sentryEnvelopes: string[] = [];
+// fake Resend (RESEND_API_URL=http://host.docker.internal:54399): records each email
+const resendEmails: Array<{ to: string[]; subject: string; html: string; text: string; idempotencyKey: string | null }> = [];
 const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {} }, async (req) => {
   const url = new URL(req.url);
   const path = url.pathname;
   if (path === "/api/1/envelope/" && req.method === "POST") {
     sentryEnvelopes.push(await req.text());
     return Response.json({ id: crypto.randomUUID().replaceAll("-", "") });
+  }
+  if (path === "/emails" && req.method === "POST") {
+    resendEmails.push({ ...await req.json(), idempotencyKey: req.headers.get("idempotency-key") });
+    return Response.json({ id: crypto.randomUUID() });
   }
   if (path === "/turnstile/v0/siteverify") {
     const form = await req.formData();
@@ -289,10 +298,32 @@ Deno.test({
     assertEquals(issued.status, 200, JSON.stringify(issuedBody));
     assertEquals(issuedBody.sms_sent, true);
 
-    // the probability that "000000" is the real code is one in a million
-    const wrong = await post("otp-verify", { idempotency_key: crypto.randomUUID(), challenge_id: issuedBody.challenge_id, code: "000000" });
+    assert(!/"code"/.test(JSON.stringify(issuedBody)), "the code never reaches the agent");
+
+    // audit H2: the database drew the code; the owner received it on WhatsApp
+    const owner = await must(admin.from("profiles").select("phone_number").eq("id", users.owner.id).single()) as { phone_number: string };
+    const sent = whatsappSends.filter((w) => w.to === owner.phone_number.slice(1) && w.template === "teafair_otp").at(-1);
+    assert(sent, "the shop owner got the code");
+    const code = sent.params[0];
+    assert(/^[0-9]{6}$/.test(code), code);
+
+    const wrongCode = code === "000000" ? "111111" : "000000";
+    const wrong = await post("otp-verify", { idempotency_key: crypto.randomUUID(), challenge_id: issuedBody.challenge_id, code: wrongCode });
     const wrongBody = await wrong.json();
     assertEquals([wrong.status, wrongBody.error.code, wrongBody.error.details.attempts_left], [422, "OTP_INVALID", 4]);
+
+    const right = await post("otp-verify", { idempotency_key: crypto.randomUUID(), challenge_id: issuedBody.challenge_id, code });
+    const rightBody = await right.json();
+    assertEquals([right.status, rightBody.verified], [200, true], JSON.stringify(rightBody));
+
+    // and the DSA cannot skip the gateway to choose a code of their own
+    const direct = await fetch(`${API}/rest/v1/rpc/issue_otp`, {
+      method: "POST",
+      headers: { apikey: ANON, Authorization: `Bearer ${jwt}`, "content-type": "application/json" },
+      body: JSON.stringify({ p_idempotency_key: crypto.randomUUID(), p_subject_id: users.owner.id, p_purpose: "PICKUP_CONFIRM", p_gateway_proof: "123456" }),
+    });
+    const directBody = await direct.json();
+    assertEquals([direct.status, directBody.code], [403, "42501"], JSON.stringify(directBody));
   },
 });
 
@@ -856,7 +887,8 @@ Deno.test({
   name: "Sentry: a refused RPC reaches Sentry on the caller's trace, tagged with tenant and role, scrubbed",
   sanitizeOps: false,
   sanitizeResources: false,
-  ignore: !Deno.env.get("SENTRY_DSN"),
+  // only against this file's fake ingest; a real DSN sends to real Sentry instead
+  ignore: !(Deno.env.get("SENTRY_DSN") ?? "").includes("host.docker.internal:54399/"),
   fn: async () => {
     const traceId = crypto.randomUUID().replaceAll("-", "");
     const parentSpan = traceId.slice(0, 16);
@@ -936,6 +968,119 @@ Deno.test({
     const dsa = await asUser(users.tfDsa.email);
     const dsaRows = (await must(dsa.db.from("notification_logs").select("id").eq("related_id", orderId))) as unknown[];
     assertEquals(dsaRows.length, 0);
+  },
+});
+
+// ── auth audit: sign-up, phone sign-in (send-auth-sms), recovery (send-auth-email) ──
+const ngPhone = () => `23480${String(Date.now()).slice(-7)}${Math.floor(Math.random() * 10)}`;
+
+async function phoneUser(member: boolean): Promise<{ id: string; phone: string }> {
+  const p = ngPhone();
+  const { user } = await must(admin.auth.admin.createUser({ phone: p, phone_confirm: true, user_metadata: { full_name: "IT phone" } }));
+  if (member) {
+    await must(admin.from("tenant_users").insert(
+      { tenant_id: ids.tenant, profile_id: user!.id, role: "RETAIL_SHOP_OWNER", status: "ACTIVE", is_primary: true },
+    ));
+  }
+  return { id: user!.id, phone: p };
+}
+
+Deno.test({
+  name: "auth H1: anonymous sign-up is refused, metadata phone or not",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const email = `squat-${run}@teafair.test`;
+    const res = await fetch(`${API}/auth/v1/signup`, {
+      method: "POST",
+      headers: { apikey: ANON, "content-type": "application/json" },
+      body: JSON.stringify({ email, password: "squatter-pass-1", data: { phone: `+${phone(1)}` } }),
+    });
+    const body = await res.json();
+    assertEquals([res.status, body.error_code], [422, "signup_disabled"], JSON.stringify(body));
+    assertEquals((await must(admin.from("profiles").select("id").eq("email", email)))?.length, 0);
+  },
+});
+
+Deno.test({
+  name: "send-auth-sms: a member signs in by phone; the code arrives on WhatsApp",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const u = await phoneUser(true);
+    const client = createClient(API, ANON, { auth: { persistSession: false } });
+    const before = whatsappSends.length;
+    await must(client.auth.signInWithOtp({ phone: `+${u.phone}` }));
+    const sent = whatsappSends.slice(before).find((w) => w.to === u.phone);
+    assert(sent, "the code went out on WhatsApp");
+    assertEquals(sent.template, "teafair_otp");
+
+    const { session } = await must(client.auth.verifyOtp({ phone: `+${u.phone}`, token: sent.params[0], type: "sms" }));
+    const app = claimsOf(session!.access_token).app_metadata;
+    assertEquals([app.active_tenant_id, app.tenant_role], [ids.tenant, "RETAIL_SHOP_OWNER"]);
+    // the AUTH_OTP delivery log row is platform-level (no tenant), so no API
+    // role can read it, the service role included; pgTAP 035 covers the write
+  },
+});
+
+Deno.test({
+  name: "send-auth-sms: an account with no membership gets no code",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const u = await phoneUser(false);
+    const client = createClient(API, ANON, { auth: { persistSession: false } });
+    const before = whatsappSends.length;
+    const { error } = await client.auth.signInWithOtp({ phone: `+${u.phone}` });
+    assert(error, "Supabase Auth relays the hook's refusal");
+    // the hook's own refusal, not some other failure (a missing provider, a crash)
+    assertEquals([error.status, error.message], [403, "This number has no Teafair access."]);
+    assertEquals(whatsappSends.slice(before).filter((w) => w.to === u.phone).length, 0);
+  },
+});
+
+Deno.test({
+  name: "send-auth-email: password recovery mails a one-time verify link that lands on /reset-password",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const u = await createUser(11);
+    const client = createClient(API, ANON, { auth: { persistSession: false } });
+    const before = resendEmails.length;
+    await must(client.auth.resetPasswordForEmail(u.email, { redirectTo: "http://127.0.0.1:3000/reset-password" }));
+    const mail = resendEmails.slice(before).find((m) => m.to.includes(u.email));
+    assert(mail, "Resend got the recovery email");
+    assertEquals(mail.subject, "Reset your Teafair password");
+    assert(mail.idempotencyKey?.endsWith(":recovery"), String(mail.idempotencyKey));
+
+    const link = new URL(/href="([^"]+)"/.exec(mail.html)![1].replaceAll("&amp;", "&"));
+    assertEquals(`${link.origin}${link.pathname}`, `${API}/auth/v1/verify`);
+    assertEquals([link.searchParams.get("type"), link.searchParams.get("redirect_to")],
+      ["recovery", "http://127.0.0.1:3000/reset-password"]);
+
+    // following the link signs the user in for the reset, once
+    const landed = await fetch(link, { redirect: "manual" });
+    await landed.body?.cancel();
+    const location = landed.headers.get("location") ?? "";
+    assert(location.startsWith("http://127.0.0.1:3000/reset-password#access_token="), location.slice(0, 60));
+    const again = await fetch(link, { redirect: "manual" });
+    await again.body?.cancel();
+    assert(!(again.headers.get("location") ?? "").includes("access_token="), "a recovery link works once");
+  },
+});
+
+Deno.test({
+  name: "send-auth-email: a hostile redirectTo never reaches the email",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const u = await createUser(12);
+    const client = createClient(API, ANON, { auth: { persistSession: false } });
+    const before = resendEmails.length;
+    await client.auth.resetPasswordForEmail(u.email, { redirectTo: "https://evil.example/steal" });
+    const mail = resendEmails.slice(before).find((m) => m.to.includes(u.email));
+    assert(mail, "Resend got the recovery email");
+    assert(!mail.html.includes("evil.example") && !mail.text.includes("evil.example"));
   },
 });
 

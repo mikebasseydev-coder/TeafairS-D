@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(48);
+select plan(49);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -11,12 +11,14 @@ insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000002', 'Unilever Nigeria', 'UNILEVER');
 
 -- 1 ZSM · 2 TM (also TM at Unilever) · 3 DSA · 6 not yet a member · 7 DSM
-insert into auth.users (id, phone) values
-  ('20000000-0000-0000-0000-000000000001', '2348000000001'),
-  ('20000000-0000-0000-0000-000000000002', '2348000000002'),
-  ('20000000-0000-0000-0000-000000000003', '2348000000003'),
-  ('20000000-0000-0000-0000-000000000006', '2348000000006'),
-  ('20000000-0000-0000-0000-000000000007', '2348000000007');
+-- · 8 an account whose phone Supabase Auth never confirmed
+insert into auth.users (id, phone, phone_confirmed_at) values
+  ('20000000-0000-0000-0000-000000000001', '2348000000001', now()),
+  ('20000000-0000-0000-0000-000000000002', '2348000000002', now()),
+  ('20000000-0000-0000-0000-000000000003', '2348000000003', now()),
+  ('20000000-0000-0000-0000-000000000006', '2348000000006', now()),
+  ('20000000-0000-0000-0000-000000000007', '2348000000007', now()),
+  ('20000000-0000-0000-0000-000000000008', '2348000000008', null);
 
 insert into public.zones (id, tenant_id, zone_name) values
   ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos'),
@@ -175,6 +177,11 @@ select throws_ok(
   $$select public.invite_tenant_user('aaaaaaaa-0000-0000-0000-000000000010', '+2348000000099', 'DSA',
       '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000007')$$,
   'P0001', null, 'inviting a phone with no account is a business error');
+select throws_ok(
+  $$select public.invite_tenant_user('aaaaaaaa-0000-0000-0000-000000000099', '+2348000000008', 'DSA',
+      '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000007')$$,
+  'P0001', 'no Teafair account with a verified phone exists for +2348000000008',
+  'an invite never reaches an account whose phone is unverified (audit H1)');
 select throws_ok(
   $$select public.invite_tenant_user('aaaaaaaa-0000-0000-0000-000000000011', '+2348000000006', 'ZSM',
       null, null)$$,
