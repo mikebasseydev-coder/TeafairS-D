@@ -89,7 +89,10 @@ const notFound = (message: string) => Response.json({ status: false, message }, 
 const sentryEnvelopes: string[] = [];
 // fake Resend (RESEND_API_URL=http://host.docker.internal:54399): records each email
 const resendEmails: Array<{ to: string[]; subject: string; html: string; text: string; idempotencyKey: string | null }> = [];
-const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: 54399, onListen() {} }, async (req) => {
+// INTEGRATION_FAKE_PORT moves it when Windows reserves 54399 (see supabase/CLAUDE.md);
+// the functions env URLs must use the same port
+const FAKE_PORT = Number(Deno.env.get("INTEGRATION_FAKE_PORT") ?? "54399");
+const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: FAKE_PORT, onListen() {} }, async (req) => {
   const url = new URL(req.url);
   const path = url.pathname;
   if (path === "/api/1/envelope/" && req.method === "POST") {
@@ -888,7 +891,7 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   // only against this file's fake ingest; a real DSN sends to real Sentry instead
-  ignore: !(Deno.env.get("SENTRY_DSN") ?? "").includes("host.docker.internal:54399/"),
+  ignore: !(Deno.env.get("SENTRY_DSN") ?? "").includes(`host.docker.internal:${FAKE_PORT}/`),
   fn: async () => {
     const traceId = crypto.randomUUID().replaceAll("-", "");
     const parentSpan = traceId.slice(0, 16);

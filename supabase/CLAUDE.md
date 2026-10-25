@@ -752,7 +752,10 @@ plus a fake WhatsApp Cloud API on the same port (`WHATSAPP_API_URL`, with
 `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_API_VERSION`
 set to any values) that records template sends so the test can read codes.
 Verification starts use a random `cf-connecting-ip` each, to stay under the
-10-per-IP-per-hour limit. The only Vault secret it needs is `gateway_secret`;
+10-per-IP-per-hour limit. If the fake cannot bind (`os error 10013`), Windows has
+reserved the port (`netsh interface ipv4 show excludedportrange protocol=tcp`;
+on 2026-10-25 the range was 54325-54524): set `INTEGRATION_FAKE_PORT` to a free
+port and use that port in every `host.docker.internal:54399` URL of the functions env. The only Vault secret it needs is `gateway_secret`;
 it calls the cron functions directly.
 
 ### Cron jobs (Spec D1 §10)
