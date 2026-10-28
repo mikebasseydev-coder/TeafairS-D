@@ -8,7 +8,7 @@ select plan(19);
 
 -- ── fixtures (plan "common fixture shape") ──────────────────────────────
 -- T1: zone Lagos (ZSM Z) with Ikeja (TM TA, ASM AA, DSM MA, DSA DA, DSA DA2,
--- FINTECH_AGENT F, DISABLED DSA X) and Epe (TM TB, DSA DB); zone Kano with
+-- POS_AGENT F, DISABLED DSA X) and Epe (TM TB, DSA DB); zone Kano with
 -- Fagge (DSA DK). T2: zone Lagos2 with ZSM Z2.
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria',   'NESTLE'),
@@ -45,7 +45,7 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000007',
    'TM', null, '40000000-0000-0000-0000-000000000002', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000010', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000010',
-   'FINTECH_AGENT', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
+   'POS_AGENT', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000012', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000012',
    'ZSM', '30000000-0000-0000-0000-000000000009', null, null, 'ACTIVE', true);
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values

@@ -215,7 +215,7 @@ Deno.test({
     ]));
     await must(admin.from("orders").insert({ id: ids.order, tenant_id: ids.tenant, channel: "FIELD_SALES", teafair_agent_id: users.dsa.id, total_amount: 2500 }));
     await must(admin.from("tenant_users").insert([
-      { tenant_id: ids.tenant, profile_id: users.agent.id, role: "FINTECH_AGENT", territory_id: ids.territory, status: "ACTIVE", is_primary: true },
+      { tenant_id: ids.tenant, profile_id: users.agent.id, role: "POS_AGENT", territory_id: ids.territory, status: "ACTIVE", is_primary: true },
     ]));
     await must(admin.from("territories").update({ tm_id: users.tm.id }).eq("id", ids.territory));
     await must(admin.from("fintech_partners").insert({

@@ -161,11 +161,11 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
    'DSA', null, '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000003', 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
-   'FINTECH_AGENT', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
+   'POS_AGENT', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000006',
-   'FINTECH_AGENT', null, '40000000-0000-0000-0000-000000000002', null, 'ACTIVE', true),
+   'POS_AGENT', null, '40000000-0000-0000-0000-000000000002', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000007',
-   'FINTECH_AGENT', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true);
+   'POS_AGENT', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true);
 update public.territories set tm_id = '20000000-0000-0000-0000-000000000003'
  where id = '40000000-0000-0000-0000-000000000001';
 update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
@@ -229,7 +229,7 @@ select is((public.web_route_order('10000000-0000-0000-0000-000000000001',
           '40000000-0000-0000-0000-000000000001'::uuid, 'coded territory comes from the holder');
 select is((public.web_route_order('10000000-0000-0000-0000-000000000001',
             (select ac from public.agent_codes ac where code = 'POSIKEJA'), md5('ng_lga:LA:Epe')::uuid)).accountable_id,
-          '20000000-0000-0000-0000-000000000003'::uuid, 'FINTECH_AGENT code -> TM of terminal territory');
+          '20000000-0000-0000-0000-000000000003'::uuid, 'POS_AGENT code -> TM of terminal territory');
 select throws_ok($$select public.web_route_order('10000000-0000-0000-0000-000000000001',
             (select ac from public.agent_codes ac where code = 'POSEPE01'), md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'This link is not active yet', 'coded, no TM (holder territory Epe)');

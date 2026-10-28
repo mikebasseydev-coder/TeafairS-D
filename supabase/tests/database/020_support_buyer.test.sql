@@ -38,7 +38,7 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000002', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000002',
    'TM', null, '40000000-0000-0000-0000-000000000001', 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000003', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000003',
-   'FINTECH_AGENT', null, '40000000-0000-0000-0000-000000000001', 'ACTIVE', true);
+   'POS_AGENT', null, '40000000-0000-0000-0000-000000000001', 'ACTIVE', true);
 update public.territories set tm_id = '20000000-0000-0000-0000-000000000002'
  where id = '40000000-0000-0000-0000-000000000001';
 insert into public.tenant_settings (tenant_id, web_default_agent_id)
