@@ -90,7 +90,8 @@ grant select on public.monvelo_agent_tenants to authenticated;
 grant select on public.monvelo_agent_terminals to authenticated;
 
 -- ── helpers ─────────────────────────────────────────────────────────────
--- Agents with a link (any status) to a tenant the caller belongs to.
+-- Agents with an ACTIVE or SUSPENDED link to a tenant the caller belongs to. A
+-- PENDING proposal reveals nothing (it feeds the agent and terminal policies).
 create or replace function public.my_linked_monvelo_agent_ids()
 returns setof uuid
 language sql
@@ -99,7 +100,7 @@ security definer
 set search_path = public, pg_temp
 as $$
   select l.agent_id from public.monvelo_agent_tenants l
-  where l.tenant_id in (select public.my_tenant_ids());
+  where l.status in ('ACTIVE', 'SUSPENDED') and l.tenant_id in (select public.my_tenant_ids());
 $$;
 grant execute on function public.my_linked_monvelo_agent_ids() to authenticated;
 
@@ -342,17 +343,26 @@ begin
   select * into v_before from public.monvelo_agent_tenants
    where tenant_id = v_me.tenant_id and agent_id = v_agent.id for update;
   if not found then
-    insert into public.monvelo_agent_tenants (tenant_id, agent_id, territory_id, status, linked_by)
-    values (v_me.tenant_id, v_agent.id, p_territory_id, 'PENDING', v_me.profile_id)
-    returning * into v_after;
-  elsif v_before.status = 'ACTIVE' and v_before.territory_id = p_territory_id then
-    v_after := v_before;   -- nothing to approve again
-  else
-    update public.monvelo_agent_tenants
-       set territory_id = p_territory_id, status = 'PENDING', linked_by = v_me.profile_id,
-           approved_by = null, approved_at = null
-     where tenant_id = v_me.tenant_id and agent_id = v_agent.id
-    returning * into v_after;
+    -- two first links can race: the loser falls through to the update path
+    begin
+      insert into public.monvelo_agent_tenants (tenant_id, agent_id, territory_id, status, linked_by)
+      values (v_me.tenant_id, v_agent.id, p_territory_id, 'PENDING', v_me.profile_id)
+      returning * into v_after;
+    exception when unique_violation then
+      select * into v_before from public.monvelo_agent_tenants
+       where tenant_id = v_me.tenant_id and agent_id = v_agent.id for update;
+    end;
+  end if;
+  if v_after.agent_id is null then
+    if v_before.status = 'ACTIVE' and v_before.territory_id = p_territory_id then
+      v_after := v_before;   -- nothing to approve again
+    else
+      update public.monvelo_agent_tenants
+         set territory_id = p_territory_id, status = 'PENDING', linked_by = v_me.profile_id,
+             approved_by = null, approved_at = null
+       where tenant_id = v_me.tenant_id and agent_id = v_agent.id
+      returning * into v_after;
+    end if;
   end if;
 
   perform public.write_audit(v_me.tenant_id, 'link_monvelo_agent', 'monvelo_agent_tenants', v_agent.id::text,
@@ -365,7 +375,70 @@ $$;
 
 -- ── approve_monvelo_agent_link (MONVELO_OPERATOR) ───────────────────────
 -- A platform role names the tenant: the same exception as record_monvelo_fee_terms.
+-- The operator approves the territory they reviewed; a changed link needs a new look.
 create or replace function public.approve_monvelo_agent_link(
+  p_idempotency_key uuid,
+  p_tenant_id       uuid,
+  p_agent_id        uuid,
+  p_territory_id    uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_uid      uuid := public.assert_platform_role(array['MONVELO_OPERATOR']::public.platform_role_enum[]);
+  v_prior    jsonb;
+  v_before   public.monvelo_agent_tenants;
+  v_after    public.monvelo_agent_tenants;
+  v_boundary extensions.geometry;
+begin
+  v_prior := public.idempotency_begin(p_idempotency_key, 'approve_monvelo_agent_link',
+    jsonb_build_object('tenant_id', p_tenant_id, 'agent_id', p_agent_id, 'territory_id', p_territory_id));
+  if v_prior is not null then
+    return v_prior;
+  end if;
+
+  select * into v_before from public.monvelo_agent_tenants
+   where tenant_id = p_tenant_id and agent_id = p_agent_id for update;
+  if not found then
+    raise exception 'this agent is not linked to that tenant' using errcode = 'P0001';
+  end if;
+  if v_before.status <> 'PENDING' then
+    raise exception 'this link is not waiting for approval' using errcode = 'P0001';
+  end if;
+  if v_before.territory_id is distinct from p_territory_id then
+    raise exception 'the link''s territory changed; review it again' using errcode = 'P0001';
+  end if;
+  if not exists (select 1 from public.monvelo_fintech_agents where id = p_agent_id and status = 'ACTIVE') then
+    raise exception 'the agent must be active to approve its link' using errcode = 'P0001';
+  end if;
+  select t.boundary into v_boundary from public.territories t
+   where t.id = v_before.territory_id and t.tenant_id = p_tenant_id;
+  if v_boundary is not null and exists (
+       select 1 from public.monvelo_agent_terminals mt
+       where mt.agent_id = p_agent_id and mt.is_active and mt.location is not null
+         and not extensions.st_covers(v_boundary, mt.location)) then
+    raise exception 'the agent''s venue lies outside that territory' using errcode = 'P0001';
+  end if;
+
+  update public.monvelo_agent_tenants
+     set status = 'ACTIVE', approved_by = v_uid, approved_at = now()
+   where tenant_id = p_tenant_id and agent_id = p_agent_id
+  returning * into v_after;
+
+  perform public.write_audit(p_tenant_id, 'approve_monvelo_agent_link', 'monvelo_agent_tenants', p_agent_id::text,
+                             to_jsonb(v_before), to_jsonb(v_after), p_idempotency_key);
+  return public.idempotency_complete(p_idempotency_key,
+    jsonb_build_object('tenant_id', p_tenant_id, 'agent_id', p_agent_id, 'status', v_after.status));
+end;
+$$;
+
+-- ── suspend_monvelo_agent_link (MONVELO_OPERATOR) ───────────────────────
+-- Stops one tenant's link, from PENDING or ACTIVE. suspend_monvelo_agent stops
+-- the agent for every tenant.
+create or replace function public.suspend_monvelo_agent_link(
   p_idempotency_key uuid,
   p_tenant_id       uuid,
   p_agent_id        uuid
@@ -381,7 +454,7 @@ declare
   v_before public.monvelo_agent_tenants;
   v_after  public.monvelo_agent_tenants;
 begin
-  v_prior := public.idempotency_begin(p_idempotency_key, 'approve_monvelo_agent_link',
+  v_prior := public.idempotency_begin(p_idempotency_key, 'suspend_monvelo_agent_link',
     jsonb_build_object('tenant_id', p_tenant_id, 'agent_id', p_agent_id));
   if v_prior is not null then
     return v_prior;
@@ -392,28 +465,21 @@ begin
   if not found then
     raise exception 'this agent is not linked to that tenant' using errcode = 'P0001';
   end if;
-  if v_before.status <> 'PENDING' then
-    raise exception 'this link is not waiting for approval' using errcode = 'P0001';
-  end if;
-  if not exists (select 1 from public.monvelo_fintech_agents where id = p_agent_id and status = 'ACTIVE') then
-    raise exception 'the agent must be active to approve its link' using errcode = 'P0001';
-  end if;
-
-  update public.monvelo_agent_tenants
-     set status = 'ACTIVE', approved_by = v_uid, approved_at = now()
+  update public.monvelo_agent_tenants set status = 'SUSPENDED'
    where tenant_id = p_tenant_id and agent_id = p_agent_id
   returning * into v_after;
 
-  perform public.write_audit(p_tenant_id, 'approve_monvelo_agent_link', 'monvelo_agent_tenants', p_agent_id::text,
-                             to_jsonb(v_before), to_jsonb(v_after), p_idempotency_key);
+  perform public.write_audit(p_tenant_id, 'suspend_monvelo_agent_link', 'monvelo_agent_tenants', p_agent_id::text,
+                             to_jsonb(v_before), to_jsonb(v_after) || jsonb_build_object('by', v_uid), p_idempotency_key);
   return public.idempotency_complete(p_idempotency_key,
     jsonb_build_object('tenant_id', p_tenant_id, 'agent_id', p_agent_id, 'status', v_after.status));
 end;
 $$;
 
 -- ── set_monvelo_agent_link_status (tenant ZSM) ──────────────────────────
--- Suspension needs no approval. Reactivation is only for a link the operator
--- approved before; a link that was never approved waits for approve_monvelo_agent_link.
+-- SUSPENDED stops a link at once, including withdrawing a PENDING proposal.
+-- ACTIVE reactivates a SUSPENDED link as PENDING: only approve_monvelo_agent_link
+-- makes a link ACTIVE. Asking for ACTIVE on an ACTIVE link changes nothing.
 create or replace function public.set_monvelo_agent_link_status(
   p_idempotency_key uuid,
   p_agent_id        uuid,
@@ -444,20 +510,21 @@ begin
   if not found then
     raise exception 'this agent is not linked to your tenant' using errcode = 'P0001';
   end if;
-  if p_status = 'ACTIVE' then
-    if v_before.status = 'PENDING' or v_before.approved_at is null then
-      raise exception 'this link is waiting for Monvelo approval' using errcode = 'P0001';
-    end if;
-    if not exists (select 1 from public.monvelo_fintech_agents where id = p_agent_id and status = 'ACTIVE') then
-      raise exception 'the agent must be active to reactivate its link' using errcode = 'P0001';
-    end if;
+
+  if p_status = 'SUSPENDED' then
+    update public.monvelo_agent_tenants set status = 'SUSPENDED'
+     where tenant_id = v_me.tenant_id and agent_id = p_agent_id
+    returning * into v_after;
   elsif v_before.status = 'PENDING' then
     raise exception 'this link is waiting for Monvelo approval' using errcode = 'P0001';
+  elsif v_before.status = 'SUSPENDED' then
+    update public.monvelo_agent_tenants
+       set status = 'PENDING', approved_by = null, approved_at = null
+     where tenant_id = v_me.tenant_id and agent_id = p_agent_id
+    returning * into v_after;
+  else
+    v_after := v_before;
   end if;
-
-  update public.monvelo_agent_tenants set status = p_status
-   where tenant_id = v_me.tenant_id and agent_id = p_agent_id
-  returning * into v_after;
 
   perform public.write_audit(v_me.tenant_id, 'set_monvelo_agent_link_status', 'monvelo_agent_tenants', p_agent_id::text,
                              to_jsonb(v_before), to_jsonb(v_after), p_idempotency_key);
@@ -470,6 +537,7 @@ grant execute on function
   public.set_monvelo_agent_subaccount(uuid, uuid, text),
   public.upsert_monvelo_terminal(uuid, uuid, uuid, text, uuid, boolean),
   public.link_monvelo_agent(uuid, public.pos_network_enum, text, uuid),
-  public.approve_monvelo_agent_link(uuid, uuid, uuid),
+  public.approve_monvelo_agent_link(uuid, uuid, uuid, uuid),
+  public.suspend_monvelo_agent_link(uuid, uuid, uuid),
   public.set_monvelo_agent_link_status(uuid, uuid, text)
 to authenticated;

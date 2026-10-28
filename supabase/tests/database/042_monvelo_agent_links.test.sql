@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(82);
+select plan(101);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -99,7 +99,7 @@ select throws_ok(
 select throws_ok(
   $$select public.set_monvelo_agent_subaccount('c0000000-0000-0000-0000-000000000003',
       'a0000000-0000-0000-0000-000000000009', 'ACCT_x1')$$,
-  'P0001', null, 'an unknown agent is refused');
+  'P0001', 'unknown fintech agent', 'an unknown agent is refused');
 do $$ begin perform set_config('test.sub1', public.set_monvelo_agent_subaccount(
   'c0000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', 'ACCT_grace01')::text, true); end $$;
 select is((current_setting('test.sub1')::jsonb ->> 'has_paystack_subaccount')::boolean, true,
@@ -158,7 +158,7 @@ select throws_ok(
 select throws_ok(
   $$select public.upsert_monvelo_terminal('d0000000-0000-0000-0000-000000000006', null,
       'a0000000-0000-0000-0000-000000000009', 'T-X', null, true)$$,
-  'P0001', null, 'an unknown agent is refused');
+  'P0001', 'unknown fintech agent', 'an unknown agent is refused');
 select is(public.upsert_monvelo_terminal('d0000000-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-000000000001',
     'a0000000-0000-0000-0000-000000000001', ' t-grace-1 ', '20000000-0000-0000-0000-000000000005', true) ->> 'terminal_id',
   'b0000000-0000-0000-0000-000000000001', 'the same key replays');
@@ -230,23 +230,23 @@ select is(public.monvelo_agent_link_active('10000000-0000-0000-0000-000000000001
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
   $$select public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000001',
-      '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001')$$,
+      '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001')$$,
   '42501', null, 'the tenant ZSM cannot approve its own link');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
 select is(public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000002',
-    '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001') ->> 'status', 'ACTIVE',
+    '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001') ->> 'status', 'ACTIVE',
   'an operator with no tenant membership approves the link');
 select is(public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000002',
-    '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001') ->> 'tenant_id',
+    '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001') ->> 'tenant_id',
   '10000000-0000-0000-0000-000000000001', 'the approval replays');
 select throws_ok(
   $$select public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000003',
-      '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001')$$,
-  'P0001', null, 'approving a link that is not PENDING is refused');
+      '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001')$$,
+  'P0001', 'this link is not waiting for approval', 'approving a link that is not PENDING is refused');
 select throws_ok(
   $$select public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000004',
-      '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001')$$,
-  'P0001', null, 'approving a link that does not exist is refused');
+      '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000002')$$,
+  'P0001', 'this agent is not linked to that tenant', 'approving a link that does not exist is refused');
 reset role;
 select is(public.monvelo_agent_link_active('10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001'),
   true, 'an approved link is active');
@@ -263,8 +263,13 @@ reset role;
 select is(public.monvelo_agent_link_active('10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001'),
   false, 'and it is inactive until re-approved');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
+select throws_ok(
+  $$select public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000010',
+      '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001',
+      '40000000-0000-0000-0000-000000000001')$$,
+  'P0001', 'the link''s territory changed; review it again', 'approval with a stale territory is refused');
 select is(public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000005',
-    '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001') ->> 'status', 'ACTIVE',
+    '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000003') ->> 'status', 'ACTIVE',
   'the operator approves the new territory');
 reset role;
 
@@ -283,28 +288,41 @@ select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-000
 select throws_ok(
   $$select public.set_monvelo_agent_link_status('f0000000-0000-0000-0000-000000000003',
       'a0000000-0000-0000-0000-000000000001', 'GONE')$$,
-  'P0001', null, 'an unknown status is refused');
+  'P0001', 'the status must be ACTIVE or SUSPENDED', 'an unknown status is refused');
 select is(public.set_monvelo_agent_link_status('f0000000-0000-0000-0000-000000000004',
     'a0000000-0000-0000-0000-000000000001', 'SUSPENDED') ->> 'status', 'SUSPENDED', 'ZSM A suspends the link');
 select is(public.set_monvelo_agent_link_status('f0000000-0000-0000-0000-000000000004',
     'a0000000-0000-0000-0000-000000000001', 'SUSPENDED') ->> 'status', 'SUSPENDED', 'the suspension replays');
 select is((select count(*)::int from public.monvelo_agent_tenants where status = 'SUSPENDED'), 1,
   'a suspended link is still visible to its tenant');
--- the agent is suspended platform-wide: reactivating the link needs an ACTIVE agent
-select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
-select lives_ok($$select public.suspend_monvelo_agent('f0000000-0000-0000-0000-000000000005',
-    'a0000000-0000-0000-0000-000000000001', 'test')$$, 'the operator suspends the agent');
-select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.monvelo_fintech_agents), 1,
+  'and a SUSPENDED link still shows the agent');
+-- a ZSM reactivating a SUSPENDED link gets PENDING, never ACTIVE
+select is(public.set_monvelo_agent_link_status('f0000000-0000-0000-0000-000000000005',
+    'a0000000-0000-0000-0000-000000000001', 'ACTIVE') ->> 'status', 'PENDING', 'a reactivated link goes to PENDING');
 select throws_ok(
   $$select public.set_monvelo_agent_link_status('f0000000-0000-0000-0000-000000000006',
       'a0000000-0000-0000-0000-000000000001', 'ACTIVE')$$,
-  'P0001', null, 'reactivating the link needs an ACTIVE agent');
-select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
-select lives_ok($$select public.approve_monvelo_agent('f0000000-0000-0000-0000-000000000007',
-    'a0000000-0000-0000-0000-000000000001')$$, 'the operator reactivates the agent');
-select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+  'P0001', 'this link is waiting for Monvelo approval', 'a ZSM cannot activate a PENDING link');
+select is((select count(*)::int from public.monvelo_fintech_agents), 0,
+  'a PENDING link does not make the agent visible to its tenant');
+-- a ZSM withdraws a PENDING proposal, and may propose it again
+select is(public.set_monvelo_agent_link_status('f0000000-0000-0000-0000-000000000007',
+    'a0000000-0000-0000-0000-000000000001', 'SUSPENDED') ->> 'status', 'SUSPENDED', 'a ZSM withdraws a PENDING link');
 select is(public.set_monvelo_agent_link_status('f0000000-0000-0000-0000-000000000008',
-    'a0000000-0000-0000-0000-000000000001', 'ACTIVE') ->> 'status', 'ACTIVE', 'ZSM A reactivates the link');
+    'a0000000-0000-0000-0000-000000000001', 'ACTIVE') ->> 'status', 'PENDING', 'and proposes it again');
+reset role;
+select is((select approved_by is null and approved_at is null from public.monvelo_agent_tenants), true,
+  'a link back in PENDING carries no approval');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
+select is(public.approve_monvelo_agent_link('a1000000-0000-0000-0000-000000000006',
+    '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001',
+    '40000000-0000-0000-0000-000000000003') ->> 'status', 'ACTIVE', 'the operator approves the reactivated link');
+-- tenant B proposes a link too; it stays PENDING through the visibility checks
+select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000002');
+select is(public.link_monvelo_agent('e0000000-0000-0000-0000-000000000009', 'MONIEPOINT', 'MP-GRACE',
+    '40000000-0000-0000-0000-000000000002') ->> 'status', 'PENDING', 'tenant B proposes a link to X');
+reset role;
 
 -- ── visibility ──────────────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
@@ -315,17 +333,67 @@ select is((select has_paystack_subaccount from public.monvelo_fintech_agents whe
 select throws_ok($$select paystack_subaccount_code from public.monvelo_fintech_agents$$,
   '42501', null, 'but not the subaccount code');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000002');
-select is((select count(*)::int from public.monvelo_agent_tenants), 0, 'B''s ZSM reads no link');
-select is((select count(*)::int from public.monvelo_agent_terminals), 0, 'B''s ZSM reads no terminal');
-select is((select count(*)::int from public.monvelo_fintech_agents), 0, 'B''s ZSM reads no agent');
+select is((select count(*)::int from public.monvelo_agent_tenants), 1, 'B''s ZSM reads its own PENDING link only');
+select is((select count(*)::int from public.monvelo_agent_terminals), 0, 'a PENDING link reveals no terminal');
+select is((select count(*)::int from public.monvelo_fintech_agents), 0, 'a PENDING link reveals no agent');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', null);
-select is((select count(*)::int from public.monvelo_agent_tenants), 1, 'member M reads its link');
+select is((select count(*)::int from public.monvelo_agent_tenants), 2, 'member M reads the links of its agent');
 select is((select count(*)::int from public.monvelo_agent_terminals), 1, 'member M reads its terminal');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000006', null);
 select is((select count(*)::int from public.monvelo_agent_tenants), 0, 'a stranger reads no link');
 select is((select count(*)::int from public.monvelo_agent_terminals), 0, 'a stranger reads no terminal');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
 select is((select count(*)::int from public.monvelo_agent_terminals), 2, 'the operator reads every terminal');
+
+-- ── the operator suspends one link; withdraw, re-propose, approve ────────
+select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000002');
+select is(public.set_monvelo_agent_link_status('b1000000-0000-0000-0000-000000000001',
+    'a0000000-0000-0000-0000-000000000001', 'SUSPENDED') ->> 'status', 'SUSPENDED', 'B withdraws its PENDING link');
+select is(public.link_monvelo_agent('b1000000-0000-0000-0000-000000000002', 'MONIEPOINT', 'MP-GRACE',
+    '40000000-0000-0000-0000-000000000002') ->> 'status', 'PENDING', 'B proposes it again');
+select throws_ok(
+  $$select public.suspend_monvelo_agent_link('b1000000-0000-0000-0000-000000000003',
+      '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001')$$,
+  '42501', null, 'a tenant ZSM cannot use the operator suspension');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
+select lives_ok($$select public.suspend_monvelo_agent('b1000000-0000-0000-0000-000000000004',
+    'a0000000-0000-0000-0000-000000000001', 'test')$$, 'the operator suspends agent X');
+select throws_ok(
+  $$select public.approve_monvelo_agent_link('b1000000-0000-0000-0000-000000000005',
+      '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001',
+      '40000000-0000-0000-0000-000000000002')$$,
+  'P0001', 'the agent must be active to approve its link', 'approving a link needs an ACTIVE agent');
+select lives_ok($$select public.approve_monvelo_agent('b1000000-0000-0000-0000-000000000006',
+    'a0000000-0000-0000-0000-000000000001')$$, 'the operator reactivates agent X');
+select is(public.approve_monvelo_agent_link('b1000000-0000-0000-0000-000000000007',
+    '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001',
+    '40000000-0000-0000-0000-000000000002') ->> 'status', 'ACTIVE', 'the operator approves B''s link');
+select is(public.suspend_monvelo_agent_link('b1000000-0000-0000-0000-000000000008',
+    '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001') ->> 'status', 'SUSPENDED',
+  'the operator suspends B''s link alone');
+select is(public.suspend_monvelo_agent_link('b1000000-0000-0000-0000-000000000008',
+    '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001') ->> 'tenant_id',
+  '10000000-0000-0000-0000-000000000002', 'the operator suspension replays');
+select throws_ok(
+  $$select public.suspend_monvelo_agent_link('b1000000-0000-0000-0000-000000000009',
+      '10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000009')$$,
+  'P0001', 'this agent is not linked to that tenant', 'suspending an unknown link is refused');
+reset role;
+select is(public.monvelo_agent_link_active('10000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001'),
+  false, 'B''s link is no longer active');
+select is(public.monvelo_agent_link_active('10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001'),
+  true, 'while A''s link to the same agent stays ACTIVE');
+-- the venue boundary is checked again at approval (a PENDING row inserted past link_monvelo_agent)
+insert into public.monvelo_agent_tenants (tenant_id, agent_id, territory_id, status, linked_by) values
+  ('10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000003',
+   '40000000-0000-0000-0000-000000000001', 'PENDING', '20000000-0000-0000-0000-000000000001');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', null);
+select throws_ok(
+  $$select public.approve_monvelo_agent_link('b1000000-0000-0000-0000-000000000010',
+      '10000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000003',
+      '40000000-0000-0000-0000-000000000001')$$,
+  'P0001', 'the agent''s venue lies outside that territory', 'approval re-checks the venue boundary');
+reset role;
 
 -- ── assert_monvelo_member (claims only: the helper has no API grant) ────
 reset role;
