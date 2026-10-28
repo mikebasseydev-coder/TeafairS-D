@@ -697,7 +697,7 @@ Audit `entity_type` values written from now on use the new table names (`web_ref
 
 - **Teafairweb's public responses do not change.** These responses name none of the renamed objects: `storefront-catalogue` (its `venue` is `{name, channel}`), `storefront-locations`, `web-checkout` (the `place_web_order` result) and `web-order-status`.
 - **One staff response changes.** In `order-dispute-evidence` (authenticated, staff only), `order.agent_code_id` becomes `order.referral_code_id`. It has no consumer yet, since the Spec B app is unbuilt.
-- The renamed RPCs `upsert_web_referral_code` and `set_web_pos_venue` are PostgREST calls for staff. No client calls them yet. Only the integration suite and pgTAP do.
+- The renamed RPCs `upsert_web_referral_code` and `set_web_pos_venue` are PostgREST calls for staff. No client calls them yet. Only the integration suite and pgTAP do. Their results and idempotency request keys change with the rename: `upsert_web_referral_code` returns `referral_code_id` (was `agent_code_id`) and `set_web_pos_venue` returns `venue_id` (was `terminal_id`).
 
 ### 15.5 The commission rule
 
