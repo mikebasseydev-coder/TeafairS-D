@@ -1,7 +1,7 @@
 # Addendum A6 to Spec A: Monvelo, inventory financing for neighbourhood shops
 
 **Date:** 2026-10-28
-**Status:** draft for the user's review
+**Status:** draft for the user's approval (questions answered 2026-10-28)
 **Authority:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) still governs. Its §9 rules hold without exception. Where this addendum changes an earlier decision, it says so.
 
 ## 1. Intent
@@ -65,7 +65,7 @@ User decisions 2026-10-28 (with the Director-of-Sales structure the user asked f
 | DSM / DSA | Direct sales (web, events, churches, schools, offices) via A1 links | — | **not part of Monvelo** |
 | RETAIL_SHOP_OWNER | shop owner ("SHOP_OWNER") | — | confirms delivery and each repayment |
 | Monvelo fintech agent (new, platform) | a registered POS agent | — | pledges, claims, funds, records repayments |
-| MONVELO_OPERATOR (new platform role) | Monvelo operations | — | approves fintech agents; reviews flags; accepts brand terms if Q2 says so |
+| MONVELO_OPERATOR (new platform role) | Monvelo operations | — | approves fintech agents; records Teafair's fee terms; reviews flags |
 | MONVELO_FINANCE (new platform role) | Teafair's Monvelo finance officer | — | records rebate payouts; dashboard |
 
 New values: `ZSA` and `ASA` in `tenant_role_enum`;
@@ -141,8 +141,14 @@ the tenant's opt-in.
 - `tenant_id`, `brand` (matched case-insensitively, like brand tiers);
 - `rebate_bps`, `interest_free_days` (default 30), `late_charge_bps` (default 1000, i.e. 10%);
 - `valid_from`, `valid_to`;
-- `proposed_by` (a tenant ZSM), `approved_by` (a second tenant ZSM: the tenant approves its own terms, as the user decided), `status` (`PROPOSED`, `APPROVED`, `WITHDRAWN`);
-- optionally `accepted_by` (MONVELO_OPERATOR). This is open question Q2 (§14): Teafair fronts the rebate for contracted brands, so it may need to accept terms before they apply.
+- `proposed_by` (a tenant ZSM), `approved_by` (a second tenant ZSM), `status` (`PROPOSED`, `APPROVED`, `WITHDRAWN`).
+
+The brand's own approval is the gate (user, 2026-10-28: "brands must
+approve before we sell"). Monvelo does not countersign.
+
+**`monvelo_tenant_fee_terms(tenant_id, fee_bps, valid_from, valid_to, recorded_by)`**:
+Teafair's fees under the distribution contract, recorded by MONVELO_OPERATOR
+and readable by the tenant. They are dated and immutable, like brand terms.
 
 Rows are immutable once approved. A new rate is a new row; overlapping
 APPROVED rows for one brand are refused. A launch promotion (Purerigin at
@@ -184,7 +190,9 @@ DELIVERED ──due_at passes with outstanding > 0──▶ DEFAULTED_WITH_LATE_
 REQUESTED / AWAITING_APPROVAL / OFFERED ──raiser or TM cancels──▶ CANCELLED
 ```
 
-Funded but never delivered (stock refused or lost): `FUNDED → REFUND_DUE`.
+Supply is same day (user, 2026-10-28). A financing FUNDED but not
+DELIVERED by 23:59 Africa/Lagos on its funding day becomes `REFUND_DUE`
+(the cron sweep), as does stock refused or lost.
 Teafair refunds the agent through Paystack (D1's refund path) and no rebate
 is owed. If the rebate was already paid, it is offset against the agent's
 next rebate, never clawed back by hand.
@@ -209,10 +217,19 @@ open accounts with all participating fintechs; rebates are paid from
 these"). Changes go through a migration, or a MONVELO_OPERATOR RPC with
 audit.
 
-**`monvelo_brand_cost_recoveries`**: for each contracted (non-Teafair)
-brand, the rebates Teafair paid on its behalf, per month, to be recovered
-under the distribution contract. TEAFAIR's own brands are recorded too, as
-internal cost of sale.
+**`monvelo_tenant_settlements(tenant_id, business_date, gross, rebates, fees, net, remitted_reference?, remitted_at?)`**:
+the tenant is Teafair's client (user, 2026-10-28). Teafair collects the
+funding, deducts every Teafair fee and the rebates it paid on the tenant's
+brands, and owes the tenant the rest. For each day, from the tenant's lines
+only:
+- `gross` = principal funded and delivered;
+- `rebates` = rebates paid;
+- `fees` = gross × the fee terms valid that day;
+- `net` = gross − rebates − fees.
+
+The transfer to the tenant happens outside the app (the user: "this may not
+be an issue for the app"). MONVELO_FINANCE may note its reference. TEAFAIR's
+own brands get a row too, as internal accounting.
 
 **`monvelo_flags(kind, subject, details, status, reviewed_by)`**: pattern
 flags for the operator (§7.4).
@@ -243,12 +260,12 @@ days and 10%.
 6. **Straight away,** Bisi gets WhatsApp: "Monvelo MV-…: ₦4,800 rebate
    confirmed, paid from Teafair OPay to your account ending 4821 by 10:14
    tomorrow."
-7. **The warehouse releases the stock.** The shop owner confirms receipt
-   with the shop-owner OTP, so the financing is DELIVERED and due 30 days
-   after delivery.
+7. **The stock reaches the shop the same day.** The shop owner confirms
+   receipt with the shop-owner OTP, so the financing is DELIVERED and due 30
+   days after delivery. Not delivered by 23:59 means REFUND_DUE.
 8. **Before Friday 10:14,** the finance officer pays ₦4,800 from Teafair's
    OPay account and records the transfer reference. Bisi gets "Paid, ref …".
-   Teafair records ₦4,800 of Purerigin cost of sale.
+   ₦4,800 goes into TEAFAIR's settlement for the day as rebates (Purerigin is Teafair's own brand).
 9. **Over the next weeks,** the shop repays Bisi at her terminal in part payments. Each one is recorded by Bisi and confirmed by the owner.
 10. **On full repayment by the due date,** the financing is
     REPAID_WITHIN_WINDOW and the shop's Purerigin limit grows (§7.2). If it
@@ -280,7 +297,9 @@ When Spec C lands, it extends this RPC rather than replacing it.
 | `approve_monvelo_agent`, `suspend_monvelo_agent`, `change_agent_settlement_account` | MONVELO_OPERATOR | audited |
 | `nominate_monvelo_agent` | shop owner, or ZSA/ASA on their behalf | a lead |
 | `propose_monvelo_brand_terms` | tenant ZSM | |
-| `approve_monvelo_brand_terms` / `withdraw_…` | a different tenant ZSM | (plus `accept_…` by MONVELO_OPERATOR if Q2 says yes) |
+| `approve_monvelo_brand_terms` / `withdraw_…` | a different tenant ZSM | the brand's approval is the gate |
+| `record_monvelo_fee_terms` | MONVELO_OPERATOR | Teafair's contract fees per tenant |
+| `record_tenant_remittance(p_idempotency_key, p_settlement_id, p_reference)` | MONVELO_FINANCE | optional: notes the off-app transfer to the tenant |
 | `set_monvelo_supply_day` | TM | |
 | `pledge_monvelo_funds` | fintech member | |
 | `request_monvelo_financing(p_idempotency_key, p_order_id)` | the order's raiser | principal derived; limit check |
@@ -329,10 +348,14 @@ All gateways use `observe(...)` (Sentry) and the A5 message router.
 | `monvelo_weekly_statement` | each active agent | Monday 08:00 |
 | `monvelo_repayment_reminder` | shop owner | day 25 and day 30 after delivery |
 | `monvelo_late_charge` | shop owner and funder | day 31 |
+| `monvelo_tenant_daily` | each tenant's ZSMs | 19:30 daily: the tenant's own brands only: funded and delivered, value financed, rebates paid, fees, net owed, repayments, overdue shops |
+| `monvelo_tenant_weekly` | each tenant's ZSMs | Monday 08:30: the week's totals and trends, and the settlements |
 
 Each send is logged in `notification_logs` under new purposes, with the
-last four phone digits only. Agent statements are also stored
-(`monvelo_agent_statements`) so the app can show them.
+last four phone digits only. Agent statements and tenant reports are also
+stored (`monvelo_agent_statements`, `monvelo_tenant_reports`) so the app can
+show them. Tenant reports follow the mixed-order rule in §8: other tenants'
+lines never appear.
 
 Scheduled work (pg_cron, Africa/Lagos dates):
 - supply-day announcements;
@@ -396,9 +419,9 @@ Scheduled work (pg_cron, Africa/Lagos dates):
 | Fintech member | their agent's pledges, claims, funded financings, repayments, payables and statements; open offers available to them (shop name and code, area, amount, distance; never the owner's name or phone) |
 | ZSA / ASA | financings they raised; enrolments and shops on their beat |
 | TM / ASM | their territory's financings for their tenant |
-| ZSM | the tenant's Monvelo book: financings with lines of its brands, its brand terms, its cost recoveries |
+| ZSM | the tenant's Monvelo book: financings with lines of its brands, its brand terms, its fee terms, its settlements and reports |
 | MONVELO_OPERATOR | all Monvelo tables |
-| MONVELO_FINANCE | payables, payout accounts, cost recoveries, financings (read) |
+| MONVELO_FINANCE | payables, payout accounts, tenant settlements, financings (read) |
 
 **Tenant isolation:** a tenant sees only financings whose lines carry its brands, never another tenant's lines in a mixed order.
 
@@ -415,7 +438,7 @@ Read RPCs for MONVELO_FINANCE (the screens come with Spec B):
   - funding received through Paystack versus principal financed;
   - refunds due.
 - `monvelo_payables(p_status, p_network, p_limit, p_after)`: the work queue, oldest due first.
-- `monvelo_brand_cost_statement(p_month)`: what each brand owes (contracted brands) or has absorbed (Teafair brands).
+- `monvelo_tenant_settlement_statement(p_from, p_to)`: per tenant, gross, rebates, fees, net owed, and remitted or not.
 - `monvelo_exceptions()`: payer mismatches, refunds due, open flags, notification failures, payouts awaiting second approval.
 - Actions: `record_rebate_payout`, `approve_rebate_payout`.
 
@@ -469,6 +492,10 @@ This addendum deploys after the auth hardening (local main `db13f55`).
 - Competition: many agents per shop, supply-day notices, pledges, shop nominations.
 - Allocation: preferred agent first for 10 min, then first pledged claim, 15 min to pay.
 - A dedicated finance dashboard.
+- Supply is same day.
+- Brands approve their terms before any sale.
+- The tenant is Teafair's client: fees and rebates are deducted before remitting.
+- Daily and weekly reports go to each tenant.
 
 **Claude's calls (open to change):**
 - the ASM is optional above about 10 ASAs; the ZSA reports to the ZSM;
@@ -483,9 +510,13 @@ This addendum deploys after the auth hardening (local main `db13f55`).
 - REFUND_DUE with offset;
 - `place_trade_order` in this addendum;
 - the `FIELD_SALES` rename;
-- the `monvelo_` prefix for extraction.
+- the `monvelo_` prefix for extraction;
+- tenant reports on WhatsApp to the ZSMs (email later);
+- the 23:59 same-day refund cut-off;
+- the fee as basis points on gross.
 
-## 14. Open questions for the user
+## 14. Questions answered (2026-10-28)
 
-- **Q1. How does the stock reach the shop?** Either the ZSA or ASA carries it on the visit (van sales, delivered within minutes of funding), or the warehouse delivers on a later run. This decides when the 30 days start and how long a FUNDED-but-undelivered financing may wait before REFUND_DUE.
-- **Q2. Does Monvelo (Teafair) have to accept a brand's terms before they apply?** Teafair pays every rebate up front and recovers contracted brands' share afterwards, so a generous rate is Teafair's cash exposure until it is recovered.
+- **Q1, stock:** supply is same day. The clock starts at the owner's delivery confirmation; not delivered by 23:59 Lagos time means REFUND_DUE.
+- **Q2, terms:** brands must approve before any sale. The brand's approval is the gate, with no Monvelo countersignature.
+- **The tenant is Teafair's client:** Teafair deducts all its fees and the rebates paid before remitting to the tenant. Daily and weekly reports go to each tenant.
