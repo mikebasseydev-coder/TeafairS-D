@@ -603,6 +603,31 @@ functions `send-auth-sms` and `send-auth-email`, local only. From the
 6. Meta: the `teafair_otp` authentication template is now also the sign-in
    code. With no SMS fallback, a number not on WhatsApp cannot sign in.
 
+### Monvelo consent MV-SHARE-2026-10
+
+Migration `20261028120600_monvelo_shop_enrolment`, function `monvelo-shop-consent`
+(A6 §4.1, NDPA 2023, ruling 10), local only.
+
+- **The consent text.** The owner agrees that Teafair may share the shop's
+  name, shop code, location and area with registered Monvelo fintech agents for
+  stock financing, and may withdraw at any time. The words are shown in the
+  app (Spec B); the WhatsApp message is the authentication OTP template, which
+  carries no custom text. Every enrolment records `consent_version`
+  (`MV-SHARE-2026-10`) and `consent_at`. New wording is a new version string.
+- **Withdrawal.** `withdraw_monvelo_shop_consent` (the shop's owner only) sets
+  every ACTIVE or SUSPENDED enrolment of the shop to WITHDRAWN. Re-enrolment
+  needs a fresh code and returns the row to ACTIVE with a new consent time.
+  Withdrawal leaves `retail_shops.preferred_agent_id` in place, so Step 2+
+  readers must require an ACTIVE enrolment before showing a shop to an agent.
+- **Destination.** The code goes to the owner's verified profile phone
+  (`auth.users.phone_confirmed_at` set), never the shop's contact number.
+- **Area guard.** The area must be in the caller's tenant (42501). A ZSA's
+  area must lie in a territory of the ZSA's zone; an ASA's area must be the
+  ASA's own `tenant_users.area_id` (the stricter reading).
+- **Nominations** keep the last four digits of the phone only; the full number
+  is dropped in the RPC and reaches the street agent through a notification
+  (Step 6).
+
 ## Layout
 
 ```

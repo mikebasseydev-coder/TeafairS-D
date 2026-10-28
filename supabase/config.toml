@@ -526,3 +526,6 @@ verify_jwt = false
 
 [functions.monvelo-agent-register]
 verify_jwt = false
+
+[functions.monvelo-shop-consent]
+verify_jwt = false

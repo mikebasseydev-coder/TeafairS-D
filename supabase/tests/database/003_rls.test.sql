@@ -88,6 +88,8 @@ select is(
      and t.tablename <> 'web_phone_verifications'
      -- A5: the Storage purge queue is internal, touched only by SECURITY DEFINER functions
      and t.tablename <> 'storage_purge_queue'
+     -- A6: consent challenges hold code hashes and are touched only by SECURITY DEFINER functions
+     and t.tablename <> 'monvelo_consent_challenges'
      and not exists (select 1 from pg_policies p
                      where p.schemaname = 'public' and p.tablename = t.tablename and p.cmd = 'SELECT')),
   0, 'every public table has a SELECT policy');

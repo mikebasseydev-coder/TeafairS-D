@@ -1147,6 +1147,61 @@ Deno.test({
 });
 
 Deno.test({
+  name: "monvelo-shop-consent: a ZSA starts consent, the owner's WhatsApp carries the code, and the ZSA enrols the shop",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const zsmUser = await createUser(15);
+    const zsaUser = await createUser(16);
+    await must(admin.from("monvelo_tenant_settings").upsert({ tenant_id: ids.tenant, enabled: true }));
+    const [zsm] = (await must(admin.from("tenant_users").insert(
+      { tenant_id: ids.tenant, profile_id: zsmUser.id, role: "ZSM", zone_id: ids.zone, status: "ACTIVE", is_primary: true },
+    ).select("id"))) ?? [];
+    await must(admin.from("tenant_users").insert(
+      { tenant_id: ids.tenant, profile_id: zsaUser.id, role: "ZSA", zone_id: ids.zone, reports_to_id: zsm.id, status: "ACTIVE", is_primary: true },
+    ));
+    const [area] = (await must(admin.from("areas").insert(
+      { tenant_id: ids.tenant, territory_id: ids.territory, area_name: `IT Allen ${run}` },
+    ).select("id"))) ?? [];
+    const owner = await must(admin.from("profiles").select("phone_number").eq("id", users.owner.id).single()) as { phone_number: string };
+    const [shop] = (await must(admin.from("retail_shops").insert({
+      shop_name: `IT consent ${run}`, contact_phone: owner.phone_number, owner_id: users.owner.id,
+      density_category: "SUBURBAN", location: "SRID=4326;POINT(3.35 6.6)",
+    }).select("id"))) ?? [];
+    const zsa = await asUser(zsaUser.email);
+
+    const before = whatsappSends.length;
+    const key = crypto.randomUUID();
+    const started = await zsa.post("monvelo-shop-consent", { idempotency_key: key, action: "start", shop_id: shop.id, area_id: area.id });
+    const startedBody = await started.json();
+    assertEquals(started.status, 200, JSON.stringify(startedBody));
+    assert(!/"code"/.test(JSON.stringify(startedBody)), "the code never reaches the street agent");
+    const sent = whatsappSends.slice(before).filter((w) => w.template === "teafair_otp" && w.to === owner.phone_number.replace(/^\+/, ""));
+    assertEquals(sent.length, 1);
+    const code = sent[0].params[0];
+    assert(/^[0-9]{6}$/.test(code), code);
+
+    // a replay sends nothing more
+    const replay = await zsa.post("monvelo-shop-consent", { idempotency_key: key, action: "start", shop_id: shop.id, area_id: area.id });
+    await replay.body?.cancel();
+    assertEquals(whatsappSends.slice(before).filter((w) => w.template === "teafair_otp" && w.to === owner.phone_number.replace(/^\+/, "")).length, 1);
+
+    const wrong = await zsa.post("monvelo-shop-consent", {
+      idempotency_key: crypto.randomUUID(), action: "enrol", challenge_id: startedBody.challenge_id, code: code === "000000" ? "111111" : "000000",
+    });
+    const wrongBody = await wrong.json();
+    assertEquals([wrong.status, wrongBody.error.code], [422, "CONSENT_CODE_INVALID"]);
+
+    const enrolled = await zsa.post("monvelo-shop-consent", {
+      idempotency_key: crypto.randomUUID(), action: "enrol", challenge_id: startedBody.challenge_id, code,
+    });
+    const enrolledBody = await enrolled.json();
+    assertEquals(enrolled.status, 200, JSON.stringify(enrolledBody));
+    assert(/^SH-[A-Z2-7]{6}$/.test(enrolledBody.shop_code), enrolledBody.shop_code);
+  },
+});
+
+Deno.test({
   name: "teardown",
   sanitizeOps: false,
   sanitizeResources: false,
