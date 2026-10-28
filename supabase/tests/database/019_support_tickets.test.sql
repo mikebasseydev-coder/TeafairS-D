@@ -204,7 +204,7 @@ reset role;
 -- territory TM only, never the accountable selling agent. O1 is an Ikeja
 -- ORDER ticket whose accountable is the DSA.
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount) values
-  ('80000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'FIELD_DSA',
+  ('80000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'FIELD_SALES',
    '20000000-0000-0000-0000-000000000004', 5000);
 insert into public.support_tickets (id, tenant_id, public_reference, kind, category, order_id, territory_id, accountable_id) values
   ('60000000-0000-0000-0000-000000000020', '10000000-0000-0000-0000-000000000001', 'TK-AAAAD1', 'ORDER', 'PAYMENT',

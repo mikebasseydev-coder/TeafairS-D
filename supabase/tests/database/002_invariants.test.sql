@@ -184,7 +184,7 @@ select throws_ok(
 
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount) values
   ('80000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
-   'FIELD_DSA', '20000000-0000-0000-0000-000000000003', 4400);
+   'FIELD_SALES', '20000000-0000-0000-0000-000000000003', 4400);
 insert into public.order_items (tenant_id, order_id, sku_code, qty, unit_price) values
   ('10000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001', 'MILO-400', 2, 2200);
 

@@ -122,7 +122,7 @@ select pg_temp.mk(20, 'r_q_c',        1, '32 minutes');
 select pg_temp.mk(22, 'r_fail_new',   1, '1 hour');
 -- a field order with a split snapshot: D1 settles its payment, not its status
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, created_at) values
-  ('90000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', 'FIELD_DSA',
+  ('90000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', 'FIELD_SALES',
    '20000000-0000-0000-0000-000000000006', 2500, now() - interval '10 minutes');
 insert into public.payments (id, tenant_id, order_id, teafair_agent_id, fintech_partner_id, amount, paystack_reference,
                              split_subaccount_code, split_bps, split_amount, created_at) values
@@ -264,7 +264,7 @@ select is(public.settle_paystack_payment('charge.success', 'r_field', 'success',
   '9014', 'ACCT_grace01', 3750) ->> 'commission_status', 'SPLIT', 'a field payment still gets its commission row');
 select is((select row(p.payment_status::text, o.status)::text from public.payments p join public.orders o on o.id = p.order_id
             where p.paystack_reference = 'r_field'),
-  row('SUCCESS', 'PENDING')::text, 'the FIELD_DSA order stays PENDING');
+  row('SUCCESS', 'PENDING')::text, 'the FIELD_SALES order stays PENDING');
 select ok(not exists (select 1 from public.audit_logs
                        where entity_type = 'orders' and entity_id = '90000000-0000-0000-0000-000000000021'),
   'and is neither transitioned nor escalated');

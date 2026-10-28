@@ -101,7 +101,7 @@ insert into public.commission_records (id, tenant_id, order_id, payment_id, fint
    37.50, 150, 'ACCT_grace01', '8001', 'SETTLED', now());
 -- a field order with a SUCCESS payment: the payment is refunded, the order is Spec C's
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, created_at) values
-  ('90000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', 'FIELD_DSA',
+  ('90000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', 'FIELD_SALES',
    '20000000-0000-0000-0000-000000000006', 2500, 'DELIVERED', now() - interval '1 day');
 insert into public.payments (id, tenant_id, order_id, teafair_agent_id, amount, payment_status, paystack_reference,
                              created_at) values
@@ -260,7 +260,7 @@ select is(public.apply_paystack_refund('webhook', '5021', 'r_field', 250000, 'NG
   'refunded', 'a field payment is refunded');
 select is((select row(p.payment_status::text, o.status)::text from public.payments p join public.orders o on o.id = p.order_id
             where p.paystack_reference = 'r_field'),
-  row('REFUNDED', 'DELIVERED')::text, 'the FIELD_DSA order is Spec C''s and stays DELIVERED');
+  row('REFUNDED', 'DELIVERED')::text, 'the FIELD_SALES order is Spec C''s and stays DELIVERED');
 
 -- ── conflicts ───────────────────────────────────────────────────────────
 select is(public.apply_paystack_refund('webhook', '5003', 'r_unknown', 250000, 'NGN', 'REFUND', '{}') ->> 'outcome',

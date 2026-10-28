@@ -12,7 +12,7 @@ insert into public.retail_shops (id, shop_name, contact_phone, density_category,
   ('90000000-0000-0000-0000-000000000001', 'Mama Nkechi Provisions', '+2348000000010', 'MARKET_SQUARE',
    extensions.st_setsrid(extensions.st_makepoint(3.3515, 6.6018), 4326));
 insert into public.orders (id, tenant_id, channel, retail_shop_id, agent_id, teafair_agent_id, total_amount) values
-  ('80000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'FIELD_DSA',
+  ('80000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'FIELD_SALES',
    '90000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000001', 0),
   ('80000000-0000-0000-0000-000000000002', '7eaf0000-0000-4000-8000-000000000001', 'RETAIL',

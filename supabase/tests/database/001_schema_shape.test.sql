@@ -59,9 +59,9 @@ select is(
   52, 'RLS is enabled on all 52 tables');
 
 -- enums (§6.2)
-select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN']);
+select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN','MONVELO_OPERATOR','MONVELO_FINANCE']);
 select enum_has_labels('public', 'tenant_role_enum',
-  array['ZSM','TM','ASM','DSM','DSA','FINTECH_AGENT','RETAIL_SHOP_OWNER']);
+  array['ZSM','TM','ASM','DSM','DSA','FINTECH_AGENT','RETAIL_SHOP_OWNER','ZSA','ASA']);
 select enum_has_labels('public', 'tenant_status_enum', array['ACTIVE','SUSPENDED','INACTIVE']);
 select enum_has_labels('public', 'tenant_user_status_enum', array['ACTIVE','INVITED','DISABLED']);
 select enum_has_labels('public', 'kyc_status_enum', array['UNVERIFIED','PENDING','VERIFIED','REJECTED']);
@@ -73,7 +73,7 @@ select enum_has_labels('public', 'payment_status_enum',
   array['INITIATED','PROCESSING','SUCCESS','FAILED','REFUNDED']);
 select enum_has_labels('public', 'commission_status_enum', array['SPLIT','SETTLED','DISPUTED']);
 select enum_has_labels('public', 'warehouse_kind_enum', array['CENTRAL','REGIONAL','STOCKIST']);
-select enum_has_labels('public', 'order_channel_enum', array['ONLINE','FIELD_DSA','RETAIL']);
+select enum_has_labels('public', 'order_channel_enum', array['ONLINE','FIELD_SALES','RETAIL']);
 select enum_has_labels('public', 'audit_source_enum', array['USER','SYSTEM','WEBHOOK','CRON','WEB']);
 select enum_has_labels('public', 'venue_channel_enum',
   array['CHURCH','MOSQUE','HOSPITAL','OFFICE_COMPLEX','RESIDENTIAL_ESTATE',

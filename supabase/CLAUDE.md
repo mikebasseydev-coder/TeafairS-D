@@ -388,7 +388,7 @@ local only, after the one above.
   packs." Web buyers still buy single units. The rule sits on the tables
   (triggers) because no RPC writes these lines yet; Spec C inherits it.
   **User decision 2026-10-24: web sales (`ONLINE`, the Teafair storefront) are
-  retail; every app sale (`FIELD_DSA`, `RETAIL`, pickups) is wholesale.**
+  retail; every app sale (`FIELD_SALES`, `RETAIL`, pickups) is wholesale.**
   App order lines must also be priced at the product's per-unit
   `wholesale_price` (`20261024130100`): P0001 "App sales are at the wholesale
   price: <product> is W a unit, not P." Web lines keep the retail price.

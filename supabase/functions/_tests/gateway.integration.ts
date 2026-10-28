@@ -207,7 +207,7 @@ Deno.test({
       { id: ids.dsa, tenant_id: ids.tenant, profile_id: users.dsa.id, role: "DSA", territory_id: ids.territory, reports_to_id: ids.dsm, status: "ACTIVE", is_primary: true },
       { id: ids.owner, tenant_id: ids.tenant, profile_id: users.owner.id, role: "RETAIL_SHOP_OWNER", status: "ACTIVE", is_primary: true },
     ]));
-    await must(admin.from("orders").insert({ id: ids.order, tenant_id: ids.tenant, channel: "FIELD_DSA", teafair_agent_id: users.dsa.id, total_amount: 2500 }));
+    await must(admin.from("orders").insert({ id: ids.order, tenant_id: ids.tenant, channel: "FIELD_SALES", teafair_agent_id: users.dsa.id, total_amount: 2500 }));
     await must(admin.from("tenant_users").insert([
       { tenant_id: ids.tenant, profile_id: users.agent.id, role: "FINTECH_AGENT", territory_id: ids.territory, status: "ACTIVE", is_primary: true },
     ]));

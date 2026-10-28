@@ -162,7 +162,7 @@ select throws_ok(
   '23514', null, 'a new web order cannot carry a discount');
 select throws_ok(
   $$insert into public.orders (tenant_id, channel, teafair_agent_id, total_amount, transport_fare)
-    values ('7eaf0000-0000-4000-8000-000000000001', 'FIELD_DSA', '20000000-0000-0000-0000-000000000001', 5000, 750)$$,
+    values ('7eaf0000-0000-4000-8000-000000000001', 'FIELD_SALES', '20000000-0000-0000-0000-000000000001', 5000, 750)$$,
   '23514', null, 'app orders carry no transport fare');
 
 -- ── refund policy ───────────────────────────────────────────────────────

@@ -461,14 +461,14 @@ select is(pg_temp.visible_photo(3), 0, 'no live slot, no download');
 reset role;
 
 -- ── fail closed: no fulfilment row, or not a web order (set up as postgres) ─
--- O6: ONLINE and IN_TRANSIT with no fulfilment row; O7: a FIELD_DSA order in
+-- O6: ONLINE and IN_TRANSIT with no fulfilment row; O7: a FIELD_SALES order in
 -- transit with a fulfilment row and a known code
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
                            public_reference, delivery_lga_id, territory_id, fulfilment_warehouse_id) values
   (pg_temp.o(6), '7eaf0000-0000-4000-8000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000004', 2500,
    'IN_TRANSIT', 'PAYSTACK_WEB', 'TF-AAAAA6', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001',
    '70000000-0000-0000-0000-000000000001'),
-  (pg_temp.o(7), '7eaf0000-0000-4000-8000-000000000001', 'FIELD_DSA', '20000000-0000-0000-0000-000000000004', 2500,
+  (pg_temp.o(7), '7eaf0000-0000-4000-8000-000000000001', 'FIELD_SALES', '20000000-0000-0000-0000-000000000004', 2500,
    'IN_TRANSIT', null, null, null, '40000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001');
 insert into public.order_fulfilments (order_id, tenant_id, dispatched_by, delivery_pin_hash)
 values (pg_temp.o(7), '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000005',
