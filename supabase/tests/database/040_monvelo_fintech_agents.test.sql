@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(77);
+select plan(78);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -261,6 +261,8 @@ select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents',
   'nor pending_settlement');
 select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'paystack_payer_ref', 'select'), false,
   'nor paystack_payer_ref');
+select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'paystack_subaccount_code', 'select'), false,
+  'nor paystack_subaccount_code');
 select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'business_name', 'select'), true,
   'but business_name is readable');
 select is(has_table_privilege('authenticated', 'public.monvelo_fintech_agents', 'insert'), false, 'no direct insert');
