@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(2);
+select plan(4);
 
 create function pg_temp.bodies_matching(p_pattern text) returns text[]
 language sql stable as $$
@@ -16,6 +16,9 @@ $$;
 select enum_has_labels('public', 'tenant_role_enum',
   array['ZSM','TM','ASM','DSM','DSA','POS_AGENT','RETAIL_SHOP_OWNER','ZSA','ASA']);
 select is(pg_temp.bodies_matching('FINTECH_AGENT'), null::text[], 'no body names FINTECH_AGENT');
+
+select hasnt_table('public', 'fintech_advances', 'fintech_advances is gone');
+select is(pg_temp.bodies_matching('fintech_advances'), null::text[], 'no body names fintech_advances');
 
 select * from finish();
 rollback;

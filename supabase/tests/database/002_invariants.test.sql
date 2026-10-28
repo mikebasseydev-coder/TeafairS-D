@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(43);
+select plan(42);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 -- These fixtures insert ONLINE orders directly and are not about consent, so
@@ -220,10 +220,6 @@ select throws_ok(
     values ('10000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001',
             '20000000-0000-0000-0000-000000000003', 0, 'TF-REF-2')$$,
   '23514', null, 'a payment amount must be positive');
-select throws_ok(
-  $$insert into public.fintech_advances (tenant_id, agent_id, requested_amount, repayment_duration_days)
-    values ('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003', 1000, 31)$$,
-  '23514', null, 'an advance runs for at most 30 days');
 
 -- ── BVN hash (decision 17) ──────────────────────────────────────────────
 insert into public.user_secure_profiles (user_id, bvn_nin_hash, bvn_hash_version) values

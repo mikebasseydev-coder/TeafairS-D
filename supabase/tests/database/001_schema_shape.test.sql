@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(66);
+select plan(65);
 
 -- extensions (§14 phase 1)
 select has_extension('pgcrypto');
@@ -28,7 +28,7 @@ select tables_are('public', array[
   'ng_states', 'ng_lgas', 'territory_coverage',
   -- money and the liquidity engine (6)
   'fintech_partners', 'payments', 'commission_records', 'fintech_terminals',
-  'fintech_advances', 'cash_audit_batches',
+  'cash_audit_batches',
   -- platform (4)
   'otp_challenges', 'idempotency_logs', 'audit_logs', 'notifications',
   -- web chat and ticketing (4, addendum A3)
@@ -57,14 +57,14 @@ select tables_are('public', array[
   'monvelo_fintech_agents', 'monvelo_fintech_members',
   -- Monvelo shop enrolment, consent challenges and nominations (3, addendum A6)
   'monvelo_shop_enrolments', 'monvelo_consent_challenges', 'monvelo_agent_nominations'
-], 'public holds exactly the 61 tables');
+], 'public holds exactly the 60 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  61, 'RLS is enabled on all 61 tables');
+  60, 'RLS is enabled on all 60 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN','MONVELO_OPERATOR','MONVELO_FINANCE']);
@@ -104,7 +104,6 @@ select col_type_is('public', 'order_items', 'unit_price', 'numeric(15,2)', 'orde
 select col_type_is('public', 'order_items', 'line_total', 'numeric(15,2)', 'order_items.line_total is numeric(15,2)');
 select col_type_is('public', 'payments', 'amount', 'numeric(15,2)', 'payments.amount is numeric(15,2)');
 select col_type_is('public', 'commission_records', 'amount', 'numeric(15,2)', 'commission_records.amount is numeric(15,2)');
-select col_type_is('public', 'fintech_advances', 'requested_amount', 'numeric(15,2)', 'fintech_advances.requested_amount is numeric(15,2)');
 select col_type_is('public', 'cash_audit_batches', 'declared_cash_amount', 'numeric(15,2)', 'cash_audit_batches.declared_cash_amount is numeric(15,2)');
 select col_type_is('public', 'cash_audit_batches', 'digital_collection_total', 'numeric(15,2)', 'cash_audit_batches.digital_collection_total is numeric(15,2)');
 
