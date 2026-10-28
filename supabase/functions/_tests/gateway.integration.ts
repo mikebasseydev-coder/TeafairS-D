@@ -218,14 +218,14 @@ Deno.test({
       { tenant_id: ids.tenant, profile_id: users.agent.id, role: "POS_AGENT", territory_id: ids.territory, status: "ACTIVE", is_primary: true },
     ]));
     await must(admin.from("territories").update({ tm_id: users.tm.id }).eq("id", ids.territory));
-    await must(admin.from("fintech_partners").insert({
+    await must(admin.from("web_pos_partners").insert({
       id: ids.partner, tenant_id: ids.tenant, business_name: `IT Moniepoint ${run}`, pos_network: "MONIEPOINT",
       commission_bps: 150, contact_phone: `+${phone(5)}`, paystack_subaccount_code: "ACCT_it01",
       status: "ACTIVE", approved_by: users.tm.id, approved_at: new Date().toISOString(),
     }));
-    await must(admin.from("fintech_terminals").insert({
+    await must(admin.from("web_pos_venues").insert({
       id: ids.terminal, tenant_id: ids.tenant, partner_id: ids.partner, agent_id: users.agent.id,
-      terminal_id: `IT-${run}`, territory_id: ids.territory,
+      network_terminal_id: `IT-${run}`, territory_id: ids.territory,
     }));
     await must(admin.from("central_products").insert([
       { tenant_id: ids.tenant, sku_code: "MILO-400", product_name: "Milo 400g", brand: "Milo", category: "Beverages", unit_price: 2500, wholesale_price: 2000, nafdac_number: "A1-0001" },
@@ -373,14 +373,14 @@ const CODE = `IT-${run.toUpperCase()}`;
 const WEB = "http://localhost:3000";
 
 Deno.test({
-  name: "upsert_agent_code: a TM issues a 10% code through PostgREST",
+  name: "upsert_web_referral_code: a TM issues a 10% code through PostgREST",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
     const jwt = await signIn(users.tm.email);
     const tm = createClient(API, ANON, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${jwt}` } } });
-    const result = await must(tm.rpc("upsert_agent_code", {
-      p_idempotency_key: crypto.randomUUID(), p_code: CODE, p_agent_id: users.agent.id, p_terminal_id: ids.terminal,
+    const result = await must(tm.rpc("upsert_web_referral_code", {
+      p_idempotency_key: crypto.randomUUID(), p_code: CODE, p_agent_id: users.agent.id, p_venue_id: ids.terminal,
       p_discount_type: null, p_discount_value: null, p_max_redemptions: null, p_expires_at: null, p_is_active: true,
     })) as { code: string };
     assertEquals(result.code, CODE);
@@ -514,8 +514,8 @@ Deno.test({
     const placed = await res.json();
     assertEquals(res.status, 200, JSON.stringify(placed));
     assertEquals(placed.authorization_url, null);
-    const [order] = (await must(admin.from("orders").select("attributed_terminal_id, teafair_agent_id, payment_route, territory_id, fulfilment_warehouse_id").eq("id", placed.order_id))) ?? [];
-    assertEquals([order.attributed_terminal_id, order.teafair_agent_id, order.payment_route, order.territory_id, order.fulfilment_warehouse_id],
+    const [order] = (await must(admin.from("orders").select("attributed_venue_id, teafair_agent_id, payment_route, territory_id, fulfilment_warehouse_id").eq("id", placed.order_id))) ?? [];
+    assertEquals([order.attributed_venue_id, order.teafair_agent_id, order.payment_route, order.territory_id, order.fulfilment_warehouse_id],
       [ids.terminal, users.tm.id, "POS_AGENT", ids.territory, ids.warehouse]);
     const payments = await must(admin.from("payments").select("id").eq("order_id", placed.order_id));
     assertEquals(payments?.length, 0);
@@ -593,10 +593,10 @@ Deno.test({
     assertEquals([settled.status, settled.body.outcome], [200, "updated"], JSON.stringify(settled.body));
 
     const payment = await paymentOf(reference);
-    const [commission] = (await must(admin.from("commission_records").select("id, status, amount").eq("payment_id", payment.id))) ?? [];
+    const [commission] = (await must(admin.from("web_commissions").select("id, status, amount").eq("payment_id", payment.id))) ?? [];
     assertEquals([commission.status, Number(commission.amount)], ["SPLIT", 93]);
     // the release reads only SPLIT rows older than 24 h
-    await must(admin.from("commission_records").update({ created_at: new Date(Date.now() - 25 * 3_600_000).toISOString() }).eq("id", commission.id));
+    await must(admin.from("web_commissions").update({ created_at: new Date(Date.now() - 25 * 3_600_000).toISOString() }).eq("id", commission.id));
 
     const settlementId = 7_000_000 + Math.floor(Math.random() * 1_000_000);
     settlementLedger.push({
@@ -608,7 +608,7 @@ Deno.test({
     assertEquals(res.status, 200, JSON.stringify(counts));
     assert((counts.outcomes.settled ?? 0) >= 1, JSON.stringify(counts));
 
-    const [after] = (await must(admin.from("commission_records").select("status, paystack_settlement_id, settled_at").eq("id", commission.id))) ?? [];
+    const [after] = (await must(admin.from("web_commissions").select("status, paystack_settlement_id, settled_at").eq("id", commission.id))) ?? [];
     assertEquals([after.status, after.paystack_settlement_id], ["SETTLED", String(settlementId)]);
     assert(after.settled_at);
   },

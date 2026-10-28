@@ -58,11 +58,11 @@ insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004'),
   ('70000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'REG-EPE', 'REGIONAL',
    '40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003');
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    150, '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
-insert into public.agent_codes (id, tenant_id, code, agent_id, created_by, max_redemptions) values
+insert into public.web_referral_codes (id, tenant_id, code, agent_id, created_by, max_redemptions) values
   ('65000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'CAPONE01',
    '20000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000001', 1);
 
@@ -74,7 +74,7 @@ returns void language plpgsql as $$
 begin
   insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
                              public_reference, delivery_lga_id, territory_id, fulfilment_warehouse_id,
-                             agent_code_id, attributed_agent_id, created_at)
+                             referral_code_id, attributed_agent_id, created_at)
   values (('90000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid,
           '10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000006',
           2500, p_order_status, 'PAYSTACK_WEB', 'TF-AA00' || lpad(p_n::text, 2, '0'),
@@ -84,7 +84,7 @@ begin
           case when p_code then '65000000-0000-0000-0000-000000000001'::uuid end,
           case when p_code then '20000000-0000-0000-0000-000000000006'::uuid end,
           now() - p_age);
-  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, fintech_partner_id, amount,
+  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, web_pos_partner_id, amount,
                                payment_status, paystack_reference,
                                split_subaccount_code, split_bps, split_amount, created_at)
   values (('91000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid,
@@ -124,7 +124,7 @@ select pg_temp.mk(22, 'r_fail_new',   1, '1 hour');
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, created_at) values
   ('90000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', 'FIELD_SALES',
    '20000000-0000-0000-0000-000000000006', 2500, now() - interval '10 minutes');
-insert into public.payments (id, tenant_id, order_id, teafair_agent_id, fintech_partner_id, amount, paystack_reference,
+insert into public.payments (id, tenant_id, order_id, teafair_agent_id, web_pos_partner_id, amount, paystack_reference,
                              split_subaccount_code, split_bps, split_amount, created_at) values
   ('91000000-0000-0000-0000-000000000021', '10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000021',
    '20000000-0000-0000-0000-000000000006', '60000000-0000-0000-0000-000000000001', 2500.00, 'r_field',
@@ -199,7 +199,7 @@ select is(public.settle_paystack_payment('charge.success', 'r_ok', 'success', 25
   '9001', null, null) ->> 'order_status', 'PAID', 'PENDING → PAID');
 select is((select payment_status::text from public.payments where paystack_reference = 'r_ok'),
   'SUCCESS', 'the payment is SUCCESS');
-select is((select count(*)::int from public.commission_records where payment_id = '91000000-0000-0000-0000-000000000001'),
+select is((select count(*)::int from public.web_commissions where payment_id = '91000000-0000-0000-0000-000000000001'),
   0, 'no snapshot, no commission row');
 select is(pg_temp.notes('WEB_ORDER_PAID', 1), 2, 'warehouse manager and TM notified');
 select is((select array_agg(user_id::text order by user_id) from public.notifications
@@ -231,24 +231,24 @@ select is(pg_temp.notes('WEB_ORDER_PAID', 2), 1, 'recipients deduplicated');
 select is(public.settle_paystack_payment('charge.success', 'r_split', 'success', 250000, 'NGN', '{}',
   '9002', 'ACCT_grace01', 3750) ->> 'commission_status', 'SPLIT', 'matching split → SPLIT');
 select is((select row(amount, bps_applied, paystack_split_reference, paystack_subaccount_code,
-                      fintech_partner_id, teafair_agent_id, order_id)::text
-             from public.commission_records where payment_id = '91000000-0000-0000-0000-000000000003'),
+                      web_pos_partner_id, teafair_agent_id, order_id)::text
+             from public.web_commissions where payment_id = '91000000-0000-0000-0000-000000000003'),
   row(37.50::numeric(15,2), 150, '9002', 'ACCT_grace01', '60000000-0000-0000-0000-000000000001'::uuid,
       '20000000-0000-0000-0000-000000000006'::uuid, '90000000-0000-0000-0000-000000000003'::uuid)::text,
   'row copies the snapshot');
 select is(public.settle_paystack_payment('charge.success', 'r_split_bad', 'success', 250000, 'NGN', '{}',
   '9003', 'ACCT_other', 3750) ->> 'commission_status', 'DISPUTED', 'wrong subaccount → DISPUTED');
-select is((select dispute_reason from public.commission_records where payment_id = '91000000-0000-0000-0000-000000000004'),
+select is((select dispute_reason from public.web_commissions where payment_id = '91000000-0000-0000-0000-000000000004'),
   'SPLIT_MISMATCH', 'reason SPLIT_MISMATCH');
 select ok(exists (select 1 from public.audit_logs
-                   where operation = 'SPLIT_MISMATCH' and entity_type = 'commission_records'
+                   where operation = 'SPLIT_MISMATCH' and entity_type = 'web_commissions'
                      and before ->> 'split_subaccount' = 'ACCT_grace01' and (before ->> 'split_share_minor')::bigint = 3750
                      and after ->> 'split_subaccount' = 'ACCT_other' and (after ->> 'split_share_minor')::bigint = 3750),
   'the mismatch audit holds both values');
 select is((select count(*)::int from public.notifications where kind = 'COMMISSION_DISPUTED'),
   2, 'ZSMs told about the dispute');
 select ok(exists (select 1 from public.notifications n
-                   join public.commission_records c on c.payment_id = '91000000-0000-0000-0000-000000000004'
+                   join public.web_commissions c on c.payment_id = '91000000-0000-0000-0000-000000000004'
                   where n.kind = 'COMMISSION_DISPUTED' and n.title = 'Commission disputed'
                     and n.body = 'A partner commission needs review (SPLIT_MISMATCH).'
                     and n.payload = jsonb_build_object('commission_id', c.id, 'order_id', c.order_id,
@@ -256,7 +256,7 @@ select ok(exists (select 1 from public.notifications n
   'the dispute notification names the commission and the order');
 select is(public.settle_paystack_payment('charge.success', 'r_split_share', 'success', 250000, 'NGN', '{}',
   '9013', 'ACCT_grace01', 3700) ->> 'commission_status', 'DISPUTED', 'right subaccount, wrong share → DISPUTED');
-select is((select dispute_reason from public.commission_records where payment_id = '91000000-0000-0000-0000-000000000016'),
+select is((select dispute_reason from public.web_commissions where payment_id = '91000000-0000-0000-0000-000000000016'),
   'SPLIT_MISMATCH', 'reason SPLIT_MISMATCH for the share');
 
 -- ── field orders: the payment settles, the order is Spec C's ────────────

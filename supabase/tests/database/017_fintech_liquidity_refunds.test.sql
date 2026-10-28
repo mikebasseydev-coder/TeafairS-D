@@ -51,7 +51,7 @@ update public.territories set tm_id = '20000000-0000-0000-0000-000000000003'
 insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_id) values
   ('70000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'REG-IKEJA', 'REGIONAL',
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004');
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    150, '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
@@ -69,7 +69,7 @@ begin
           md5('ng_lga:LA:Ikeja')::uuid,
           '40000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001',
           now() - interval '1 day');
-  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, fintech_partner_id, amount,
+  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, web_pos_partner_id, amount,
                                payment_status, paystack_reference,
                                split_subaccount_code, split_bps, split_amount, created_at)
   values (('91000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid,
@@ -92,7 +92,7 @@ select pg_temp.mk(5, 'r_cancel', 'CANCELLED', 'SUCCESS');
 select pg_temp.mk(6, 'r_rev_init', 'PENDING', 'INITIATED');
 select pg_temp.mk(7, 'r_rev_bad',  'PENDING', 'INITIATED');
 -- the settled commission on r_full
-insert into public.commission_records (id, tenant_id, order_id, payment_id, fintech_partner_id, teafair_agent_id,
+insert into public.web_commissions (id, tenant_id, order_id, payment_id, web_pos_partner_id, teafair_agent_id,
                                        amount, bps_applied, paystack_subaccount_code, paystack_split_reference,
                                        status, settled_at) values
   ('92000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
@@ -148,7 +148,7 @@ select is(public.apply_paystack_refund('webhook', '5001', 'r_full', 250000, 'NGN
 select is((select row(p.payment_status::text, o.status)::text from public.payments p join public.orders o on o.id = p.order_id
             where p.paystack_reference = 'r_full'),
   row('REFUNDED', 'REFUNDED')::text, 'payment and order REFUNDED');
-select is((select row(status::text, dispute_reason)::text from public.commission_records
+select is((select row(status::text, dispute_reason)::text from public.web_commissions
             where id = '92000000-0000-0000-0000-000000000001'),
   row('DISPUTED', 'ORDER_REFUNDED')::text, 'commission disputed on refund');
 select is((select count(*)::int from public.notifications

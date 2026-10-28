@@ -81,7 +81,7 @@ update public.territories set web_fulfilment_warehouse_id = 'a5000000-0000-0000-
 insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id)
 select t.id, 'LA', md5('ng_lga:LA:Ikeja')::uuid, 'a5000000-0000-0000-0000-000000000011'
   from public.tenants t where t.code = 'TEAFAIR';
-insert into public.agent_codes (id, tenant_id, code, agent_id, created_by)
+insert into public.web_referral_codes (id, tenant_id, code, agent_id, created_by)
 select 'a5000000-0000-0000-0000-000000000014', t.id, 'ZSM-A5', 'a5000000-0000-0000-0000-000000000001',
        'a5000000-0000-0000-0000-000000000001'
   from public.tenants t where t.code = 'TEAFAIR';

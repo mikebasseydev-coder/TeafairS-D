@@ -32,18 +32,18 @@ update public.territories set web_fulfilment_warehouse_id = '70000000-0000-0000-
  where id = '40000000-0000-0000-0000-000000000001';
 insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id) values
   ('7eaf0000-0000-4000-8000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001');
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    200, '+2348000000005', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
   ('60000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003', 'Brand Opay', 'OPAY',
    150, '+2348000000006', 'ACCT_brand01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
-insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, terminal_id) values
+insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id) values
   ('61000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000001', 'MP-0001'),
   ('61000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003', '60000000-0000-0000-0000-000000000003',
    '20000000-0000-0000-0000-000000000001', 'OP-0003');
-insert into public.agent_codes (tenant_id, code, agent_id, terminal_id, created_by) values
+insert into public.web_referral_codes (tenant_id, code, agent_id, venue_id, created_by) values
   ('7eaf0000-0000-4000-8000-000000000001', 'GRACE-POS', '20000000-0000-0000-0000-000000000001',
    '61000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001'),
   ('10000000-0000-0000-0000-000000000003', 'BRAND-POS', '20000000-0000-0000-0000-000000000001',
@@ -74,16 +74,16 @@ select is((select web_transport_fare::text || '|' || coalesce(web_agent_bounty::
 
 -- ── no web discounts ────────────────────────────────────────────────────
 select throws_ok(
-  $$insert into public.agent_codes (tenant_id, code, agent_id, discount_type, discount_value, created_by)
+  $$insert into public.web_referral_codes (tenant_id, code, agent_id, discount_type, discount_value, created_by)
     values ('7eaf0000-0000-4000-8000-000000000001', 'PROMO-10', '20000000-0000-0000-0000-000000000001',
             'PERCENT', 10, '20000000-0000-0000-0000-000000000001')$$,
   'P0001', 'Web discounts are switched off: Teafairweb sells at full retail price.',
   'a promo code cannot carry a percentage discount');
 select throws_ok(
-  $$update public.agent_codes set discount_type = 'FIXED', discount_value = 1000 where code = 'GRACE-POS'$$,
+  $$update public.web_referral_codes set discount_type = 'FIXED', discount_value = 1000 where code = 'GRACE-POS'$$,
   'P0001', 'Web discounts are switched off: Teafairweb sells at full retail price.',
   'nor have a fixed one added later');
-select is((select count(*) from public.agent_codes where discount_type is not null or discount_value is not null),
+select is((select count(*) from public.web_referral_codes where discount_type is not null or discount_value is not null),
   0::bigint, 'no link carries a discount');
 select ok(not (public.storefront_catalogue('GRACE-POS') ? 'discount'), 'the storefront offers no discount');
 
@@ -97,7 +97,7 @@ select is((select codeless -> 'split' from q), 'null'::jsonb, 'a codeless order 
 select is((select pos ->> 'discount' from q), '0.00', 'a POS link gives no discount');
 select is((select pos ->> 'total' from q), '13750.00', 'POS link total is retail goods plus the fare');
 select is((select pos -> 'split' from q),
-  '{"fintech_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":0,"partner_share":500.00}'::jsonb,
+  '{"web_pos_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":0,"partner_share":500.00}'::jsonb,
   'the POS agent''s partner gets exactly 500, not 2 %');
 -- another tenant keeps its percentage commission, on the goods only
 select is((select other -> 'split' ->> 'partner_share' || '|' || (other -> 'split' ->> 'commission_bps') || '|' || (other ->> 'total') from q),
@@ -152,7 +152,7 @@ select is((select b -> 'order' ->> 'goods_total' || '|' || (b -> 'order' ->> 'di
   '13000.00|0.00|750.00|13750.00', 'evidence: retail goods, zero discount, the fare and the total');
 select is((select b -> 'payments' -> 0 ->> 'agent_commission' from ev), '500.00',
   'evidence: the flat 500 POS agent attribution');
-select ok((select b -> 'order' ->> 'agent_code_id' is not null from ev), 'evidence: the link the sale came through');
+select ok((select b -> 'order' ->> 'referral_code_id' is not null from ev), 'evidence: the link the sale came through');
 
 -- ── constraints ─────────────────────────────────────────────────────────
 select throws_ok(

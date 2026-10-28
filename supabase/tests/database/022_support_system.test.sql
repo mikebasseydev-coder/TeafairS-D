@@ -60,11 +60,11 @@ insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004'),
   ('70000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'REG-EPE', 'REGIONAL',
    '40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003');
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    150, '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
-insert into public.agent_codes (id, tenant_id, code, agent_id, created_by, max_redemptions) values
+insert into public.web_referral_codes (id, tenant_id, code, agent_id, created_by, max_redemptions) values
   ('65000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'CAPONE01',
    '20000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000001', 1);
 
@@ -76,7 +76,7 @@ returns void language plpgsql as $$
 begin
   insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
                              public_reference, delivery_lga_id, territory_id, fulfilment_warehouse_id,
-                             agent_code_id, attributed_agent_id, created_at)
+                             referral_code_id, attributed_agent_id, created_at)
   values (('90000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid,
           '10000000-0000-0000-0000-000000000001', 'ONLINE', '20000000-0000-0000-0000-000000000006',
           2500, p_order_status, 'PAYSTACK_WEB', 'TF-AA00' || lpad(p_n::text, 2, '0'),
@@ -86,7 +86,7 @@ begin
           case when p_code then '65000000-0000-0000-0000-000000000001'::uuid end,
           case when p_code then '20000000-0000-0000-0000-000000000006'::uuid end,
           now() - p_age);
-  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, fintech_partner_id, amount,
+  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, web_pos_partner_id, amount,
                                payment_status, paystack_reference,
                                split_subaccount_code, split_bps, split_amount, created_at)
   values (('91000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid,
@@ -130,7 +130,7 @@ create function pg_temp.pid(p_n integer) returns text language sql as $$
   select ('91000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'));
 $$;
 create function pg_temp.cid(p_n integer) returns text language sql as $$
-  select id::text from public.commission_records where payment_id = pg_temp.pid(p_n)::uuid;
+  select id::text from public.web_commissions where payment_id = pg_temp.pid(p_n)::uuid;
 $$;
 
 set local role service_role;
@@ -209,7 +209,7 @@ set local role service_role;
 select is(public.settle_paystack_payment('charge.success', 'r_split_share', 'success', 250000, 'NGN', '{}',
   '9013', 'ACCT_grace01', 3700) ->> 'commission_status', 'DISPUTED', 'a wrong share');
 reset role;
-update public.commission_records set status = 'SPLIT', dispute_reason = null, created_at = now() - interval '8 days'
+update public.web_commissions set status = 'SPLIT', dispute_reason = null, created_at = now() - interval '8 days'
  where payment_id = pg_temp.pid(16)::uuid;
 set local role service_role;
 select is(public.expire_unsettled_commissions(), 1, 'the aged SPLIT row expires');
@@ -226,8 +226,8 @@ select is((select m.body from public.support_messages m join public.support_tick
 -- ── a repeat reopens a RESOLVED ticket; a CLOSED one is replaced ───────
 -- the split-mismatch dispute on commission 4 recurs (status flips back)
 create function pg_temp.redispute(p_n integer) returns void language sql as $$
-  update public.commission_records set status = 'SPLIT', dispute_reason = null where payment_id = pg_temp.pid(p_n)::uuid;
-  update public.commission_records set status = 'DISPUTED', dispute_reason = 'SPLIT_MISMATCH'
+  update public.web_commissions set status = 'SPLIT', dispute_reason = null where payment_id = pg_temp.pid(p_n)::uuid;
+  update public.web_commissions set status = 'DISPUTED', dispute_reason = 'SPLIT_MISMATCH'
    where payment_id = pg_temp.pid(p_n)::uuid;
 $$;
 update public.support_tickets set status = 'RESOLVED', resolved_at = now()

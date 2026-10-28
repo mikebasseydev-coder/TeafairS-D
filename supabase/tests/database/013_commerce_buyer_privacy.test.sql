@@ -117,11 +117,11 @@ insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_
   ('10000000-0000-0000-0000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001'),
   ('10000000-0000-0000-0000-000000000001', 'LA', md5('ng_lga:LA:Eti-Osa')::uuid, '40000000-0000-0000-0000-000000000004');
 
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    150, '+2348000000004', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
-insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, terminal_id, territory_id, is_active) values
+insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id, is_active) values
   ('61000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000004', 'MP-0001', '40000000-0000-0000-0000-000000000001', true),
   ('61000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
@@ -130,7 +130,7 @@ insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, termi
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, is_active, nafdac_number) values
   ('10000000-0000-0000-0000-000000000001', 'MILO-400', 'Milo 400g', 'Milo', 'Beverages', 2500, 2000, true, 'A1-0101');
 
-insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, discount_type, discount_value,
+insert into public.web_referral_codes (id, tenant_id, code, agent_id, venue_id, discount_type, discount_value,
                                 max_redemptions, expires_at, is_active, created_by) values
   ('62000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'GRACE-01',
    '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001', null, null,

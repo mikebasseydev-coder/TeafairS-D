@@ -198,11 +198,11 @@ select throws_ok(
 
 -- ── money ───────────────────────────────────────────────────────────────
 select throws_ok(
-  $$insert into public.fintech_partners (tenant_id, business_name, pos_network, commission_bps, contact_phone, paystack_subaccount_code)
+  $$insert into public.web_pos_partners (tenant_id, business_name, pos_network, commission_bps, contact_phone, paystack_subaccount_code)
     values ('10000000-0000-0000-0000-000000000001', 'Ade POS', 'OPAY', 10001, '+2348000000009', 'ACCT_abc')$$,
   '23514', null, 'commission_bps cannot exceed 10000');
 select throws_ok(
-  $$insert into public.fintech_partners (tenant_id, business_name, pos_network, commission_bps, contact_phone)
+  $$insert into public.web_pos_partners (tenant_id, business_name, pos_network, commission_bps, contact_phone)
     values ('10000000-0000-0000-0000-000000000001', 'Ade POS', 'OPAY', 150, '+2348000000009')$$,
   '23502', null, 'a partner cannot exist without a Paystack subaccount');
 

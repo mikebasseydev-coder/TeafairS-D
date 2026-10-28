@@ -8,7 +8,7 @@ const ORIGIN = "https://teafairweb.com";
 const KEY = "c0000000-0000-0000-0000-000000000001";
 const QUOTE = {
   total: 5580, currency: "NGN",
-  split: { fintech_partner_id: "p1", subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 },
+  split: { web_pos_partner_id: "p1", subaccount_code: "ACCT_grace01", commission_bps: 150, partner_share: 83.7 },
 };
 const TOKEN = "A".repeat(43);
 const LGA = "d0000000-0000-0000-0000-000000000009";

@@ -49,7 +49,7 @@ update public.territories set tm_id = '20000000-0000-0000-0000-000000000003'
 insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_id) values
   ('70000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'REG-IKEJA', 'REGIONAL',
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004');
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    150, '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
@@ -66,7 +66,7 @@ begin
           2500, 'PAID', 'PAYSTACK_WEB', 'TF-CR00' || lpad(p_n::text, 2, '0'),
           md5('ng_lga:LA:Ikeja')::uuid,
           '40000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001', now() - p_age);
-  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, fintech_partner_id, amount,
+  insert into public.payments (id, tenant_id, order_id, teafair_agent_id, web_pos_partner_id, amount,
                                payment_status, paystack_reference,
                                split_subaccount_code, split_bps, split_amount, created_at)
   values (('91000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid,
@@ -75,7 +75,7 @@ begin
           '20000000-0000-0000-0000-000000000006', '60000000-0000-0000-0000-000000000001',
           2500.00, p_pay_status::public.payment_status_enum, p_ref,
           'ACCT_grace01', 150, 37.50, now() - p_age);
-  insert into public.commission_records (id, tenant_id, order_id, payment_id, fintech_partner_id, teafair_agent_id,
+  insert into public.web_commissions (id, tenant_id, order_id, payment_id, web_pos_partner_id, teafair_agent_id,
                                          amount, bps_applied, paystack_subaccount_code, paystack_split_reference,
                                          status, dispute_reason, created_at)
   values (('92000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid,
@@ -100,7 +100,7 @@ $$;
 create function pg_temp.crow(p_n integer) returns text language sql as $$
   select status || '/' || coalesce(dispute_reason, '-') || '/' || coalesce(paystack_settlement_id, '-')
          || '/' || (settled_at is not null)::text
-    from public.commission_records
+    from public.web_commissions
    where id = ('92000000-0000-0000-0000-0000000000' || lpad(p_n::text, 2, '0'))::uuid;
 $$;
 create function pg_temp.notes(p_reason text) returns integer language sql as $$
@@ -110,7 +110,7 @@ $$;
 create function pg_temp.audit_field(p_settlement text, p_ref text, p_side text, p_key text) returns text language sql as $$
   select case when p_side = 'after' then after ->> p_key else before ->> p_key end from public.audit_logs
    where idempotency_key = md5('paystack-settlement:' || p_settlement || ':' || p_ref)::uuid
-     and entity_type = 'commission_records' limit 1;
+     and entity_type = 'web_commissions' limit 1;
 $$;
 grant execute on function pg_temp.audits(text, text) to service_role;
 grant execute on function pg_temp.crow(integer) to service_role;

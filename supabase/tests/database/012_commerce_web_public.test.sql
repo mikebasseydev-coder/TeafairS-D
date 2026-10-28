@@ -104,13 +104,13 @@ insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_
   ('10000000-0000-0000-0000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001');
 
 -- partner 1 is ACTIVE (splits); partner 3 is PENDING (no split)
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    150, '+2348000000004', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
   ('60000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'Pending PalmPay', 'PALMPAY',
    150, '+2348000000004', 'ACCT_pend01', 'PENDING', null, null);
-insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, terminal_id, territory_id, is_active,
+insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id, is_active,
                                       venue_channel, venue_name, address_text, state, location) values
   ('61000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000004', 'MP-0001', '40000000-0000-0000-0000-000000000001', true,
@@ -133,7 +133,7 @@ insert into public.central_products (tenant_id, sku_code, product_name, brand, c
   ('10000000-0000-0000-0000-000000000001', 'OLD-SKU',   'Discontinued',     'Milo',  'Beverages',  500,  400, false, 'A1-0104'),
   ('10000000-0000-0000-0000-000000000002', 'OMO-1KG',   'Omo 1kg',          'Omo',   'Laundry',   3000, 2500, true, 'A1-0105');
 
-insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, discount_type, discount_value,
+insert into public.web_referral_codes (id, tenant_id, code, agent_id, venue_id, discount_type, discount_value,
                                 max_redemptions, expires_at, is_active, created_by) values
   ('62000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'GRACE-01',
    '20000000-0000-0000-0000-000000000004', '61000000-0000-0000-0000-000000000001', null, null,
@@ -167,7 +167,7 @@ insert into public.agent_codes (id, tenant_id, code, agent_id, terminal_id, disc
    null, null, true, '20000000-0000-0000-0000-000000000001');
 
 -- CAP-01 has already been redeemed once (a PAID order), so it is used up
-insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, agent_code_id,
+insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, referral_code_id,
                            attributed_agent_id, payment_route, public_reference,
                            delivery_lga_id, territory_id, fulfilment_warehouse_id) values
   ('70000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'ONLINE',
@@ -225,7 +225,7 @@ select is(public.quote_web_order('GRACE-01',
   '6200.00', 'web orders are billed at full retail price');
 select is(public.quote_web_order('GRACE-01',
             '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
-  '{"fintech_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":93.00}'::jsonb,
+  '{"web_pos_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":93.00}'::jsonb,
   'an active partner takes commission_bps of the total');
 select is(public.quote_web_order('GRACE-FIX', '[{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'a partner that is not ACTIVE gets no split');
@@ -268,21 +268,21 @@ select lives_ok(
 reset role;
 select is(
   (select channel || '|' || status || '|' || payment_route || '|' || total_amount || '|' || discount_amount
-          || '|' || attributed_terminal_id || '|' || teafair_agent_id || '|' || utm_source
-     from public.orders where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
+          || '|' || attributed_venue_id || '|' || teafair_agent_id || '|' || utm_source
+     from public.orders where referral_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
   'ONLINE|PENDING|PAYSTACK_WEB|6200.00|0.00|61000000-0000-0000-0000-000000000001|20000000-0000-0000-0000-000000000002|whatsapp',
   'the order carries attribution, discount, UTM and the territory''s TM as accountable agent');
 select is(
   (select sum(oi.line_total) from public.order_items oi join public.orders o on o.id = oi.order_id
-    where o.agent_code_id = '62000000-0000-0000-0000-000000000001' and o.payment_route = 'PAYSTACK_WEB'),
+    where o.referral_code_id = '62000000-0000-0000-0000-000000000001' and o.payment_route = 'PAYSTACK_WEB'),
   6200.00::numeric, 'the items are priced on the server');
 select is(
-  (select payment_status || '|' || amount || '|' || paystack_reference || '|' || fintech_partner_id
+  (select payment_status || '|' || amount || '|' || paystack_reference || '|' || web_pos_partner_id
      from public.payments where paystack_reference = 'TFW-r1'),
   'INITIATED|6200.00|TFW-r1|60000000-0000-0000-0000-000000000001', 'an INITIATED payment holds the reference');
 select ok(
   (select public_reference ~ '^TF-[0-9A-HJKMNP-TV-Z]{6}$' from public.orders
-    where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
+    where referral_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
   'the order has a public reference');
 select is(
   (select count(*)::int from public.audit_logs
@@ -303,7 +303,7 @@ select is(
 reset role;
 select is(
   (select count(*)::int from public.orders
-    where agent_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
+    where referral_code_id = '62000000-0000-0000-0000-000000000001' and payment_route = 'PAYSTACK_WEB'),
   1, 'a retry writes no second order');
 
 select pg_temp.as_service();
@@ -329,8 +329,8 @@ select lives_ok(
   'a house code works on the Paystack route');
 reset role;
 select is(
-  (select teafair_agent_id::text || '|' || coalesce(attributed_terminal_id::text, 'none')
-     from public.orders where agent_code_id = '62000000-0000-0000-0000-000000000006'),
+  (select teafair_agent_id::text || '|' || coalesce(attributed_venue_id::text, 'none')
+     from public.orders where referral_code_id = '62000000-0000-0000-0000-000000000006'),
   '20000000-0000-0000-0000-000000000006|none', 'a staff code holder is their own accountable agent');
 
 select pg_temp.as_service();

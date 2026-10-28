@@ -173,17 +173,17 @@ update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
 update public.tenant_settings set web_default_agent_id = '20000000-0000-0000-0000-000000000007'
  where tenant_id = '10000000-0000-0000-0000-000000000001';
 
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
    150, '+2348000000005', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
 -- the Epe terminal has no territory of its own
-insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, terminal_id, territory_id) values
+insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id) values
   ('61000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000005', 'MP-0005', '40000000-0000-0000-0000-000000000001'),
   ('61000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000006', 'MP-0006', null);
-insert into public.agent_codes (tenant_id, code, agent_id, terminal_id, created_by) values
+insert into public.web_referral_codes (tenant_id, code, agent_id, venue_id, created_by) values
   ('10000000-0000-0000-0000-000000000001', 'DSACODE1', '20000000-0000-0000-0000-000000000004', null, '20000000-0000-0000-0000-000000000001'),
   ('10000000-0000-0000-0000-000000000001', 'POSIKEJA', '20000000-0000-0000-0000-000000000005', '61000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000001'),
   ('10000000-0000-0000-0000-000000000001', 'POSEPE01', '20000000-0000-0000-0000-000000000006', '61000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000001');
@@ -222,16 +222,16 @@ select is((public.web_route_try('10000000-0000-0000-0000-000000000001', null, md
 
 -- coded
 select is((public.web_route_order('10000000-0000-0000-0000-000000000001',
-            (select ac from public.agent_codes ac where code = 'DSACODE1'), md5('ng_lga:KN:Fagge')::uuid)).accountable_id,
+            (select ac from public.web_referral_codes ac where code = 'DSACODE1'), md5('ng_lga:KN:Fagge')::uuid)).accountable_id,
           '20000000-0000-0000-0000-000000000004'::uuid, 'staff holder accountable for own sale, LGA ignored for territory');
 select is((public.web_route_order('10000000-0000-0000-0000-000000000001',
-            (select ac from public.agent_codes ac where code = 'DSACODE1'), md5('ng_lga:KN:Fagge')::uuid)).territory_id,
+            (select ac from public.web_referral_codes ac where code = 'DSACODE1'), md5('ng_lga:KN:Fagge')::uuid)).territory_id,
           '40000000-0000-0000-0000-000000000001'::uuid, 'coded territory comes from the holder');
 select is((public.web_route_order('10000000-0000-0000-0000-000000000001',
-            (select ac from public.agent_codes ac where code = 'POSIKEJA'), md5('ng_lga:LA:Epe')::uuid)).accountable_id,
+            (select ac from public.web_referral_codes ac where code = 'POSIKEJA'), md5('ng_lga:LA:Epe')::uuid)).accountable_id,
           '20000000-0000-0000-0000-000000000003'::uuid, 'POS_AGENT code -> TM of terminal territory');
 select throws_ok($$select public.web_route_order('10000000-0000-0000-0000-000000000001',
-            (select ac from public.agent_codes ac where code = 'POSEPE01'), md5('ng_lga:LA:Ikeja')::uuid)$$,
+            (select ac from public.web_referral_codes ac where code = 'POSEPE01'), md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'This link is not active yet', 'coded, no TM (holder territory Epe)');
 
 -- territory resolved but no warehouse at all
@@ -285,9 +285,9 @@ select throws_ok($$select public.set_territory_web_warehouse('bbbbbbbb-0000-0000
   '40000000-0000-0000-0000-000000000002', null)$$, '42501', null, 'DSA cannot set warehouse');
 reset role;
 
-select ok(not has_function_privilege('authenticated', 'public.web_route_order(uuid,public.agent_codes,uuid)', 'execute')
-      and not has_function_privilege('service_role', 'public.web_route_order(uuid,public.agent_codes,uuid)', 'execute')
-      and not has_function_privilege('authenticated', 'public.web_route_try(uuid,public.agent_codes,uuid)', 'execute')
+select ok(not has_function_privilege('authenticated', 'public.web_route_order(uuid,public.web_referral_codes,uuid)', 'execute')
+      and not has_function_privilege('service_role', 'public.web_route_order(uuid,public.web_referral_codes,uuid)', 'execute')
+      and not has_function_privilege('authenticated', 'public.web_route_try(uuid,public.web_referral_codes,uuid)', 'execute')
       and not has_function_privilege('authenticated', 'public.web_codeless_tenant()', 'execute'), 'routing is internal');
 select ok(has_function_privilege('authenticated', 'public.set_territory_coverage(uuid,text,uuid,uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.set_territory_web_warehouse(uuid,uuid,uuid)', 'execute')
@@ -321,14 +321,14 @@ insert into public.central_products (tenant_id, sku_code, product_name, brand, c
   ('7eaf0000-0000-4000-8000-000000000001', 'TF-TEA-50', 'Teafair Tea 50 bags', 'Teafair', 'Beverages', 1000, 800, true, 'A1-0101'),
   ('10000000-0000-0000-0000-000000000001', 'T1-SKU', 'T1 product', 'T1', 'Beverages', 1000, 800, true, 'A1-0102');
 
-insert into public.fintech_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'Zero OPay', 'OPAY',
    0, '+2348000000005', 'ACCT_zero01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
-insert into public.fintech_terminals (id, tenant_id, partner_id, agent_id, terminal_id, territory_id) values
+insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id) values
   ('61000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000002',
    '20000000-0000-0000-0000-000000000005', 'OP-0007', '40000000-0000-0000-0000-000000000001');
-insert into public.agent_codes (tenant_id, code, agent_id, terminal_id, created_by) values
+insert into public.web_referral_codes (tenant_id, code, agent_id, venue_id, created_by) values
   ('10000000-0000-0000-0000-000000000001', 'ZERO-BPS', '20000000-0000-0000-0000-000000000005',
    '61000000-0000-0000-0000-000000000007', '20000000-0000-0000-0000-000000000001');
 
@@ -368,16 +368,16 @@ select is(public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5
 select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'a 0-bps partner gets no split');
 select is(public.quote_web_order('POSIKEJA', '[{"sku_code":"T1-SKU","qty":2}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
-  '{"fintech_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":30.00}'::jsonb,
+  '{"web_pos_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":30.00}'::jsonb,
   'a terminal-bound code of an ACTIVE partner keeps its split shape');
 select throws_ok($$select public.quote_web_order('POSEPE01', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'This link is not active yet', 'a coded link with nobody accountable is not active');
 
 -- a 100 % partner would take everything: no split (Decision 4: 0 < share < total)
-update public.fintech_partners set commission_bps = 10000 where id = '60000000-0000-0000-0000-000000000002';
+update public.web_pos_partners set commission_bps = 10000 where id = '60000000-0000-0000-0000-000000000002';
 select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'a share equal to the total gives no split');
-update public.fintech_partners set commission_bps = 0 where id = '60000000-0000-0000-0000-000000000002';
+update public.web_pos_partners set commission_bps = 0 where id = '60000000-0000-0000-0000-000000000002';
 
 -- codeless PAYSTACK_WEB order
 select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', null,
@@ -386,7 +386,7 @@ select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', nul
     '{}', 'PAYSTACK_WEB', 1750.00,
     '{"reference":"TFW-cl1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'codeless order placed');
-select is((select coalesce(agent_code_id::text, 'none') || '|' || territory_id || '|' || fulfilment_warehouse_id
+select is((select coalesce(referral_code_id::text, 'none') || '|' || territory_id || '|' || fulfilment_warehouse_id
                   || '|' || teafair_agent_id || '|' || delivery_lga_id || '|' || tenant_id
              from public.orders where id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000001')),
   'none|40000000-0000-0000-0000-000000000011|70000000-0000-0000-0000-000000000011|20000000-0000-0000-0000-000000000011|'
@@ -436,7 +436,7 @@ select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000007', 'PO
     '{"reference":"TFW-g1","authorization_url":"https://x","split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":30}}',
     md5('ng_lga:LA:Ikeja')::uuid)$$,
   'the matching split is accepted');
-select is((select split_amount || '|' || split_bps || '|' || split_subaccount_code || '|' || fintech_partner_id
+select is((select split_amount || '|' || split_bps || '|' || split_subaccount_code || '|' || web_pos_partner_id
              from public.payments where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000007')),
   '30.00|150|ACCT_grace01|60000000-0000-0000-0000-000000000001', 'payment carries the split snapshot');
 select is((select territory_id || '|' || fulfilment_warehouse_id || '|' || teafair_agent_id

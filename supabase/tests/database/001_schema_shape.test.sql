@@ -9,7 +9,7 @@ select has_extension('pgcrypto');
 select has_extension('postgis');
 select has_extension('pg_cron');
 
--- the 33 Spec A tables (§6.1) + agent_codes (addendum A1) + order_contacts (addendum A2)
+-- the 33 Spec A tables (§6.1) + web_referral_codes (addendum A1) + order_contacts (addendum A2)
 -- + the four support tables (addendum A3) + the three chat tables (addendum A4)
 select tables_are('public', array[
   -- tenancy and identity (6)
@@ -23,11 +23,11 @@ select tables_are('public', array[
   'inventory_batches',
   -- commerce (6) + web storefront (1, addendum A1) + buyer contacts (1, addendum A2)
   'requisitions', 'requisition_items', 'orders', 'order_items',
-  'retail_stock_pickups', 'retail_stock_pickup_items', 'agent_codes', 'order_contacts',
+  'retail_stock_pickups', 'retail_stock_pickup_items', 'web_referral_codes', 'order_contacts',
   -- Nigerian locations (2, Spec D1 §3.1) + territory coverage (1, §3.2)
   'ng_states', 'ng_lgas', 'territory_coverage',
   -- money and the liquidity engine (6)
-  'fintech_partners', 'payments', 'commission_records', 'fintech_terminals',
+  'web_pos_partners', 'payments', 'web_commissions', 'web_pos_venues',
   'cash_audit_batches',
   -- platform (4)
   'otp_challenges', 'idempotency_logs', 'audit_logs', 'notifications',
@@ -103,7 +103,7 @@ select col_type_is('public', 'orders', 'total_amount', 'numeric(15,2)', 'orders.
 select col_type_is('public', 'order_items', 'unit_price', 'numeric(15,2)', 'order_items.unit_price is numeric(15,2)');
 select col_type_is('public', 'order_items', 'line_total', 'numeric(15,2)', 'order_items.line_total is numeric(15,2)');
 select col_type_is('public', 'payments', 'amount', 'numeric(15,2)', 'payments.amount is numeric(15,2)');
-select col_type_is('public', 'commission_records', 'amount', 'numeric(15,2)', 'commission_records.amount is numeric(15,2)');
+select col_type_is('public', 'web_commissions', 'amount', 'numeric(15,2)', 'web_commissions.amount is numeric(15,2)');
 select col_type_is('public', 'cash_audit_batches', 'declared_cash_amount', 'numeric(15,2)', 'cash_audit_batches.declared_cash_amount is numeric(15,2)');
 select col_type_is('public', 'cash_audit_batches', 'digital_collection_total', 'numeric(15,2)', 'cash_audit_batches.digital_collection_total is numeric(15,2)');
 
@@ -148,7 +148,7 @@ select has_column('public', 'tenant_users', 'pin_locked_until', 'public.tenant_u
 -- agent accountability (§6.10): NOT NULL on commerce, nullable on audit
 select col_not_null('public', 'orders', 'teafair_agent_id', 'public.orders.teafair_agent_id: col_not_null');
 select col_not_null('public', 'payments', 'teafair_agent_id', 'public.payments.teafair_agent_id: col_not_null');
-select col_not_null('public', 'commission_records', 'teafair_agent_id', 'public.commission_records.teafair_agent_id: col_not_null');
+select col_not_null('public', 'web_commissions', 'teafair_agent_id', 'public.web_commissions.teafair_agent_id: col_not_null');
 select col_is_null('public', 'audit_logs', 'teafair_agent_id', 'public.audit_logs.teafair_agent_id: col_is_null');
 
 -- brand tiers and escalation (decisions 18, 19)
