@@ -292,8 +292,9 @@ The behaviour is unchanged except for the commission rule.
 - Produces:
   - the tables `monvelo_agents` and `monvelo_agent_members`, with their constraints, indexes, policies and trigger renamed per A6 §15.4;
   - the column grants on `monvelo_agents`, carried over unchanged;
-  - `create or replace` with the same signatures and grants: `add_monvelo_member`, `approve_monvelo_agent`, `suspend_monvelo_agent`, `set_monvelo_agent_caps`, `register_monvelo_agent` (its 23505 handler now matches `monvelo_agents_pos_network_network_agent_id_key`), `request_settlement_change`, `approve_settlement_change`, `close_monvelo_nomination`, `my_monvelo_agent_ids` (SQL language);
-  - **No edits** to web objects or to `monvelo-agent-register` / `monvelo-shop-consent`: they call RPCs by name, and the names are unchanged.
+  - `create or replace` with the same signatures and grants: `add_monvelo_member`, `approve_monvelo_agent`, `suspend_monvelo_agent`, `set_monvelo_agent_caps`, `register_monvelo_agent` (its 23505 handler now matches `monvelo_agents_pos_network_network_agent_id_key`), `close_monvelo_nomination`, `my_monvelo_agent_ids` (SQL language);
+  - **Renamed RPCs** (user, 2026-10-28): drop `request_settlement_change` and `approve_settlement_change`; create `request_monvelo_settlement_change` and `approve_monvelo_settlement_change` with the same parameters, bodies (new table names) and grants.
+  - **Edits:** `supabase/functions/monvelo-agent-register/handler.ts` and `handler.test.ts` call `request_monvelo_settlement_change`. No edits to web objects or to `monvelo-shop-consent`.
 
 - [ ] **Step 1: Write the failing tests.**
   - **045, shape:** `has_table` and `hasnt_table`; `policies_are('public','monvelo_agents', array['monvelo_agents_select'])` and the same for members; `fk_ok('public','retail_shops','preferred_agent_id','public','monvelo_agents','id')`; the same for `monvelo_agent_nominations.recruited_agent_id`.
@@ -302,7 +303,8 @@ The behaviour is unchanged except for the commission rule.
   - **045, boundary:**
     - no `public` body matches both `public\.(web_pos_partners|web_pos_venues|web_referral_codes|web_commissions)` and `public\.monvelo_`;
     - no FK has one side `monvelo_%` and the other side `web_%`;
-    - the bodies naming `public\.monvelo_` in functions without `monvelo` in the name are exactly `{approve_settlement_change, request_settlement_change}`.
+    - no function without `monvelo` in its name has a body naming `public\.monvelo_` (the empty set);
+    - `request_settlement_change` and `approve_settlement_change` no longer exist (`hasnt_function`).
   - **042:** add the `monvelo_fintech_` body guard, and widen the catalog-name guard to `fintech|agent_code|commission_records|monvelo_fintech`.
   - **040 (renamed) and 041:** apply the substitutions.
 - [ ] **Step 2: Run** `supabase test db`. Expected: FAIL (`relation "public.monvelo_agents" does not exist`).

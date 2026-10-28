@@ -560,7 +560,7 @@ The frontend is modular, with separation of concerns. Teafairweb is the retail s
 
 - `payments` is shared because Monvelo funding (Step 3) also settles through the Paystack webhook. Today its only partner and venue columns are web columns (`web_pos_partner_id`, `web_pos_venue_id`). Monvelo will add its own `monvelo_`-named references in Step 3, never reusing the web columns.
 - `retail_shops.preferred_agent_id → monvelo_agents` is Monvelo's column on the shared registry (Step 1). It stays.
-- §4's rule now holds both ways. No non-Monvelo function writes Monvelo tables, and no Monvelo function reads web tables. Two Monvelo RPCs lack the prefix: `request_settlement_change` and `approve_settlement_change` (open question 3). A pgTAP boundary test allows exactly those two by name.
+- §4's rule now holds both ways. No non-Monvelo function writes Monvelo tables, and no Monvelo function reads web tables. The two settlement-account RPCs are renamed `request_monvelo_settlement_change` and `approve_monvelo_settlement_change` (user, 2026-10-28), so every Monvelo function carries the prefix.
 
 ### 15.4 Mapping (old → new)
 
@@ -671,7 +671,7 @@ The row types follow the tables. `web_price_cart(p_code public.agent_codes, …)
 | `settle_paystack_payment`, `apply_paystack_refund`, `release_commission`, `list_unsettled_subaccounts`, `expire_unsettled_commissions` | the new names only; the names and signatures are kept (call 7) |
 | `issue_otp`, `verify_otp`, `invite_tenant_user` | `'FINTECH_AGENT'` → `'POS_AGENT'` only |
 | `pos_order_lookup` | unchanged (its body names no old identifier) |
-| `add_monvelo_member`, `approve_monvelo_agent`, `suspend_monvelo_agent`, `set_monvelo_agent_caps`, `register_monvelo_agent`, `request_settlement_change`, `approve_settlement_change`, `close_monvelo_nomination`, `my_monvelo_agent_ids` | the new Monvelo table names only. `register_monvelo_agent` also matches the renamed constraint `monvelo_agents_pos_network_network_agent_id_key` in its 23505 handler |
+| `add_monvelo_member`, `approve_monvelo_agent`, `suspend_monvelo_agent`, `set_monvelo_agent_caps`, `register_monvelo_agent`, `request_settlement_change` → `request_monvelo_settlement_change`, `approve_settlement_change` → `approve_monvelo_settlement_change`, `close_monvelo_nomination`, `my_monvelo_agent_ids` | the new Monvelo table names only. `register_monvelo_agent` also matches the renamed constraint `monvelo_agents_pos_network_network_agent_id_key` in its 23505 handler |
 
 Audit `entity_type` values written from now on use the new table names (`web_referral_codes`, `web_pos_venues`, `web_commissions`, `monvelo_agents`, `monvelo_agent_members`). Any older rows keep the old names; audit rows are never rewritten.
 
@@ -768,8 +768,8 @@ The remote has the 29 migrations up to `20261015130200`. It therefore holds `fin
 | TEAFAIR POS partners stop earning the ₦500 bounty | Ruled by the user: 0 until rates are agreed |
 | The tenant rate is readable by every member of the tenant (`tenant_settings` has a table-level SELECT) | Accepted: it is the tenant's own setting, as the fare is |
 
-### 15.10 Open questions (the plan proceeds on the default shown)
+### 15.10 Questions answered (user, 2026-10-28)
 
-1. **Renaming the two staff RPCs** (`upsert_agent_code` → `upsert_web_referral_code`, `set_terminal_venue` → `set_web_pos_venue`, with `p_terminal_id` → `p_venue_id`). Default: rename, because no client calls them yet. The alternative keeps the old names and only rewrites the bodies, and the guard would then exempt those two names.
-2. **`orders.agent_code_id` → `referral_code_id`.** Default: rename, along with the staff evidence key.
-3. **Should `request_settlement_change` / `approve_settlement_change` get the `monvelo_` prefix?** Default: no. It is out of scope, and `monvelo-agent-register` calls the first by name. The boundary test allows both by name.
+1. **Renaming the two staff RPCs** (`upsert_agent_code` → `upsert_web_referral_code`, `set_terminal_venue` → `set_web_pos_venue`, with `p_terminal_id` → `p_venue_id`). **Answer: rename.**
+2. **`orders.agent_code_id` → `referral_code_id`.** **Answer: rename**, along with the staff evidence key.
+3. **Should `request_settlement_change` / `approve_settlement_change` get the `monvelo_` prefix?** **Answer: yes**: `request_monvelo_settlement_change` and `approve_monvelo_settlement_change`. They change a Monvelo agent's payout account (recruiter requests via `monvelo-agent-register`, operator approves); "settlement" alone collides with the web domain's Paystack settlements.
