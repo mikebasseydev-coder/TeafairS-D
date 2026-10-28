@@ -520,3 +520,288 @@ This addendum deploys after the auth hardening (local main `db13f55`).
 - **Q1, stock:** supply is same day. The clock starts at the owner's delivery confirmation; not delivered by 23:59 Lagos time means REFUND_DUE.
 - **Q2, terms:** brands must approve before any sale. The brand's approval is the gate, with no Monvelo countersignature.
 - **The tenant is Teafair's client:** Teafair deducts all its fees and the rebates paid before remitting to the tenant. Daily and weekly reports go to each tenant.
+
+## 15. Amendment 2026-10-28: Monvelo replaces fintech partners
+
+**Status:** user decisions 2026-10-28; Claude's calls below are open to change.
+**Amends:** §1 (the fintech-partner web links no longer "stay exactly as
+built"), §4 (the boundary rule), §4.1 (the agent registry gains a Paystack
+subaccount, terminals and tenant links), and Spec A §6.7, A1 §4 and D1 where
+they name `fintech_partners`, `fintech_terminals`, `fintech_advances` or the
+`FINTECH_AGENT` role. Spec A §9 still holds without exception.
+**Plan:** `docs/superpowers/plans/2026-10-28-monvelo-step1b-fintech-replacement.md`.
+
+### 15.1 Decisions (user, 2026-10-28; binding)
+
+1. Every legacy fintech-partner concept is replaced by the Monvelo registry
+   (`monvelo_fintech_agents`, `monvelo_fintech_members`). The legacy partner,
+   terminal and advance tables are dropped.
+2. There is no production data anywhere. The remote holds the old tables
+   (and none of D1–A6), but no rows to migrate. Nothing is copied.
+3. `fintech_advances` is dropped entirely. Monvelo financing (§4.4) replaces it.
+4. The flat ₦500 web POS bounty (`tenant_settings.web_agent_bounty`) is removed.
+   - Web sales pay a **percentage** commission, and **only** on direct
+     referral-link orders, that is, orders that carry an agent code.
+   - A codeless web order pays agents 0%, wherever it is routed or fulfilled.
+   - The interim rate is **0%** for every tenant until the user agrees a figure.
+5. Nothing is pushed or deployed. Monvelo tables keep the `monvelo_` prefix. No Prisma.
+
+### 15.2 The model after the change
+
+- **One registry.** `monvelo_fintech_agents` stays the single, platform-level
+  registry of POS agents. A MONVELO_OPERATOR approves and suspends an agent
+  there (Step 1), and now also sets its **Paystack subaccount**.
+- **Tenant links.** `monvelo_agent_tenants(tenant_id, agent_id, territory_id,
+  status, linked_by, …)`, primary key `(tenant_id, agent_id)`, takes the
+  tenant-scoped role `fintech_partners` had. Every tenant-scoped row that names
+  an agent (payments, commission records, agent codes, orders) references
+  `(tenant_id, agent_id)` on this table by composite FK. A row can therefore
+  never name an agent that is not linked to its own tenant, so the
+  composite-FK discipline of `supabase/CLAUDE.md` survives.
+- **Terminals.** `monvelo_agent_terminals` replaces `fintech_terminals`. It is
+  platform-level: one physical terminal serves every tenant the agent is
+  linked to. It carries the network terminal id, the A1 venue fields, an
+  active flag and the operating member's profile. Tenant-scoped rows reference
+  it as `(agent_id, terminal_id)`, so a terminal always belongs to the agent
+  the same row names.
+- **POS staff** are `monvelo_fintech_members`, never `tenant_users`.
+
+### 15.3 Mapping (old → new)
+
+**Tables and columns**
+
+| Old | New | Note |
+|---|---|---|
+| `fintech_partners` | **dropped** | identity → `monvelo_fintech_agents`; tenant scope → `monvelo_agent_tenants` |
+| `fintech_partners.business_name`, `pos_network`, `contact_phone` | the same columns on `monvelo_fintech_agents` | already built (Step 1) |
+| `fintech_partners.status`, `approved_by`, `approved_at` | `monvelo_fintech_agents` (platform approval) + `monvelo_agent_tenants.status` (per tenant) | |
+| `fintech_partners.territory_id` | `monvelo_agent_tenants.territory_id` (NOT NULL) | §15.4 call D |
+| `fintech_partners.paystack_subaccount_code` | `monvelo_fintech_agents.paystack_subaccount_code` (nullable, `^ACCT_…`, no column grant) + generated `has_paystack_subaccount` (granted) | call B |
+| `fintech_partners.commission_bps` | `tenant_settings.web_agent_commission_bps` (integer, NOT NULL, default 0, 0–10000) | call C |
+| `fintech_terminals` | `monvelo_agent_terminals` | platform-level |
+| `fintech_terminals.partner_id` | `monvelo_agent_terminals.agent_id` | |
+| `fintech_terminals.agent_id` (a FINTECH_AGENT profile) | `monvelo_agent_terminals.operator_profile_id` | FK `(agent_id, operator_profile_id)` → `monvelo_fintech_members` |
+| `fintech_terminals.terminal_id` | `monvelo_agent_terminals.network_terminal_id` | unique per agent |
+| `fintech_terminals.territory_id` | moved to the link | |
+| `fintech_terminals.tenant_id` | none | platform-level |
+| `fintech_terminals` venue fields (A1) | the same names on `monvelo_agent_terminals` | `venue_channel`, `venue_name`, `address_text`, `state`, `lga`, `location`, `operating_hours` |
+| `fintech_advances` | **dropped** | decision 3 |
+| `payments.fintech_partner_id` | `payments.monvelo_agent_id` (renamed) | the column grant follows the rename |
+| `payments.fintech_terminal_id` | `payments.monvelo_terminal_id` (renamed) | |
+| `payments.split_subaccount_code`, `split_bps`, `split_amount` | unchanged | now filled from the tenant rate |
+| `commission_records.fintech_partner_id` | `commission_records.monvelo_agent_id` (renamed, NOT NULL) | |
+| `commission_records.bps_applied`, `paystack_subaccount_code` | unchanged | copied from the payment's snapshot, as in D1 |
+| `agent_codes.agent_id` | unchanged meaning, now **nullable**: the tenant staff member (DSA, DSM, …) who holds a staff link | call E |
+| — | `agent_codes.monvelo_agent_id` (new) | the Monvelo agent that holds a POS link |
+| `agent_codes.terminal_id` | unchanged name, now → `monvelo_agent_terminals` | |
+| `orders.attributed_agent_id` | unchanged meaning: staff-link orders only | |
+| — | `orders.attributed_monvelo_agent_id` (new) | POS-link orders |
+| `orders.attributed_terminal_id` | unchanged name, now → `monvelo_agent_terminals` | |
+| `orders.agent_id` | unchanged | the field agent of a field order (Spec A); web orders never set it |
+| `tenant_settings.web_agent_bounty` | **dropped** | decision 4 |
+| `tenant_users.role = 'FINTECH_AGENT'` | the enum label stays; a CHECK forbids it | call E |
+
+**Foreign keys**
+
+| Old | New |
+|---|---|
+| `payments (tenant_id, fintech_partner_id) → fintech_partners` | `payments (tenant_id, monvelo_agent_id) → monvelo_agent_tenants (tenant_id, agent_id)` |
+| `payments (tenant_id, fintech_terminal_id) → fintech_terminals` | `payments (monvelo_agent_id, monvelo_terminal_id) → monvelo_agent_terminals (agent_id, id)`, plus CHECK: a terminal needs an agent |
+| `fintech_terminals (tenant_id, partner_id) → fintech_partners` | `monvelo_agent_terminals.agent_id → monvelo_fintech_agents` |
+| `commission_records (tenant_id, fintech_partner_id) → fintech_partners` | `commission_records (tenant_id, monvelo_agent_id) → monvelo_agent_tenants` |
+| `fintech_advances (tenant_id, partner_id) → fintech_partners` | dropped with the table |
+| `agent_codes (tenant_id, terminal_id) → fintech_terminals` | `agent_codes (tenant_id, monvelo_agent_id) → monvelo_agent_tenants` and `agent_codes (monvelo_agent_id, terminal_id) → monvelo_agent_terminals (agent_id, id)` |
+| `orders_attributed_terminal_fk (tenant_id, attributed_terminal_id) → fintech_terminals` | `orders (tenant_id, attributed_monvelo_agent_id) → monvelo_agent_tenants` and `orders_attributed_terminal_fk (attributed_monvelo_agent_id, attributed_terminal_id) → monvelo_agent_terminals (agent_id, id)` |
+
+**Database functions**
+
+| Function | Change |
+|---|---|
+| `web_price_cart` | the split comes from the code's Monvelo agent (ACTIVE link, ACTIVE agent, a subaccount) and the tenant rate; no bounty (§15.5) |
+| `web_resolve_code` | a staff link needs its holder to be an ACTIVE tenant member (as today); a POS link needs an ACTIVE link, an ACTIVE agent and an active terminal |
+| `web_route_try` | a POS link's territory is the link's `territory_id`; its accountable person is that territory's TM (as for FINTECH_AGENT holders before) |
+| `storefront_catalogue` | the venue comes from `monvelo_agent_terminals` |
+| `place_web_order` | writes `attributed_agent_id` or `attributed_monvelo_agent_id`, and `payments.monvelo_agent_id` / `monvelo_terminal_id`; signature unchanged |
+| `upsert_agent_code` | signature unchanged. A POS link names the terminal and leaves `p_agent_id` null (the agent is the terminal's); a staff link names the staff member and no terminal |
+| `set_terminal_venue` | signature unchanged; the caller is an ACTIVE member of the terminal's agent, or a MONVELO_OPERATOR (call D) |
+| `pos_order_lookup` | the caller is an ACTIVE member of the order's `attributed_monvelo_agent_id`; the tenant comes from the order and is re-verified against an ACTIVE link |
+| `settle_paystack_payment` | writes `commission_records.monvelo_agent_id`; signature unchanged |
+| `issue_otp`, `verify_otp` | DSA only (call E) |
+| `invite_tenant_user` | refuses `FINTECH_AGENT` |
+| `auth_sms_allowed` | also allows an ACTIVE Monvelo member to receive a sign-in code (without it, POS staff could not sign in at all once they leave `tenant_users`) |
+| `monvelo_agent_audit` | also strips `paystack_subaccount_code` |
+| `apply_paystack_refund`, `release_commission`, `list_unsettled_subaccounts`, `expire_unsettled_commissions`, `get_order_dispute_evidence`, `storefront_locations`, `quote_web_order`, `web_storefront_code` | unchanged: checked against the local database 2026-10-28, none reads a dropped or renamed column (they read `commission_records.paystack_subaccount_code`, `amount` and `status`, and the payment's `split_*`) |
+| **new** `link_monvelo_agent`, `set_monvelo_agent_link_status` | tenant ZSM (§15.4 call A) |
+| **new** `upsert_monvelo_terminal`, `set_monvelo_agent_subaccount` | MONVELO_OPERATOR |
+| **new** `assert_monvelo_member(p_agent_id)`, `my_linked_monvelo_agent_ids()`, `monvelo_agent_link_active(p_tenant_id, p_agent_id)` | helpers |
+
+**Edge Functions**
+
+| Function | Change |
+|---|---|
+| `web-checkout` | none to the handler. The quote's split keeps the three wire keys D1 Decision 6 compares (`subaccount_code`, `commission_bps`, `partner_share`); only the informational key `fintech_partner_id` becomes `monvelo_agent_id`. The unit-test fixture is renamed |
+| `process-payment` | none: it calls `settle_paystack_payment` with the same arguments |
+| `fintech-commission-release`, `reconcile-funds` | none: they work from `commission_records` and `payments`, whose kept columns are unchanged. The names stay: "fintech" names the D1 domain, not the dropped table, and the cron jobs call them by name |
+| `otp-issue`, `otp-verify` | none: they already serve the DSA |
+| `storefront-catalogue`, `storefront-locations` | none |
+| `_tests/gateway.integration.ts` | the fixtures create a Monvelo agent, member, terminal, subaccount and tenant link instead of a partner and a FINTECH_AGENT membership; the IT tenant's rate is set to 150 bps for the split flow |
+
+### 15.4 Claude's calls
+
+**A. Who links an agent to a tenant: a tenant ZSM, alone.** `link_monvelo_agent`
+takes the agent's `(pos_network, network_agent_id)` (what the ZSM reads off the
+agent's terminal or receipt), never a list of the registry, and a territory of
+the ZSM's own tenant. The agent must be ACTIVE. The link is ACTIVE at once.
+- Why no operator approval: the operator has already vetted the agent once for
+  the whole platform (approval, KYC by the network, settlement account), and
+  sets the subaccount the commission is paid to. A tenant cannot redirect money
+  by linking, only allow a vetted agent's terminals to carry its own links. A
+  second approval would add a queue without adding a control.
+- The ZSM suspends or reactivates the link (`set_monvelo_agent_link_status`).
+  The operator's `suspend_monvelo_agent` stops the agent for every tenant.
+- **The link is for referral links only.** Monvelo financing (§7.1) never
+  reads `monvelo_agent_tenants`, so this does not let a tenant steer which
+  agent funds its sales (§2 anti-goal).
+- A tenant need not have Monvelo financing enabled to link agents.
+
+**B. The Paystack subaccount lives on the agent**, set by MONVELO_OPERATOR
+(`set_monvelo_agent_subaccount`). It has no column grant, is stripped from
+audit rows, and leaves the database only in the service-role quote that
+`web-checkout` hands to Paystack. Tenants see `has_paystack_subaccount`. An
+agent without one simply gets no split.
+
+**C. The commission rate is per tenant**:
+`tenant_settings.web_agent_commission_bps`, default 0. Like the fare and the
+old bounty, it is written by migration only. §15.5 gives the rule.
+
+**D. Territory lives on the link, not the terminal.** Terminals are
+platform-level and territories are tenant-scoped, and one agent serves
+different tenants in different territories. So the link holds the territory,
+and routing and the TM's code rights read it there.
+- **Venues are set by the agent's members or the operator, no longer by
+  tenant ZSMs or TMs.** A terminal row is shared by every linked tenant's
+  storefront. Letting one tenant's staff rewrite it would let tenant A change
+  what tenant B's buyers see.
+- The venue must lie inside the boundary of every ACTIVE linked territory that
+  has a boundary. Likewise, a link is refused if one of the agent's existing
+  venues lies outside the territory's boundary.
+
+**E. FINTECH_AGENT is retired as an identity.**
+- **Enum label.** It stays in `tenant_role_enum`, because dropping an enum
+  value means rebuilding the type. `invite_tenant_user` refuses it (P0001), and
+  CHECK `tenant_users_no_fintech_agent` refuses any row holding it (23514). A
+  CHECK, not a trigger: it is simpler, it also catches an UPDATE, and on push
+  it validates existing rows, which doubles as the pre-push check.
+- **Member-facing RPCs** call `assert_monvelo_member(p_agent_id)` (an ACTIVE
+  member of an ACTIVE agent; 42501 otherwise). This covers `set_terminal_venue`
+  and `pos_order_lookup`.
+- **Platform-actor exception** (like the operator's `p_tenant_id` in
+  `record_monvelo_fee_terms`). A member has no tenant in their JWT. An RPC that
+  serves a member takes the tenant from the record it touches (the order), and
+  re-verifies live that the `(tenant, agent)` link is ACTIVE and the agent is
+  ACTIVE. No member RPC accepts a tenant id.
+- **Departure, for `issue_otp` and `verify_otp`.** The call was to give them a
+  member branch. They have no record to take the tenant from: the subject is a
+  shop owner who may trade with several linked tenants. Their only consumer is
+  Spec D's unbuilt POS-backed order, and the advance flow is gone. So they
+  become DSA-only. A POS shop-owner code returns with Spec D2, bound to an order
+  (tenant from the order), and Monvelo's own owner codes come in Step 4 (§6.3).
+- **What `agent_id` means now.** `agent_codes.agent_id` and
+  `orders.attributed_agent_id` keep their meaning (a tenant staff profile) and
+  are used for staff links only. POS links use the new `monvelo_agent_id` /
+  `attributed_monvelo_agent_id`. Reasons:
+  - the commission belongs to the agent business, not to whichever employee
+    is at the till;
+  - a member profile is not a tenant member, so `agent_id` would lose its
+    composite meaning;
+  - the composite FK onto the link is what keeps a POS link inside its tenant.
+
+  A code has exactly one holder (CHECK), and it has a terminal exactly when its
+  holder is a Monvelo agent (CHECK).
+
+**F. Edge Functions change only where a name crosses the wire**, which in
+practice means none of the handlers (§15.3). The unit fixtures are renamed, and
+the integration suite moves to Monvelo fixtures and gains tests for the till
+lookup by a member, the 0% codeless case and a suspended link.
+
+**G. The Monvelo boundary moves (amends §4).** §4 said "no non-Monvelo
+function writes [Monvelo tables]". From this amendment:
+- non-Monvelo functions **read** Monvelo tables: `web_price_cart`,
+  `web_resolve_code`, `web_route_try`, `storefront_catalogue`,
+  `place_web_order`, `upsert_agent_code` and `pos_order_lookup` read the
+  agents, links and terminals;
+- `set_terminal_venue` (A1) **writes** `monvelo_agent_terminals`, and
+  `upsert_agent_code` writes `agent_codes` rows that reference Monvelo rows;
+- `payments`, `commission_records`, `agent_codes` and `orders` hold
+  composite FKs onto `monvelo_agent_tenants` and `monvelo_agent_terminals`.
+
+Lifting Monvelo out later therefore takes the agent registry, terminals and
+links with it, and the web storefront keeps a read dependency on them.
+
+### 15.5 The commission rule
+
+1. A web order earns a commission only when it carries an agent code **held
+   by a Monvelo agent** (a POS link): the link and the agent are ACTIVE, the
+   terminal is active, and the agent has a Paystack subaccount.
+2. Share = round(goods total × `web_agent_commission_bps` ÷ 10,000, 2 dp).
+   The goods total excludes the transport fare, which is never commissioned
+   (as before). Discounts are off, so the goods total is the retail subtotal.
+3. When the share is 0 (rate 0, rounding to 0, no subaccount, a staff link, or
+   no link at all), there is **no split**: `split` is null, `payments.split_*`
+   are null, and no `commission_records` row is written. This is exactly what
+   codeless orders get today. A share must also stay below the total, as D1
+   requires.
+4. `payments.split_bps` = the rate, `split_amount` = the share,
+   `split_subaccount_code` = the agent's subaccount, all snapshotted at quote
+   time. `commission_records.bps_applied` copies `split_bps`. D1's settlement
+   check against Paystack's verified split, its 24-hour release and its 7-day
+   expiry are unchanged.
+5. Codeless orders pay 0%. They remain PAYSTACK_WEB only
+   (`orders_codeless_pays_online`), however and wherever they are routed or
+   fulfilled.
+6. Staff links (DSA/DSM) earn no web split. Staff have no subaccount, and
+   their incentives belong to Spec C (open question 2).
+7. Interim: every tenant's rate is 0 until the user agrees a figure. A new
+   migration sets it.
+
+### 15.6 Dropped
+
+- Tables `fintech_partners`, `fintech_terminals` and `fintech_advances`, with
+  their policies, indexes and triggers. The migration drops them without
+  CASCADE, so a forgotten dependency fails the migration loudly.
+- Column `tenant_settings.web_agent_bounty`, and the bounty branch of
+  `web_price_cart`.
+- The FINTECH_AGENT paths in `issue_otp`, `verify_otp`, `set_terminal_venue`
+  and `pos_order_lookup`, and FINTECH_AGENT invites.
+- ZSM/TM venue editing (call D).
+- Spec A's `fintech_advances` working-capital float, superseded by Monvelo
+  financing.
+
+### 15.7 Risks
+
+| Risk | Mitigation |
+|---|---|
+| PL/pgSQL bodies are not dependency-tracked, so a function still naming a dropped table fails only when called | A pgTAP guard asserts that no `public` function body names `fintech_partners`, `fintech_terminals`, `fintech_advances` or `web_agent_bounty`, and that only `invite_tenant_user` names `FINTECH_AGENT` |
+| A wrong subaccount code typed by the operator sends commission to the wrong account | Format check only, for now. D1 still compares Paystack's verified split subaccount with the snapshot. Verifying the code with Paystack's Fetch Subaccount is open question 5 |
+| A member acting without a tenant reaches another tenant's data | Member RPCs take the tenant from the record and re-check the link live; composite FKs make cross-tenant rows impossible; pgTAP covers a member of agent X against agent Y's order and terminal |
+| POS staff lose sign-in once they leave `tenant_users` | `auth_sms_allowed` admits ACTIVE members; pgTAP covers it |
+| The remote push meets real rows despite "no data" | Pre-push checks (all must be 0) in `supabase/CLAUDE.md`: rows in the three legacy tables; `commission_records`; payments with a partner or terminal; codes with a terminal; orders with an attributed terminal; FINTECH_AGENT memberships. The new CHECK and FKs also fail the push rather than corrupt data |
+| A shared venue edited by an agent's member changes every linked tenant's storefront | Accepted: it is the agent's own physical venue; the edit is audited, and every ACTIVE linked territory's boundary must contain it |
+| Renaming split wire keys would break the web-checkout ↔ database contract | The wire keys are kept unchanged |
+
+### 15.8 Open questions for the user
+
+1. **The commission figure.** The interim rate is 0 bps for every tenant. What
+   rate, per tenant, once agreed?
+2. **Staff links.** Should DSA/DSM-held links also earn the web percentage?
+   Default: no. They have no Paystack subaccount, and staff incentives are
+   Spec C.
+3. **Link authority.** Is a ZSM linking a vetted agent alone acceptable, or do
+   you want MONVELO_OPERATOR approval of each link? Default: the ZSM alone.
+4. **POS shop-owner codes.** Is it acceptable that a POS member cannot issue
+   PICKUP_CONFIRM / POS_SETTLEMENT codes until Spec D2 binds them to an order?
+   Default: yes.
+5. **Subaccount verification.** Should `set_monvelo_agent_subaccount` go
+   through a gateway that fetches the subaccount from Paystack and matches its
+   settlement account to the agent's? Default: not in Step 1b; revisit with
+   Step 3 (F1).
