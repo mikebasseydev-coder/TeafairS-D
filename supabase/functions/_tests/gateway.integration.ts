@@ -150,6 +150,12 @@ const fakePaystack = Deno.serve({ hostname: "0.0.0.0", port: FAKE_PORT, onListen
     const settlement = settlementLedger.find((s) => String(s.id) === decodeURIComponent(txs[1]));
     return settlement ? page(settlement.transactions) : notFound("Settlement not found");
   }
+  if (path === "/bank/resolve") {
+    const number = url.searchParams.get("account_number");
+    return number === "0000000000"
+      ? Response.json({ status: false, message: "Could not resolve account name. Check parameters or try again." }, { status: 422 })
+      : Response.json({ status: true, message: "Account number resolved", data: { account_number: number, account_name: "ADA OBI STORES", bank_id: 9 } });
+  }
   return notFound(`fake Paystack has no ${req.method} ${path}`);
 });
 
@@ -1084,6 +1090,59 @@ Deno.test({
     const mail = resendEmails.slice(before).find((m) => m.to.includes(u.email));
     assert(mail, "Resend got the recovery email");
     assert(!mail.html.includes("evil.example") && !mail.text.includes("evil.example"));
+  },
+});
+
+Deno.test({
+  name: "monvelo-agent-register: a ZSA registers a POS agent after Paystack resolves the account",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const zsmUser = await createUser(13);
+    const zsaUser = await createUser(14);
+    await must(admin.from("monvelo_tenant_settings").upsert({ tenant_id: ids.tenant, enabled: true }));
+    const [zsm] = (await must(admin.from("tenant_users").insert(
+      { tenant_id: ids.tenant, profile_id: zsmUser.id, role: "ZSM", zone_id: ids.zone, status: "ACTIVE", is_primary: true },
+    ).select("id"))) ?? [];
+    await must(admin.from("tenant_users").insert(
+      { tenant_id: ids.tenant, profile_id: zsaUser.id, role: "ZSA", zone_id: ids.zone, reports_to_id: zsm.id, status: "ACTIVE", is_primary: true },
+    ));
+    const zsa = await asUser(zsaUser.email);
+    const body = (over: Record<string, unknown> = {}) => ({
+      idempotency_key: crypto.randomUUID(), action: "register", business_name: "Ada POS", pos_network: "MONIEPOINT",
+      network_agent_id: `mp-${run}`, contact_phone: "08031234567", latitude: 6.6, longitude: 3.35,
+      address_text: "12 Allen Ave, Ikeja", settlement_account_number: "0123456789", settlement_bank_code: "058",
+      network_kyc_reference: "KYC-1", settlement_account_name: "CLIENT NAME", ...over,
+    });
+
+    const first = body();
+    const res = await zsa.post("monvelo-agent-register", first);
+    const reply = await res.json();
+    assertEquals(res.status, 200, JSON.stringify(reply));
+    assertEquals([reply.status, reply.settlement_account_last4, reply.name_matches], ["PENDING", "6789", false]);
+    assert(!JSON.stringify(reply).includes("0123456789"), "the full account number never comes back");
+
+    const [row] = (await must(
+      admin.from("monvelo_fintech_agents").select("status, settlement_account_last4, settlement_account_name, recruited_by")
+        .eq("id", reply.agent_id),
+    )) as Array<Record<string, string>>;
+    assertEquals(
+      [row.status, row.settlement_account_last4, row.settlement_account_name, row.recruited_by],
+      ["PENDING", "6789", "ADA OBI STORES", zsaUser.id],
+    );
+
+    // a replay of the same key returns the same agent; a second recruit of the same POS agent is 409
+    const replay = await (await zsa.post("monvelo-agent-register", first)).json();
+    assertEquals(replay.agent_id, reply.agent_id);
+    const dup = await zsa.post("monvelo-agent-register", body());
+    assertEquals(dup.status, 409);
+    await dup.body?.cancel();
+
+    // an account Paystack cannot resolve is 422, and nothing is written
+    const bad = await zsa.post("monvelo-agent-register", body({ network_agent_id: `mp2-${run}`, settlement_account_number: "0000000000" }));
+    const badBody = await bad.json();
+    assertEquals([bad.status, badBody.error.code], [422, "ACCOUNT_NOT_RESOLVED"]);
+    assertEquals((await must(admin.from("monvelo_fintech_agents").select("id").eq("network_agent_id", `MP2-${run}`.toUpperCase())))?.length, 0);
   },
 });
 
