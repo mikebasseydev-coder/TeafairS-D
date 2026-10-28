@@ -1,7 +1,7 @@
 # Addendum A6 to Spec A: Monvelo, inventory financing for neighbourhood shops
 
 **Date:** 2026-10-28
-**Status:** draft for the user's approval (questions answered 2026-10-28)
+**Status:** approved by the user 2026-10-28
 **Authority:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) still governs. Its §9 rules hold without exception. Where this addendum changes an earlier decision, it says so.
 
 ## 1. Intent
