@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(25);
+select plan(28);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -70,10 +70,11 @@ select lives_ok(
   $$select public.upsert_area('bbbbbbbb-0000-0000-0000-000000000001', null,
       '40000000-0000-0000-0000-000000000001', 'Allen Avenue')$$,
   'the TM of a territory creates an area in it');
-select lives_ok(
-  $$select public.upsert_area('bbbbbbbb-0000-0000-0000-000000000001', null,
-      '40000000-0000-0000-0000-000000000001', 'Allen Avenue')$$,
-  'the same key replays');
+select is(
+  public.upsert_area('bbbbbbbb-0000-0000-0000-000000000001', null,
+      '40000000-0000-0000-0000-000000000001', 'Allen Avenue') ->> 'area_id',
+  (select id::text from public.areas where area_name = 'Allen Avenue'),
+  'the same key replays and returns the same area_id');
 reset role;
 select is(
   (select count(*)::int from public.areas
@@ -133,7 +134,14 @@ select lives_ok(
       (select id from public.areas where area_name = 'Allen Avenue'))$$,
   'a ZSM invites an ASA into an area of a territory of the zone');
 
--- ── invite_tenant_user: ZSA ─────────────────────────────────────────────
+-- ── invite_tenant_user: ASA without a territory ──
+select throws_ok(
+  $$select public.invite_tenant_user('bbbbbbbb-0000-0000-0000-000000000016', '+2348000000005', 'ASA',
+      null, '50000000-0000-0000-0000-000000000007',
+      (select id from public.areas where area_name = 'Allen Avenue'))$$,
+  'P0001', 'ASA requires a territory', 'an ASA invite with an area but no territory is refused');
+
+-- == invite_tenant_user: ZSA ─────────────────────────────────────────────
 select throws_ok(
   $$select public.invite_tenant_user('bbbbbbbb-0000-0000-0000-000000000014', '+2348000000006', 'ZSA',
       null, '50000000-0000-0000-0000-000000000002')$$,
@@ -165,7 +173,20 @@ select throws_ok(
             '30000000-0000-0000-0000-000000000001')$$,
   '23514', null, 'a ZSA row without a manager is refused');
 
--- ── assert_platform_role ────────────────────────────────────────────────
+select throws_ok(
+  $$insert into public.tenant_users (tenant_id, profile_id, role, territory_id, area_id, reports_to_id)
+    values ('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000011', 'ASA',
+            '40000000-0000-0000-0000-000000000004',
+            (select id from public.areas where area_name = 'Allen Avenue'),
+            '50000000-0000-0000-0000-000000000004')$$,
+  '23503', null, 'a row cannot pair a territory with an area of another territory (insert)');
+select throws_ok(
+  $$update public.tenant_users
+       set area_id = (select id from public.areas where area_name = 'Adeniran Ogunsanya')
+     where profile_id = '20000000-0000-0000-0000-000000000005'$$,
+  '23503', null, 'nor move an ASA to an area of another territory (update)');
+
+-- == assert_platform_role ────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
 reset role;
 select throws_ok(

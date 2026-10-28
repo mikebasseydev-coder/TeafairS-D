@@ -17,6 +17,7 @@ create table public.areas (
   created_at    timestamptz not null default now(),
   unique (tenant_id, id),
   unique (tenant_id, territory_id, area_name),
+  unique (tenant_id, territory_id, id),
   foreign key (tenant_id, territory_id) references public.territories (tenant_id, id) on delete restrict
 );
 alter table public.areas enable row level security;
@@ -30,7 +31,8 @@ create policy areas_select_tenant_member on public.areas
 alter table public.tenant_users add column area_id uuid;
 alter table public.tenant_users
   add constraint tenant_users_area_fk
-  foreign key (tenant_id, area_id) references public.areas (tenant_id, id) on delete restrict;
+  foreign key (tenant_id, territory_id, area_id)
+    references public.areas (tenant_id, territory_id, id) on delete restrict;
 create index idx_tenant_users_area on public.tenant_users (tenant_id, area_id);
 
 alter table public.tenant_users
@@ -165,6 +167,9 @@ begin
     where t.id = p_territory_id and t.tenant_id = v_me.tenant_id and t.zone_id = v_me.zone_id
   ) then
     raise exception 'a ZSM invites into territories of their own zone only' using errcode = '42501';
+  end if;
+  if p_role = 'ASA' and p_territory_id is null then
+    raise exception 'ASA requires a territory' using errcode = 'P0001';
   end if;
   if p_role = 'ASA' and p_area_id is not null and not exists (
     select 1 from public.areas a
