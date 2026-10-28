@@ -51,12 +51,12 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000009',
    'ZSM', '30000000-0000-0000-0000-000000000002', null, 'ACTIVE', true);
 
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
-   150, '+2348000000004', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
+   '+2348000000004', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
   ('60000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Uni OPay', 'OPAY',
-   150, '+2348000000009', 'ACCT_uni01', 'ACTIVE', '20000000-0000-0000-0000-000000000009', now());
+   '+2348000000009', 'ACCT_uni01', 'ACTIVE', '20000000-0000-0000-0000-000000000009', now());
 insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id) values
   ('61000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000004', 'MP-0001', '40000000-0000-0000-0000-000000000001'),

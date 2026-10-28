@@ -220,7 +220,7 @@ Deno.test({
     await must(admin.from("territories").update({ tm_id: users.tm.id }).eq("id", ids.territory));
     await must(admin.from("web_pos_partners").insert({
       id: ids.partner, tenant_id: ids.tenant, business_name: `IT Moniepoint ${run}`, pos_network: "MONIEPOINT",
-      commission_bps: 150, contact_phone: `+${phone(5)}`, paystack_subaccount_code: "ACCT_it01",
+      contact_phone: `+${phone(5)}`, paystack_subaccount_code: "ACCT_it01",
       status: "ACTIVE", approved_by: users.tm.id, approved_at: new Date().toISOString(),
     }));
     await must(admin.from("web_pos_venues").insert({
@@ -584,6 +584,8 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
+    // A6 15.5: the tenant rate drives the split (set by migration in production)
+    await must(admin.from("tenant_settings").upsert({ tenant_id: ids.tenant, web_agent_commission_bps: 150 }));
     const placed = await place(webOrder());
     const reference = String(placed.paystack_reference);
     // 6200.00 at 150 bps: the partner's share is 93.00

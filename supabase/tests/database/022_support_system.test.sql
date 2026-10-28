@@ -60,10 +60,12 @@ insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004'),
   ('70000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'REG-EPE', 'REGIONAL',
    '40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003');
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
-   150, '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+   '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+update public.tenant_settings set web_agent_commission_bps = 150
+ where tenant_id = '10000000-0000-0000-0000-000000000001';
 insert into public.web_referral_codes (id, tenant_id, code, agent_id, created_by, max_redemptions) values
   ('65000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'CAPONE01',
    '20000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000001', 1);

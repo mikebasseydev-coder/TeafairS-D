@@ -101,10 +101,13 @@ update public.territories set web_fulfilment_warehouse_id = '70000000-0000-0000-
  where id = '40000000-0000-0000-0000-000000000001';
 insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id) values
   ('7eaf0000-0000-4000-8000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001');
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
-   0, '+2348000000003', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+   '+2348000000003', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+-- the tenant rate (A6 15.5) drives the split: 150 bps of 5,000 goods = 75.00
+update public.tenant_settings set web_agent_commission_bps = 150
+ where tenant_id = '7eaf0000-0000-4000-8000-000000000001';
 insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id) values
   ('61000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000003', 'MP-0001', '40000000-0000-0000-0000-000000000001');
@@ -177,7 +180,7 @@ select public.place_web_order('b0000000-0000-0000-0000-000000000002', 'GRACE-01'
          '{"name":"Bola","phone":"+2348032222222","delivery_address":"7 Toyin Street, Ikeja"}', null,
          'PAYSTACK_WEB', 5750.00,
          '{"reference":"TFW-rename-1","access_code":"ac","authorization_url":"https://checkout.paystack.com/ac",
-           "split":{"subaccount_code":"ACCT_grace01","commission_bps":0,"partner_share":500.00}}',
+           "split":{"subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":75.00}}',
          md5('ng_lga:LA:Ikeja')::uuid, true, 'v2.0-food-cosmetics', '10.0.0.9', 'tok-2') as r;
 reset role;
 select is(

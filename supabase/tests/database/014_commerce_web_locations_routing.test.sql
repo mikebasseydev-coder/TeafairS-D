@@ -173,10 +173,12 @@ update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
 update public.tenant_settings set web_default_agent_id = '20000000-0000-0000-0000-000000000007'
  where tenant_id = '10000000-0000-0000-0000-000000000001';
 
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
-   150, '+2348000000005', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+   '+2348000000005', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+update public.tenant_settings set web_agent_commission_bps = 150
+ where tenant_id = '10000000-0000-0000-0000-000000000001';
 -- the Epe terminal has no territory of its own
 insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id) values
   ('61000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
@@ -297,7 +299,7 @@ select ok(has_function_privilege('authenticated', 'public.set_territory_coverage
 
 -- ── Task 4: public storefront RPCs (§5.2, §8.3, §8.4) ───────────────────
 -- TEAFAIR: zone, territory with TM 11, REGIONAL warehouse, coverage LA/Ikeja,
--- one active product. T1: a 0-bps ACTIVE partner with a code on its terminal.
+-- one active product. T1: an ACTIVE partner with a code on its terminal.
 insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000011', '2348000000011');
 insert into public.zones (id, tenant_id, zone_name) values
@@ -321,10 +323,10 @@ insert into public.central_products (tenant_id, sku_code, product_name, brand, c
   ('7eaf0000-0000-4000-8000-000000000001', 'TF-TEA-50', 'Teafair Tea 50 bags', 'Teafair', 'Beverages', 1000, 800, true, 'A1-0101'),
   ('10000000-0000-0000-0000-000000000001', 'T1-SKU', 'T1 product', 'T1', 'Beverages', 1000, 800, true, 'A1-0102');
 
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'Zero OPay', 'OPAY',
-   0, '+2348000000005', 'ACCT_zero01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+   '+2348000000005', 'ACCT_zero01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
 insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id) values
   ('61000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000002',
    '20000000-0000-0000-0000-000000000005', 'OP-0007', '40000000-0000-0000-0000-000000000001');
@@ -365,19 +367,21 @@ select is(public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5
   'null'::jsonb, 'codeless has no split');
 select is(public.quote_web_order(null, '[{"sku_code":"TF-TEA-50","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) ->> 'total',
   '1750.00', 'codeless quote prices TEAFAIR''s catalogue');
+update public.tenant_settings set web_agent_commission_bps = 0 where tenant_id = '10000000-0000-0000-0000-000000000001';
 select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
-  'null'::jsonb, 'a 0-bps partner gets no split');
+  'null'::jsonb, 'a tenant rate of 0 gives no split');
+update public.tenant_settings set web_agent_commission_bps = 150 where tenant_id = '10000000-0000-0000-0000-000000000001';
 select is(public.quote_web_order('POSIKEJA', '[{"sku_code":"T1-SKU","qty":2}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   '{"web_pos_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":30.00}'::jsonb,
   'a terminal-bound code of an ACTIVE partner keeps its split shape');
 select throws_ok($$select public.quote_web_order('POSEPE01', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'This link is not active yet', 'a coded link with nobody accountable is not active');
 
--- a 100 % partner would take everything: no split (Decision 4: 0 < share < total)
-update public.web_pos_partners set commission_bps = 10000 where id = '60000000-0000-0000-0000-000000000002';
+-- a 100 % tenant rate would take everything: no split (Decision 4: 0 < share < total)
+update public.tenant_settings set web_agent_commission_bps = 10000 where tenant_id = '10000000-0000-0000-0000-000000000001';
 select is(public.quote_web_order('ZERO-BPS', '[{"sku_code":"T1-SKU","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'a share equal to the total gives no split');
-update public.web_pos_partners set commission_bps = 0 where id = '60000000-0000-0000-0000-000000000002';
+update public.tenant_settings set web_agent_commission_bps = 150 where tenant_id = '10000000-0000-0000-0000-000000000001';
 
 -- codeless PAYSTACK_WEB order
 select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', null,
@@ -443,15 +447,17 @@ select is((select territory_id || '|' || fulfilment_warehouse_id || '|' || teafa
              from public.orders where id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000007')),
   '40000000-0000-0000-0000-000000000001|70000000-0000-0000-0000-000000000001|20000000-0000-0000-0000-000000000003',
   'a coded order is routed through its terminal''s territory and TM');
+update public.tenant_settings set web_agent_commission_bps = 0 where tenant_id = '10000000-0000-0000-0000-000000000001';
 select lives_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000008', 'ZERO-BPS',
     '[{"sku_code":"T1-SKU","qty":1}]',
     '{"name":"Dayo","phone":"+2348030000004","delivery_address":"3 Allen Avenue"}',
     null, 'PAYSTACK_WEB', 1000.00,
     '{"reference":"TFW-z1","authorization_url":"https://x","split":null}', md5('ng_lga:LA:Ikeja')::uuid)$$,
-  'a 0-bps partner''s order is placed without a split');
+  'an order at tenant rate 0 is placed without a split');
 select is((select num_nulls(split_subaccount_code, split_bps, split_amount) from public.payments
             where order_id = pg_temp.order_of('eeeeeeee-0000-0000-0000-000000000008')),
   3, 'and its payment has no split snapshot');
+update public.tenant_settings set web_agent_commission_bps = 150 where tenant_id = '10000000-0000-0000-0000-000000000001';
 
 select throws_ok($$select pg_temp.pwo('eeeeeeee-0000-0000-0000-000000000001', null,
     '[{"sku_code":"TF-TEA-50","qty":1}]',

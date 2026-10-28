@@ -198,12 +198,11 @@ select throws_ok(
 
 -- ── money ───────────────────────────────────────────────────────────────
 select throws_ok(
-  $$insert into public.web_pos_partners (tenant_id, business_name, pos_network, commission_bps, contact_phone, paystack_subaccount_code)
-    values ('10000000-0000-0000-0000-000000000001', 'Ade POS', 'OPAY', 10001, '+2348000000009', 'ACCT_abc')$$,
-  '23514', null, 'commission_bps cannot exceed 10000');
+  $$update public.tenant_settings set web_agent_commission_bps = 10001$$,
+  '23514', null, 'the web agent commission rate cannot exceed 10000 bps');
 select throws_ok(
-  $$insert into public.web_pos_partners (tenant_id, business_name, pos_network, commission_bps, contact_phone)
-    values ('10000000-0000-0000-0000-000000000001', 'Ade POS', 'OPAY', 150, '+2348000000009')$$,
+  $$insert into public.web_pos_partners (tenant_id, business_name, pos_network, contact_phone)
+    values ('10000000-0000-0000-0000-000000000001', 'Ade POS', 'OPAY', '+2348000000009')$$,
   '23502', null, 'a partner cannot exist without a Paystack subaccount');
 
 insert into public.payments (tenant_id, order_id, teafair_agent_id, amount, paystack_reference) values

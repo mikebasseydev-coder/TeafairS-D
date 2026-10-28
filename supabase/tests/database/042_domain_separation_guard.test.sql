@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(25);
+select plan(29);
 
 create function pg_temp.bodies_matching(p_pattern text) returns text[]
 language sql stable as $$
@@ -40,22 +40,32 @@ select is(pg_temp.bodies_matching('upsert_agent_code'), null::text[], 'no body n
 select is(pg_temp.bodies_matching('set_terminal_venue'), null::text[], 'no body names set_terminal_venue');
 select is(pg_temp.bodies_matching('terminal_id'), null::text[], 'no body names terminal_id (network_terminal_id stripped)');
 
+-- Task 4: the commission is one tenant rate (A6 section 15.5)
+select is(pg_temp.bodies_matching('web_agent_bounty'), null::text[], 'no body names web_agent_bounty');
+select is(pg_temp.bodies_matching('\.commission_bps'), null::text[],
+  'no body reads a commission_bps column (the wire key stays legal)');
+select hasnt_column('public', 'tenant_settings', 'web_agent_bounty', 'web_agent_bounty is gone');
+-- positive control: the terminal_id strip works, and the commission_bps pattern bites a column access
+select is(regexp_replace('x.network_terminal_id', 'network_terminal_id', '', 'g') !~ 'terminal_id'
+          and 'fp.commission_bps' ~ '\.commission_bps' and '''commission_bps''' !~ '\.commission_bps',
+  true, 'the guard patterns behave on known strings');
+
 -- catalog names: constraints, indexes, policies, triggers
 select is((select array_agg(conname::text order by conname) from pg_constraint
             where connamespace = 'public'::regnamespace
-              and conname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records'),
+              and conname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no constraint keeps an old web name');
 select is((select array_agg(indexname::text order by indexname) from pg_indexes
             where schemaname = 'public'
-              and indexname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records'),
+              and indexname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no index keeps an old web name');
 select is((select array_agg(policyname::text order by policyname) from pg_policies
             where schemaname = 'public'
-              and policyname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records'),
+              and policyname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no policy keeps an old web name');
 select is((select array_agg(tgname::text order by tgname) from pg_trigger t join pg_class c on c.oid = t.tgrelid
             where c.relnamespace = 'public'::regnamespace and not t.tgisinternal
-              and tgname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records'),
+              and tgname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no trigger keeps an old web name');
 select is((select count(*)::int from pg_constraint
             where connamespace = 'public'::regnamespace and conname ~ '^web_(pos_partners|pos_venues|referral_codes|commissions)_'),

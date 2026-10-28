@@ -104,12 +104,14 @@ insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_
   ('10000000-0000-0000-0000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001');
 
 -- partner 1 is ACTIVE (splits); partner 3 is PENDING (no split)
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
-   150, '+2348000000004', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
+   '+2348000000004', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
   ('60000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'Pending PalmPay', 'PALMPAY',
-   150, '+2348000000004', 'ACCT_pend01', 'PENDING', null, null);
+   '+2348000000004', 'ACCT_pend01', 'PENDING', null, null);
+update public.tenant_settings set web_agent_commission_bps = 150
+ where tenant_id = '10000000-0000-0000-0000-000000000001';
 insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id, territory_id, is_active,
                                       venue_channel, venue_name, address_text, state, location) values
   ('61000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',

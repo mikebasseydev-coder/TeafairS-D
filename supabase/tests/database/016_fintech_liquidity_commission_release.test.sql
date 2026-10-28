@@ -49,10 +49,12 @@ update public.territories set tm_id = '20000000-0000-0000-0000-000000000003'
 insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_id) values
   ('70000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'REG-IKEJA', 'REGIONAL',
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004');
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
-   150, '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+   '+2348000000007', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+update public.tenant_settings set web_agent_commission_bps = 150
+ where tenant_id = '10000000-0000-0000-0000-000000000001';
 
 
 create function pg_temp.mk(p_n integer, p_ref text, p_pay_status text, p_age interval,

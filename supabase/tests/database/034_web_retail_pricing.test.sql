@@ -1,14 +1,14 @@
 -- Teafairweb retail pricing (migration 20261024140000): full retail price,
--- no discounts, a flat transport fare, and a flat bounty for a POS agent link.
+-- no discounts, a flat transport fare, and the tenant commission rate (A6 15.5).
 begin;
 create extension if not exists pgtap with schema extensions;
 
 select plan(23);
 
 -- ── fixtures ────────────────────────────────────────────────────────────
--- TEAFAIR: ZSM (1) and Grace (2), a POS agent at Moniepoint (200 bps, which the
--- flat bounty overrides). Ikeja is deliverable. BRANDCO: another tenant with no
--- fare and no bounty, whose partner keeps its percentage.
+-- TEAFAIR: ZSM (1) and Grace (2), a POS agent at Moniepoint; TEAFAIR's rate is 0, so
+-- no split. Ikeja is deliverable. BRANDCO: another tenant with no fare, whose
+-- rate this test sets to 150 bps.
 insert into public.tenants (id, name, code) values ('10000000-0000-0000-0000-000000000003', 'Brand Co', 'BRANDCO');
 insert into public.tenant_settings (tenant_id) values ('10000000-0000-0000-0000-000000000003') on conflict do nothing;
 insert into auth.users (id, phone) values
@@ -32,12 +32,12 @@ update public.territories set web_fulfilment_warehouse_id = '70000000-0000-0000-
  where id = '40000000-0000-0000-0000-000000000001';
 insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id) values
   ('7eaf0000-0000-4000-8000-000000000001', 'LA', md5('ng_lga:LA:Ikeja')::uuid, '40000000-0000-0000-0000-000000000001');
-insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, commission_bps, contact_phone,
+insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values
   ('60000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Grace Moniepoint', 'MONIEPOINT',
-   200, '+2348000000005', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
+   '+2348000000005', 'ACCT_grace01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now()),
   ('60000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003', 'Brand Opay', 'OPAY',
-   150, '+2348000000006', 'ACCT_brand01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
+   '+2348000000006', 'ACCT_brand01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
 insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id) values
   ('61000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', '60000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000001', 'MP-0001'),
@@ -56,6 +56,16 @@ insert into public.web_phone_verifications (phone, code_hash, expires_at, verifi
   ('+2348031111111', 'x', now() + interval '10 minutes', now(),
    encode(extensions.digest('tok-1', 'sha256'), 'hex'), now() + interval '30 minutes');
 
+-- ── settings ────────────────────────────────────────────────────────────
+select is((select web_transport_fare::text || '|' || web_agent_commission_bps::text from public.tenant_settings
+            where tenant_id = '7eaf0000-0000-4000-8000-000000000001'), '750.00|0',
+  'Teafair: 750 transport fare, commission rate 0 until agreed');
+select is((select web_transport_fare::text || '|' || web_agent_commission_bps::text from public.tenant_settings
+            where tenant_id = '10000000-0000-0000-0000-000000000003'), '0.00|0',
+  'another tenant: no fare and rate 0 until set');
+update public.tenant_settings set web_agent_commission_bps = 150
+ where tenant_id = '10000000-0000-0000-0000-000000000003';
+
 create temp table q as
 select public.web_price_cart(public.web_storefront_code(null),
          '[{"sku_code":"PURERIGIN-COCONUT-OIL-200ML","qty":2}]') as codeless,
@@ -64,13 +74,6 @@ select public.web_price_cart(public.web_storefront_code(null),
        public.web_price_cart(public.web_storefront_code('BRAND-POS'),
          '[{"sku_code":"BC-SHEA","qty":1}]') as other;
 
--- ── settings ────────────────────────────────────────────────────────────
-select is((select web_transport_fare::text || '|' || web_agent_bounty::text from public.tenant_settings
-            where tenant_id = '7eaf0000-0000-4000-8000-000000000001'), '750.00|500.00',
-  'Teafair: 750 transport fare, 500 agent bounty');
-select is((select web_transport_fare::text || '|' || coalesce(web_agent_bounty::text, 'none') from public.tenant_settings
-            where tenant_id = '10000000-0000-0000-0000-000000000003'), '0.00|none',
-  'another tenant: no fare and no bounty until set');
 
 -- ── no web discounts ────────────────────────────────────────────────────
 select throws_ok(
@@ -92,16 +95,15 @@ select ok(not (public.storefront_catalogue('GRACE-POS') ? 'discount'), 'the stor
 select is((select codeless ->> 'goods_total' || '|' || (codeless ->> 'discount') || '|' || (codeless ->> 'transport_fare')
                   || '|' || (codeless ->> 'total') from q),
   '10000.00|0.00|750.00|10750.00', 'codeless: retail goods, no discount, plus the fare');
-select is((select codeless -> 'split' from q), 'null'::jsonb, 'a codeless order pays no bounty');
+select is((select codeless -> 'split' from q), 'null'::jsonb, 'a codeless order pays no commission');
 -- POS link: 2 × 5,000 + 1 × 3,000 = 13,000 goods, + 750 = 13,750
 select is((select pos ->> 'discount' from q), '0.00', 'a POS link gives no discount');
 select is((select pos ->> 'total' from q), '13750.00', 'POS link total is retail goods plus the fare');
 select is((select pos -> 'split' from q),
-  '{"web_pos_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":0,"partner_share":500.00}'::jsonb,
-  'the POS agent''s partner gets exactly 500, not 2 %');
--- another tenant keeps its percentage commission, on the goods only
+  'null'::jsonb, 'TEAFAIR''s rate is 0: a POS link gets no split (the old flat 500 is gone)');
+-- a tenant with a rate pays it on the goods only, never on the fare
 select is((select other -> 'split' ->> 'partner_share' || '|' || (other -> 'split' ->> 'commission_bps') || '|' || (other ->> 'total') from q),
-  '30.00|150|2000.00', 'a tenant without a bounty keeps its partner''s percentage');
+  '30.00|150|2000.00', 'a tenant with a rate of 150 bps pays 1.5 % of the goods');
 
 -- ── a placed POS-link order ─────────────────────────────────────────────
 select set_config('role', 'service_role', true), set_config('request.jwt.claims', '{"role":"service_role"}', true);
@@ -111,7 +113,7 @@ select public.place_web_order('b0000000-0000-0000-0000-000000000001', 'GRACE-POS
          '{"name":"Ada Obi","phone":"+2348031111111","delivery_address":"5 Opebi Road, Ikeja"}', null,
          'PAYSTACK_WEB', 13750.00,
          '{"reference":"TFW-bounty-1","access_code":"ac","authorization_url":"https://checkout.paystack.com/ac",
-           "split":{"subaccount_code":"ACCT_grace01","commission_bps":0,"partner_share":500.00}}',
+           "split":null}',
          md5('ng_lga:LA:Ikeja')::uuid, true, 'v2.0-food-cosmetics', '10.0.0.9', 'tok-1') as r;
 reset role;
 select is((select r ->> 'total' || '|' || (r ->> 'transport_fare') from placed), '13750.00|750.00',
@@ -125,9 +127,10 @@ select is(
      from public.order_items oi where oi.order_id = (select (r ->> 'order_id')::uuid from placed)),
   'PURERIGIN-COCONUT-OIL-100ML:3000.00,PURERIGIN-COCONUT-OIL-200ML:5000.00', 'lines are billed at the retail price');
 select is(
-  (select p.amount::text || '|' || p.split_subaccount_code || '|' || p.split_bps::text || '|' || p.split_amount::text
+  (select p.amount::text || '|' || coalesce(p.split_subaccount_code, '') || '|' || coalesce(p.split_bps::text, '')
+            || coalesce(p.split_amount::text, '')
      from public.payments p where p.paystack_reference = 'TFW-bounty-1'),
-  '13750.00|ACCT_grace01|0|500.00', 'Paystack splits exactly 500 to the agent; Teafair keeps 13,250');
+  '13750.00||', 'at rate 0 the payment carries no split snapshot');
 select throws_ok(
   $$select public.place_web_order('b0000000-0000-0000-0000-000000000002', 'GRACE-POS',
       '[{"sku_code":"PURERIGIN-COCONUT-OIL-200ML","qty":1}]',
@@ -136,7 +139,7 @@ select throws_ok(
       '{"reference":"TFW-bounty-2","access_code":"ac","authorization_url":"https://checkout.paystack.com/ac",
         "split":{"subaccount_code":"ACCT_grace01","commission_bps":200,"partner_share":100.00}}',
       md5('ng_lga:LA:Ikeja')::uuid, true, 'v2.0-food-cosmetics', '10.0.0.9', 'tok-1')$$,
-  'P0001', 'Prices changed — refresh and try again', 'a checkout that asks for the old percentage split is refused');
+  'P0001', 'Prices changed — refresh and try again', 'a checkout that asks for a split the quote does not have is refused');
 
 -- ── the evidence bundle ─────────────────────────────────────────────────
 grant select on placed to authenticated;
@@ -150,8 +153,8 @@ reset role;
 select is((select b -> 'order' ->> 'goods_total' || '|' || (b -> 'order' ->> 'discount_amount') || '|'
                   || (b -> 'order' ->> 'transport_fare') || '|' || (b -> 'order' ->> 'total_amount') from ev),
   '13000.00|0.00|750.00|13750.00', 'evidence: retail goods, zero discount, the fare and the total');
-select is((select b -> 'payments' -> 0 ->> 'agent_commission' from ev), '500.00',
-  'evidence: the flat 500 POS agent attribution');
+select is((select b -> 'payments' -> 0 ->> 'agent_commission' from ev), null,
+  'evidence: no agent commission at rate 0');
 select ok((select b -> 'order' ->> 'referral_code_id' is not null from ev), 'evidence: the link the sale came through');
 
 -- ── constraints ─────────────────────────────────────────────────────────
