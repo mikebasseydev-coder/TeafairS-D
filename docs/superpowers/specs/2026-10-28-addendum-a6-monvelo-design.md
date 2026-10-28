@@ -648,17 +648,18 @@ they name `fintech_partners`, `fintech_terminals`, `fintech_advances` or the
 
 ### 15.4 Claude's calls
 
-**A. Who links an agent to a tenant: a tenant ZSM, alone.** `link_monvelo_agent`
-takes the agent's `(pos_network, network_agent_id)` (what the ZSM reads off the
-agent's terminal or receipt), never a list of the registry, and a territory of
-the ZSM's own tenant. The agent must be ACTIVE. The link is ACTIVE at once.
-- Why no operator approval: the operator has already vetted the agent once for
-  the whole platform (approval, KYC by the network, settlement account), and
-  sets the subaccount the commission is paid to. A tenant cannot redirect money
-  by linking, only allow a vetted agent's terminals to carry its own links. A
-  second approval would add a queue without adding a control.
-- The ZSM suspends or reactivates the link (`set_monvelo_agent_link_status`).
-  The operator's `suspend_monvelo_agent` stops the agent for every tenant.
+**A. Who links an agent to a tenant: a tenant ZSM proposes, MONVELO_OPERATOR
+approves** (user, 2026-10-28: "ZSMs shouldn't self-link agents without operator
+sign-off"; this replaces the planner's ZSM-alone default).
+`link_monvelo_agent` takes the agent's `(pos_network, network_agent_id)` (what
+the ZSM reads off the agent's terminal or receipt), never a list of the
+registry, and a territory of the ZSM's own tenant. The agent must be ACTIVE.
+- The link starts PENDING and counts for nothing until
+  `approve_monvelo_agent_link(p_idempotency_key, p_tenant_id, p_agent_id)` by
+  MONVELO_OPERATOR makes it ACTIVE. A territory change sends an ACTIVE link back
+  to PENDING.
+- The ZSM can suspend the link (`set_monvelo_agent_link_status`). The
+  operator's `suspend_monvelo_agent` stops the agent for every tenant.
 - **The link is for referral links only.** Monvelo financing (§7.1) never
   reads `monvelo_agent_tenants`, so this does not let a tenant steer which
   agent funds its sales (§2 anti-goal).
@@ -789,19 +790,10 @@ links with it, and the web storefront keeps a read dependency on them.
 | A shared venue edited by an agent's member changes every linked tenant's storefront | Accepted: it is the agent's own physical venue; the edit is audited, and every ACTIVE linked territory's boundary must contain it |
 | Renaming split wire keys would break the web-checkout ↔ database contract | The wire keys are kept unchanged |
 
-### 15.8 Open questions for the user
+### 15.8 Questions answered (user, 2026-10-28)
 
-1. **The commission figure.** The interim rate is 0 bps for every tenant. What
-   rate, per tenant, once agreed?
-2. **Staff links.** Should DSA/DSM-held links also earn the web percentage?
-   Default: no. They have no Paystack subaccount, and staff incentives are
-   Spec C.
-3. **Link authority.** Is a ZSM linking a vetted agent alone acceptable, or do
-   you want MONVELO_OPERATOR approval of each link? Default: the ZSM alone.
-4. **POS shop-owner codes.** Is it acceptable that a POS member cannot issue
-   PICKUP_CONFIRM / POS_SETTLEMENT codes until Spec D2 binds them to an order?
-   Default: yes.
-5. **Subaccount verification.** Should `set_monvelo_agent_subaccount` go
-   through a gateway that fetches the subaccount from Paystack and matches its
-   settlement account to the agent's? Default: not in Step 1b; revisit with
-   Step 3 (F1).
+1. **Commission figure:** 0 bps for every tenant until rates are agreed.
+2. **Staff links:** DSA/DSM links earn no web percentage; staff incentives are Spec C.
+3. **Link authority:** MONVELO_OPERATOR approves every tenant–agent link (§15.4 A).
+4. **POS shop-owner codes:** POS members cannot issue PICKUP_CONFIRM / POS_SETTLEMENT codes until Spec D2 binds them to an order.
+5. **Subaccount verification:** the operator enters the subaccount; Paystack verification waits for Step 3 (F1).

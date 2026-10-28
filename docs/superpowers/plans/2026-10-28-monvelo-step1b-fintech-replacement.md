@@ -147,7 +147,7 @@ update public.tenant_settings set web_agent_commission_bps = 150 where tenant_id
     - `tenant_id uuid not null → tenants`;
     - `agent_id uuid not null → monvelo_fintech_agents`;
     - `territory_id uuid not null`;
-    - `status text not null default 'ACTIVE' check in ('ACTIVE','SUSPENDED')`;
+    - `status text not null default 'PENDING' check in ('PENDING','ACTIVE','SUSPENDED')`, `approved_by`, `approved_at` (both required when ACTIVE). User 2026-10-28: MONVELO_OPERATOR approves every link via `approve_monvelo_agent_link(p_idempotency_key, p_tenant_id, p_agent_id)`; `link_monvelo_agent` creates PENDING and a territory change returns an ACTIVE link to PENDING;
     - `linked_by uuid not null → profiles`;
     - `created_at`, `updated_at` (`set_updated_at` trigger);
     - `primary key (tenant_id, agent_id)`;
