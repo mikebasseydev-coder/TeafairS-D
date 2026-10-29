@@ -86,12 +86,12 @@ delete from vault.secrets where name = 'gateway_secret';
 do $$ begin perform vault.create_secret('test-gw-secret', 'gateway_secret'); end $$;
 
 -- ── shape ───────────────────────────────────────────────────────────────
-select has_table('public', 'monvelo_fintech_agents', 'agents table exists');
-select has_table('public', 'monvelo_fintech_members', 'members table exists');
-select col_is_unique('public', 'monvelo_fintech_agents', array['pos_network', 'network_agent_id'],
+select has_table('public', 'monvelo_agents', 'agents table exists');
+select has_table('public', 'monvelo_agent_members', 'members table exists');
+select col_is_unique('public', 'monvelo_agents', array['pos_network', 'network_agent_id'],
   'the network agent id is unique per network (the race-safe guard)');
-select col_type_is('public', 'monvelo_fintech_agents', 'daily_cap', 'numeric(15,2)', 'daily_cap is money');
-select col_default_is('public', 'monvelo_fintech_agents', 'per_financing_cap', '0', 'per_financing_cap defaults to 0');
+select col_type_is('public', 'monvelo_agents', 'daily_cap', 'numeric(15,2)', 'daily_cap is money');
+select col_default_is('public', 'monvelo_agents', 'per_financing_cap', '0', 'per_financing_cap defaults to 0');
 
 -- ── register_monvelo_agent ──────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
@@ -145,16 +145,16 @@ select throws_ok(
   '23505', 'this agent is already registered with Monvelo',
   'a lower-case, padded copy of the id is the same agent');
 reset role;
-select is((select count(*)::int from public.monvelo_fintech_agents where network_agent_id = 'MP-100200'), 2,
+select is((select count(*)::int from public.monvelo_agents where network_agent_id = 'MP-100200'), 2,
   'two rows for the two networks');
-select is((select count(*)::int from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT' and network_agent_id = 'MP-100200'), 1,
+select is((select count(*)::int from public.monvelo_agents where pos_network = 'MONIEPOINT' and network_agent_id = 'MP-100200'), 1,
   'the duplicate created no second Moniepoint agent');
-select is((select settlement_account_last4 from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), '6789',
+select is((select settlement_account_last4 from public.monvelo_agents where pos_network = 'MONIEPOINT'), '6789',
   'the last four digits are derived');
-select is((select recruited_by::text from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+select is((select recruited_by::text from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   '20000000-0000-0000-0000-000000000002', 'recruited_by is the caller');
-select is((select status from public.monvelo_fintech_agents where pos_network = 'OPAY'), 'PENDING', 'the second agent is PENDING');
-select is((select round(extensions.st_y(location::extensions.geometry)::numeric, 4) from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+select is((select status from public.monvelo_agents where pos_network = 'OPAY'), 'PENDING', 'the second agent is PENDING');
+select is((select round(extensions.st_y(location::extensions.geometry)::numeric, 4) from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   6.6018, 'the location is stored as a point');
 
 select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
@@ -173,8 +173,8 @@ select throws_ok(
     '{"business_name":"Z","pos_network":"PALMPAY","network_agent_id":"PP-10","contact_phone":"+2348031110001","latitude":6.5,"longitude":3.3,"address_text":"a","settlement_account_number":"3333333333","settlement_bank_code":"058","settlement_account_name":"Z","network_kyc_reference":"K"}'::jsonb)$$,
   '42501', 'Monvelo is not enabled for this tenant', 'an ASA of a tenant that has not enabled Monvelo cannot register');
 select throws_ok(
-  $$select public.request_settlement_change('99999999-0000-0000-0000-000000000009', 'test-gw-secret',
-      (select id from public.monvelo_fintech_agents limit 1),
+  $$select public.request_monvelo_settlement_change('99999999-0000-0000-0000-000000000009', 'test-gw-secret',
+      (select id from public.monvelo_agents limit 1),
       '{"settlement_account_number":"9876543210","settlement_bank_code":"044","settlement_account_name":"X"}'::jsonb)$$,
   '42501', 'Monvelo is not enabled for this tenant', 'nor request a settlement change');
 
@@ -192,27 +192,27 @@ select throws_ok(
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
   $$select public.approve_monvelo_agent('dddddddd-0000-0000-0000-000000000001',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'))$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'))$$,
   '42501', null, 'a tenant ZSM without the platform role cannot approve');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000009', null);
 select throws_ok(
   $$select public.approve_monvelo_agent('dddddddd-0000-0000-0000-000000000001',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'))$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'))$$,
   '42501', null, 'MONVELO_FINANCE cannot approve (operator only)');
 
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', null);
 select lives_ok(
   $$select public.approve_monvelo_agent('dddddddd-0000-0000-0000-000000000002',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'))$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'))$$,
   'the MONVELO_OPERATOR with no tenant membership approves');
 select is(public.approve_monvelo_agent('dddddddd-0000-0000-0000-000000000002',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT')) ->> 'status', 'ACTIVE',
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT')) ->> 'status', 'ACTIVE',
   'the approval replays');
 reset role;
-select is((select status from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), 'ACTIVE', 'the agent is ACTIVE');
-select is((select approved_by::text from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+select is((select status from public.monvelo_agents where pos_network = 'MONIEPOINT'), 'ACTIVE', 'the agent is ACTIVE');
+select is((select approved_by::text from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   '20000000-0000-0000-0000-000000000005', 'approved_by is the operator');
-select ok((select approved_at is not null from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), 'approved_at is set');
+select ok((select approved_at is not null from public.monvelo_agents where pos_network = 'MONIEPOINT'), 'approved_at is set');
 select is((select count(*)::int from public.audit_logs where operation = 'approve_monvelo_agent'
             and idempotency_key = 'dddddddd-0000-0000-0000-000000000002'), 1, 'the approval is audited once');
 
@@ -220,152 +220,152 @@ select is((select count(*)::int from public.audit_logs where operation = 'approv
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
   $$select public.add_monvelo_member('eeeeeeee-0000-0000-0000-000000000001',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), '+2348000000006')$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), '+2348000000006')$$,
   '42501', null, 'a tenant ZSM cannot link fintech staff');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', null);
 select throws_ok(
   $$select public.add_monvelo_member('eeeeeeee-0000-0000-0000-000000000002',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), '+2348999999999')$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), '+2348999999999')$$,
   'P0001', null, 'a phone with no account is refused');
 select throws_ok(
   $$select public.add_monvelo_member('eeeeeeee-0000-0000-0000-000000000003',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), '+2348000000011')$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), '+2348000000011')$$,
   'P0001', null, 'an unconfirmed phone is refused');
 select lives_ok(
   $$select public.add_monvelo_member('eeeeeeee-0000-0000-0000-000000000004',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), '+2348000000006')$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), '+2348000000006')$$,
   'the operator links a confirmed profile');
 reset role;
-select is((select count(*)::int from public.monvelo_fintech_members where status = 'ACTIVE'
+select is((select count(*)::int from public.monvelo_agent_members where status = 'ACTIVE'
             and profile_id = '20000000-0000-0000-0000-000000000006'), 1, 'the member is ACTIVE');
 
 -- ── reads ───────────────────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000006', null);
-select is((select count(*)::int from public.monvelo_fintech_agents), 1, 'a member reads their own agent only');
-select is((select count(*)::int from public.monvelo_fintech_members), 1, 'a member reads their own membership');
-select throws_ok($$select settlement_account_number from public.monvelo_fintech_agents$$,
+select is((select count(*)::int from public.monvelo_agents), 1, 'a member reads their own agent only');
+select is((select count(*)::int from public.monvelo_agent_members), 1, 'a member reads their own membership');
+select throws_ok($$select settlement_account_number from public.monvelo_agents$$,
   '42501', null, 'a member cannot select the settlement account number');
-select throws_ok($$select pending_settlement from public.monvelo_fintech_agents$$,
+select throws_ok($$select pending_settlement from public.monvelo_agents$$,
   '42501', null, 'nor the pending settlement');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000007', null);
-select is((select count(*)::int from public.monvelo_fintech_agents), 0, 'a stranger reads nothing');
-select is((select count(*)::int from public.monvelo_fintech_members), 0, 'a stranger reads no memberships');
+select is((select count(*)::int from public.monvelo_agents), 0, 'a stranger reads nothing');
+select is((select count(*)::int from public.monvelo_agent_members), 0, 'a stranger reads no memberships');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000009', null);
-select is((select count(*)::int from public.monvelo_fintech_agents), 2, 'MONVELO_FINANCE reads every agent');
+select is((select count(*)::int from public.monvelo_agents), 2, 'MONVELO_FINANCE reads every agent');
 reset role;
-select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'settlement_account_number', 'select'), false,
+select is(has_column_privilege('authenticated', 'public.monvelo_agents', 'settlement_account_number', 'select'), false,
   'authenticated has no column grant on settlement_account_number');
-select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'settlement_bank_code', 'select'), false,
+select is(has_column_privilege('authenticated', 'public.monvelo_agents', 'settlement_bank_code', 'select'), false,
   'nor settlement_bank_code');
-select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'pending_settlement', 'select'), false,
+select is(has_column_privilege('authenticated', 'public.monvelo_agents', 'pending_settlement', 'select'), false,
   'nor pending_settlement');
-select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'paystack_payer_ref', 'select'), false,
+select is(has_column_privilege('authenticated', 'public.monvelo_agents', 'paystack_payer_ref', 'select'), false,
   'nor paystack_payer_ref');
-select is(has_column_privilege('authenticated', 'public.monvelo_fintech_agents', 'business_name', 'select'), true,
+select is(has_column_privilege('authenticated', 'public.monvelo_agents', 'business_name', 'select'), true,
   'but business_name is readable');
-select is(has_table_privilege('authenticated', 'public.monvelo_fintech_agents', 'insert'), false, 'no direct insert');
+select is(has_table_privilege('authenticated', 'public.monvelo_agents', 'insert'), false, 'no direct insert');
 
 -- ── field agents: ruling 2 ──────────────────────────────────────────────
 -- agent 1 (Moniepoint) is ACTIVE, agent 2 (OPay) is PENDING
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
-select is((select count(*)::int from public.monvelo_fintech_agents), 1,
+select is((select count(*)::int from public.monvelo_agents), 1,
   'an enabled tenant''s ASA reads the ACTIVE agent and not the PENDING one');
-select is((select pos_network::text from public.monvelo_fintech_agents), 'MONIEPOINT', 'the one it reads is the ACTIVE agent');
+select is((select pos_network::text from public.monvelo_agents), 'MONIEPOINT', 'the one it reads is the ACTIVE agent');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000002');
-select is((select count(*)::int from public.monvelo_fintech_agents), 0, 'a disabled tenant''s ASA reads none');
+select is((select count(*)::int from public.monvelo_agents), 0, 'a disabled tenant''s ASA reads none');
 
 -- ── caps (ruling 9) ─────────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
   $$select public.set_monvelo_agent_caps('ffffffff-0000-0000-0000-000000000001',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), 500000, 100000)$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), 500000, 100000)$$,
   '42501', null, 'a ZSA cannot set caps');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', null);
 select lives_ok(
   $$select public.set_monvelo_agent_caps('ffffffff-0000-0000-0000-000000000002',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), 500000, 100000)$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), 500000, 100000)$$,
   'the operator sets the caps');
 select throws_ok(
   $$select public.set_monvelo_agent_caps('ffffffff-0000-0000-0000-000000000003',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), 100000, 500000)$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), 100000, 500000)$$,
   'P0001', null, 'a per-financing cap above the daily cap is refused');
 select throws_ok(
   $$select public.set_monvelo_agent_caps('ffffffff-0000-0000-0000-000000000004',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), -1, -1)$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), -1, -1)$$,
   'P0001', null, 'negative caps are refused');
 reset role;
-select is((select daily_cap || '/' || per_financing_cap from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+select is((select daily_cap || '/' || per_financing_cap from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   '500000.00/100000.00', 'the caps are stored');
 select is((select count(*)::int from public.audit_logs where operation = 'set_monvelo_agent_caps'), 1, 'the caps change is audited');
 
 -- ── settlement change ───────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
-  $$select public.request_settlement_change('99999999-0000-0000-0000-000000000001', 'wrong',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+  $$select public.request_monvelo_settlement_change('99999999-0000-0000-0000-000000000001', 'wrong',
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'),
       '{"settlement_account_number":"9876543210","settlement_bank_code":"044","settlement_account_name":"Mama Ngozi Ventures"}'::jsonb)$$,
   '42501', null, 'a settlement change needs the gateway proof');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000010', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
-  $$select public.request_settlement_change('99999999-0000-0000-0000-000000000002', 'test-gw-secret',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+  $$select public.request_monvelo_settlement_change('99999999-0000-0000-0000-000000000002', 'test-gw-secret',
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'),
       '{"settlement_account_number":"9876543210","settlement_bank_code":"044","settlement_account_name":"Mama Ngozi Ventures"}'::jsonb)$$,
   '42501', null, 'a ZSA who did not recruit the agent cannot change its account');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
 select lives_ok(
-  $$select public.request_settlement_change('99999999-0000-0000-0000-000000000003', 'test-gw-secret',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+  $$select public.request_monvelo_settlement_change('99999999-0000-0000-0000-000000000003', 'test-gw-secret',
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'),
       '{"settlement_account_number":"9876543210","settlement_bank_code":"044","settlement_account_name":"Mama Ngozi Ventures"}'::jsonb)$$,
   'the recruiting ZSA requests a settlement change through the gateway');
 reset role;
-select is((select settlement_account_last4 || '/' || settlement_account_number from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+select is((select settlement_account_last4 || '/' || settlement_account_number from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   '6789/0123456789', 'the account is unchanged before approval');
-select is((select pending_settlement ->> 'settlement_account_number' from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+select is((select pending_settlement ->> 'settlement_account_number' from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   '9876543210', 'the new account waits in pending_settlement');
 
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
-  $$select public.approve_settlement_change('88888888-0000-0000-0000-000000000001',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'))$$,
+  $$select public.approve_monvelo_settlement_change('88888888-0000-0000-0000-000000000001',
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'))$$,
   '42501', null, 'a tenant ZSM cannot approve a settlement change');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', null);
 select lives_ok(
-  $$select public.approve_settlement_change('88888888-0000-0000-0000-000000000002',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'))$$,
+  $$select public.approve_monvelo_settlement_change('88888888-0000-0000-0000-000000000002',
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'))$$,
   'the operator approves the settlement change');
 select throws_ok(
-  $$select public.approve_settlement_change('88888888-0000-0000-0000-000000000003',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'))$$,
+  $$select public.approve_monvelo_settlement_change('88888888-0000-0000-0000-000000000003',
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'))$$,
   'P0001', null, 'with nothing pending there is nothing to approve');
 reset role;
 select is((select settlement_account_last4 || '/' || settlement_account_number || '/' || settlement_bank_code
-            from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+            from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   '3210/9876543210/044', 'the account is swapped in after approval');
-select ok((select pending_settlement is null from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'),
+select ok((select pending_settlement is null from public.monvelo_agents where pos_network = 'MONIEPOINT'),
   'and the pending change is cleared');
 
 -- ── suspension ──────────────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
   $$select public.suspend_monvelo_agent('77777777-0000-0000-0000-000000000001',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), 'x')$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), 'x')$$,
   '42501', null, 'a tenant ZSM cannot suspend');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', null);
 select lives_ok(
   $$select public.suspend_monvelo_agent('77777777-0000-0000-0000-000000000002',
-      (select id from public.monvelo_fintech_agents where pos_network = 'MONIEPOINT'), 'chargeback dispute')$$,
+      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), 'chargeback dispute')$$,
   'the operator suspends an agent');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
-select is((select count(*)::int from public.monvelo_fintech_agents), 0, 'a suspended agent is no longer visible to field agents');
+select is((select count(*)::int from public.monvelo_agents), 0, 'a suspended agent is no longer visible to field agents');
 
 -- ── no personal data in audit rows ──────────────────────────────────────
 reset role;
 select is((select count(*)::int from public.audit_logs
-            where entity_type like 'monvelo_fintech%'
+            where entity_type like 'monvelo_agent%'
               and (coalesce(before::text, '') || coalesce(after::text, '')) ~ '0123456789|9876543210|2222222222|8031112222|settlement_account_number|contact_phone'),
   0, 'no audit row carries a full account number, a phone number or those keys');
 select ok((select count(*) > 0 from public.audit_logs
-            where entity_type like 'monvelo_fintech%' and (after::text like '%"6789"%' or after::text like '%"3210"%')),
+            where entity_type like 'monvelo_agent%' and (after::text like '%"6789"%' or after::text like '%"3210"%')),
   'the audit rows do carry the last four digits');
 
 select * from finish();

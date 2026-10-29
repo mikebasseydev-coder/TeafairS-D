@@ -54,7 +54,7 @@ select tables_are('public', array[
   -- Monvelo tenant settings, brand terms and fee terms (3, addendum A6)
   'monvelo_tenant_settings', 'monvelo_brand_terms', 'monvelo_tenant_fee_terms',
   -- Monvelo fintech agents and their staff logins (2, addendum A6)
-  'monvelo_fintech_agents', 'monvelo_fintech_members',
+  'monvelo_agents', 'monvelo_agent_members',
   -- Monvelo shop enrolment, consent challenges and nominations (3, addendum A6)
   'monvelo_shop_enrolments', 'monvelo_consent_challenges', 'monvelo_agent_nominations'
 ], 'public holds exactly the 60 tables');

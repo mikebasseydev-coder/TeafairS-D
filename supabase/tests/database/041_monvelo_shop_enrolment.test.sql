@@ -73,7 +73,7 @@ insert into public.retail_shops (id, shop_name, contact_phone, owner_id, density
    'SUBURBAN', extensions.st_setsrid(extensions.st_makepoint(3.35, 6.60), 4326), 'Street 6');
 
 -- agents for the nomination close
-insert into public.monvelo_fintech_agents (id, business_name, pos_network, network_agent_id, contact_phone, location, address_text,
+insert into public.monvelo_agents (id, business_name, pos_network, network_agent_id, contact_phone, location, address_text,
   settlement_account_number, settlement_account_last4, settlement_bank_code, settlement_account_name, network_kyc_reference,
   recruited_by, status) values
   ('80000000-0000-0000-0000-000000000001', 'Active POS', 'OPAY', 'OP-1', '+2348031110001',

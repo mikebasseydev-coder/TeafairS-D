@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(29);
+select plan(31);
 
 create function pg_temp.bodies_matching(p_pattern text) returns text[]
 language sql stable as $$
@@ -50,22 +50,26 @@ select is(regexp_replace('x.network_terminal_id', 'network_terminal_id', '', 'g'
           and 'fp.commission_bps' ~ '\.commission_bps' and '''commission_bps''' !~ '\.commission_bps',
   true, 'the guard patterns behave on known strings');
 
+-- Task 5: the Monvelo agent tables
+select hasnt_table('public', 'monvelo_fintech_agents', 'monvelo_fintech_agents is renamed');
+select is(pg_temp.bodies_matching('monvelo_fintech_'), null::text[], 'no body names monvelo_fintech_');
+
 -- catalog names: constraints, indexes, policies, triggers
 select is((select array_agg(conname::text order by conname) from pg_constraint
             where connamespace = 'public'::regnamespace
-              and conname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
+              and conname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|monvelo_fintech|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no constraint keeps an old web name');
 select is((select array_agg(indexname::text order by indexname) from pg_indexes
             where schemaname = 'public'
-              and indexname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
+              and indexname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|monvelo_fintech|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no index keeps an old web name');
 select is((select array_agg(policyname::text order by policyname) from pg_policies
             where schemaname = 'public'
-              and policyname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
+              and policyname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|monvelo_fintech|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no policy keeps an old web name');
 select is((select array_agg(tgname::text order by tgname) from pg_trigger t join pg_class c on c.oid = t.tgrelid
             where c.relnamespace = 'public'::regnamespace and not t.tgisinternal
-              and tgname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|attributed_terminal|idx_payments_(partner|terminal)$'),
+              and tgname ~ '(^|_)fintech_(partner|terminal|advance)|agent_code|commission_records|monvelo_fintech|attributed_terminal|idx_payments_(partner|terminal)$'),
           null::text[], 'no trigger keeps an old web name');
 select is((select count(*)::int from pg_constraint
             where connamespace = 'public'::regnamespace and conname ~ '^web_(pos_partners|pos_venues|referral_codes|commissions)_'),

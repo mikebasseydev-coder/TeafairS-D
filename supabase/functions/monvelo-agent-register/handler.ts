@@ -50,7 +50,7 @@ export function createMonveloAgentRegisterHandler(deps: MonveloAgentRegisterDeps
 
     if (body.action === "change_settlement") {
       const { accountName } = await deps.resolve(body.settlement_account_number, body.settlement_bank_code);
-      const r = await rpc<ChangeReply>("request_settlement_change", {
+      const r = await rpc<ChangeReply>("request_monvelo_settlement_change", {
         p_idempotency_key: body.idempotency_key,
         p_gateway_proof: deps.gatewaySecret,
         p_agent_id: body.agent_id,

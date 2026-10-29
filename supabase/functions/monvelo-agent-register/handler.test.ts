@@ -132,7 +132,7 @@ Deno.test("change_settlement needs agent_id, skips the agent fields, and returns
   const text = await res.text();
   assertEquals(res.status, 200);
   assertEquals(resolveCalls, [[NUMBER, "058"]]);
-  assertEquals(rpcCalls, [["request_settlement_change", {
+  assertEquals(rpcCalls, [["request_monvelo_settlement_change", {
     p_idempotency_key: KEY,
     p_gateway_proof: SECRET,
     p_agent_id: AGENT,

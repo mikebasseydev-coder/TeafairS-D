@@ -1125,7 +1125,7 @@ Deno.test({
     assert(!JSON.stringify(reply).includes("0123456789"), "the full account number never comes back");
 
     const [row] = (await must(
-      admin.from("monvelo_fintech_agents").select("status, settlement_account_last4, settlement_account_name, recruited_by")
+      admin.from("monvelo_agents").select("status, settlement_account_last4, settlement_account_name, recruited_by")
         .eq("id", reply.agent_id),
     )) as Array<Record<string, string>>;
     assertEquals(
@@ -1144,7 +1144,7 @@ Deno.test({
     const bad = await zsa.post("monvelo-agent-register", body({ network_agent_id: `mp2-${run}`, settlement_account_number: "0000000000" }));
     const badBody = await bad.json();
     assertEquals([bad.status, badBody.error.code], [422, "ACCOUNT_NOT_RESOLVED"]);
-    assertEquals((await must(admin.from("monvelo_fintech_agents").select("id").eq("network_agent_id", `MP2-${run}`.toUpperCase())))?.length, 0);
+    assertEquals((await must(admin.from("monvelo_agents").select("id").eq("network_agent_id", `MP2-${run}`.toUpperCase())))?.length, 0);
   },
 });
 
