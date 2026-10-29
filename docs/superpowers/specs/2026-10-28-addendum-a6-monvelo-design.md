@@ -762,7 +762,7 @@ The remote has the 29 migrations up to `20261015130200`. It therefore holds `fin
 |---|---|
 | A function body still names an old identifier. The migration passes and the call fails at run time | The §15.7 guard; recreated bodies start from the live `pg_get_functiondef`, so no earlier edit is lost |
 | A constraint name is matched as text (`register_monvelo_agent` maps a 23505 by constraint name) | Recreated with the new name, and covered by 045's duplicate-registration test, which expects the plain message, not a raw 23505 |
-| An idempotency key used before the rename is replayed afterwards under the new op name (`upsert_web_referral_code`, `set_web_pos_venue`) and gets TF002 | Accepted: no client exists yet |
+| An idempotency key used before the rename is replayed afterwards under the new op name (`upsert_web_referral_code`, `set_web_pos_venue`, `request_monvelo_settlement_change`, `approve_monvelo_settlement_change`) and gets TF002 | Accepted: no client exists yet; the Monvelo tables were never deployed and the only caller of the two Monvelo RPCs is the in-repo handler |
 | Edge bundles on the remote still import `_shared/fintech-liquidity` | The redeploy list in §15.8; `deno check` of every `index.ts` in the plan's Edge Function task |
 | Renaming `orders.agent_code_id` changes the staff evidence key | Listed in §15.4; there is no consumer yet |
 | TEAFAIR POS partners stop earning the ₦500 bounty | Ruled by the user: 0 until rates are agreed |

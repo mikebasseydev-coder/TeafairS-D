@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(20);
+select plan(21);
 
 -- fixtures (as postgres): one tenant with Monvelo on, a ZSM and a ZSA
 insert into public.tenants (id, name, code) values
@@ -51,6 +51,10 @@ select is((select array_agg(g.grantee::regrole::text order by g.grantee::regrole
              from (select (aclexplode(proacl)).grantee from pg_proc
                     where oid = 'public.approve_monvelo_settlement_change(uuid,uuid)'::regprocedure) g),
   array['authenticated','postgres','service_role'], 'approve_monvelo_settlement_change keeps its grants');
+select is((select array_agg(g.grantee::regrole::text order by g.grantee::regrole::text)
+             from (select (aclexplode(proacl)).grantee from pg_proc
+                    where oid = 'public.request_monvelo_settlement_change(uuid,text,uuid,jsonb)'::regprocedure) g),
+  array['authenticated','postgres','service_role'], 'request_monvelo_settlement_change keeps its grants');
 
 -- behaviour: the same network agent twice is a 23505 with the plain message
 select set_config('role', 'authenticated', true),
