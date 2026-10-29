@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(30);
+select plan(36);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- 1 platform admin · 2 ZSM (A) · 3 CSM candidate · 4 LM candidate
@@ -134,7 +134,7 @@ reset role;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000007', null);
 select throws_ok(
   $$select public.appoint_client_service_manager(pg_temp.k(4), '7eaf0000-0000-4000-8000-000000000001', '2348000000009')$$,
-  '42501', null, 'a MONVELO_OPERATOR cannot appoint a CSM');
+  '42501', 'not permitted for this platform role', 'a MONVELO_OPERATOR cannot appoint a CSM');
 reset role;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', null);
 select throws_ok(
@@ -219,24 +219,51 @@ select lives_ok(
 reset role;
 select is((select status from public.orders where id = '90000000-0000-0000-0000-000000000001'),
   'IN_TRANSIT', 'and the order is IN_TRANSIT');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '7eaf0000-0000-4000-8000-000000000001');
+select is((select count(*)::int from public.order_fulfilments where order_id = '90000000-0000-0000-0000-000000000001'),
+  1, 'the LM reads the fulfilment row of the order it dispatched');
+reset role;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000005', '7eaf0000-0000-4000-8000-000000000001');
 select throws_ok(
   $$select public.mark_order_dispatched(pg_temp.k(12), '90000000-0000-0000-0000-000000000002', null, '1234', 'test-gw-secret')$$,
-  '42501', null, 'a TENANT_ADMIN cannot dispatch');
+  '42501', 'not permitted to dispatch this order', 'a TENANT_ADMIN cannot dispatch');
 
 -- ── TENANT_ADMIN is read-only ───────────────────────────────────────────
 select throws_ok(
   $$select public.invite_tenant_user(pg_temp.k(13), '2348000000009', 'DSA', '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000006')$$,
-  '42501', null, 'a TENANT_ADMIN cannot invite');
+  '42501', 'role TENANT_ADMIN may not perform this operation', 'a TENANT_ADMIN cannot invite');
 select throws_ok(
   $$select public.claim_ticket(pg_temp.k(14), 'a0000000-0000-0000-0000-000000000001')$$,
-  '42501', null, 'a TENANT_ADMIN cannot claim a SYSTEM ticket');
+  '42501', 'you may not act on this ticket', 'a TENANT_ADMIN cannot claim a SYSTEM ticket');
 select is((select count(*)::int from public.monvelo_shop_enrolments
             where tenant_id = '7eaf0000-0000-4000-8000-000000000001'),
   1, 'a TENANT_ADMIN reads its tenant''s enrolments');
 select is((select count(*)::int from public.monvelo_shop_enrolments
             where tenant_id = '10000000-0000-0000-0000-000000000002'),
   0, 'and none of another tenant''s');
+select is((select count(*)::int from public.order_fulfilments),
+  0, 'a TENANT_ADMIN reads no fulfilment rows');
+reset role;
+
+-- ── the web default agent is not a tenant-wide role member ────────────────────────
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '7eaf0000-0000-4000-8000-000000000001');
+select throws_ok(
+  $$select public.set_web_defaults(pg_temp.k(15), null, '20000000-0000-0000-0000-000000000005')$$,
+  'P0001', 'the default agent must be an active member of this tenant without a tenant-wide role', 'a TENANT_ADMIN cannot be the web default agent');
+select throws_ok(
+  $$select public.set_web_defaults(pg_temp.k(16), null, '20000000-0000-0000-0000-000000000004')$$,
+  'P0001', 'the default agent must be an active member of this tenant without a tenant-wide role', 'nor a logistics manager');
+select lives_ok(
+  $$select public.set_web_defaults(pg_temp.k(17), null, '20000000-0000-0000-0000-000000000006')$$,
+  'a TM can be the web default agent');
+reset role;
+
+-- ── appointment needs an ACTIVE tenant ──────────────────────────────────
+update public.tenants set status = 'SUSPENDED' where id = '10000000-0000-0000-0000-000000000002';
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', null);
+select throws_ok(
+  $$select public.appoint_client_service_manager(pg_temp.k(18), '10000000-0000-0000-0000-000000000002', '2348000000009')$$,
+  'P0001', 'the tenant is not active', 'a CSM cannot be appointed to a suspended tenant');
 reset role;
 
 -- ── is_platform_staff and grants ────────────────────────────────────────
