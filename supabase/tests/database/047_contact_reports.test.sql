@@ -149,6 +149,13 @@ select lives_ok($$select public.file_contact_report(pg_temp.k(7), pg_temp.rep((s
   'C supersedes B');
 reset role;
 create temp table t_c as select r.id from public.contact_reports r where r.supersedes_id = (select id from t_b);
+-- C is current; make it citable the way Task 2b requires: a ZSM approval and an attached hard copy
+insert into public.contact_report_reviews (tenant_id, report_id, outcome, reviewed_by)
+select '7eaf0000-0000-4000-8000-000000000001', id, 'APPROVED', pg_temp.u(2) from t_c;
+insert into public.contact_report_hard_copies (id, tenant_id, report_id, storage_path, mime_type, size_bytes, uploaded_by, attached_at)
+select 'e0000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', id,
+       'contact-reports/' || id || '/e0000000-0000-0000-0000-000000000001.pdf', 'application/pdf', 1000, pg_temp.u(1), now()
+  from t_c;
 
 -- ── assert_citable_decision ─────────────────────────────────────────────
 select throws_ok(format($$select public.assert_citable_decision('7eaf0000-0000-4000-8000-000000000001', %L, 'BRAND_TERMS')$$,

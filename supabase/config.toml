@@ -500,6 +500,9 @@ verify_jwt = false
 [functions.storage-purge]
 verify_jwt = false
 
+[functions.contact-report-upload]
+verify_jwt = false
+
 [functions.support-staff-attachment]
 verify_jwt = false
 
