@@ -215,7 +215,7 @@ Each commit message ends with a blank line, then `Co-Authored-By: Claude Opus 5.
     - `supersedes_id uuid null`, with FK `(tenant_id, supersedes_id) → contact_reports (tenant_id, id)` and `unique (supersedes_id)` (a report is corrected at most once).
   - **table `contact_report_decisions`:**
     - `id`, `tenant_id`, `report_id`, `seq integer`;
-    - `subject text check in ('BRAND_TERMS','MONVELO_SETTINGS','CATALOGUE','STOCK','OTHER')`;
+    - `subject text check in ('BRAND_TERMS','MONVELO_SETTINGS','FEES','CATALOGUE','STOCK','OTHER')` (`FEES` added 2026-10-29 for Teafair's fee terms);
     - `decision_text text check (length(btrim(decision_text)) between 1 and 2000)`;
     - `created_at`;
     - FK `(tenant_id, report_id)`; `unique (report_id, seq)`; `unique (tenant_id, id)`.
@@ -410,9 +410,33 @@ Paths and URLs never reach an audit row.
     - `p_decision_id` goes into the idempotency request; the result keys are unchanged.
   - **RPC** `set_monvelo_tenant_settings(p_idempotency_key uuid, p_enabled boolean, p_opening_limit numeric, p_approval_cap numeric, p_max_limit numeric default null, p_decision_id uuid default null)`. Drop the 4-argument version.
     - Caller: `ZSM` or `CLIENT_SERVICE_MANAGER`.
-    - With an active CSM: only the CSM, citing a `MONVELO_SETTINGS` decision. A ZSM gets 42501 `'Monvelo settings are set by the client service manager'`.
-    - Without one: a ZSM, with the decision optional.
+    - With an active CSM: only the CSM. A ZSM gets 42501 `'Monvelo settings are set by the client service manager'`.
+    - Without one (bridging): a ZSM.
+    - **Either way, the decision is mandatory (user, 2026-10-29).** It must be a current `MONVELO_SETTINGS` decision whose report is ZSM-approved with a hard copy attached. Without it: P0001 `'cite the contact report decision that agreed these settings'`.
     - Stores `decision_id` and `max_limit`.
+
+  - **RPC** `withdraw_monvelo_brand_terms(p_idempotency_key uuid, p_terms_id uuid, p_decision_id uuid)`:
+    - drop the 2-argument version;
+    - same callers and rules as approval (the CSM, or a second ZSM while bridging);
+    - **cites a current `BRAND_TERMS` decision**, which is mandatory.
+  - **RPC** `record_monvelo_fee_terms(p_idempotency_key uuid, p_tenant_id uuid, p_fee_bps integer, p_valid_from date, p_valid_to date, p_decision_id uuid)`:
+    - drop the 5-argument version;
+    - caller unchanged (`MONVELO_OPERATOR`);
+    - **cites a current `FEES` decision of `p_tenant_id`** (Teafair's fee is agreed with the brand and recorded in a contact report), which is mandatory;
+    - stores `monvelo_tenant_fee_terms.decision_id` (new column, composite FK to `contact_report_decisions`, indexed).
+  - **Zero unaudited backdoors (user, 2026-10-29).** No risk, financial or commercial setting of a tenant changes without a cited decision:
+    - brand terms (rebate, interest-free days, late charge): approval and withdrawal;
+    - Monvelo settings (enabled, opening limit, maximum limit, approval cap);
+    - Teafair's fee terms;
+    - the catalogue and stock movements (Task 4).
+
+    Exempt, with reasons, recorded in A6 §16.4:
+    - `propose_monvelo_brand_terms` is a draft with no effect until approved;
+    - `set_web_defaults` is routing only (warehouse, default agent);
+    - `web_transport_fare` and `web_agent_commission_bps` change by migration only;
+    - the platform agent controls (`register_`, `approve_`, `suspend_monvelo_agent`, `set_monvelo_agent_caps`, the settlement-change RPCs) concern lenders, not a tenant's agreement. They stay `MONVELO_OPERATOR` decisions, audited.
+
+    Task 4 adds the catalog guard that keeps this true.
 
 - [ ] **Step 1: Write the failing tests** in `048`:
   - **Bridging:** no CSM.
@@ -429,7 +453,10 @@ Paths and URLs never reach an audit row.
     - the CSM sets them citing a `MONVELO_SETTINGS` decision, and `decision_id` is stored;
     - a ZSM gets 42501;
     - `p_max_limit` below `p_opening_limit` gets 23514 from the CHECK (assert `throws_ok … '23514'`);
-    - a `TENANT_ADMIN` gets 42501 from both RPCs.
+    - a `TENANT_ADMIN` gets 42501 from both RPCs;
+    - **bridging:** a ZSM setting them without a decision gets P0001, and with a current `MONVELO_SETTINGS` decision succeeds.
+  - **Withdrawal** without a decision gets P0001; with one, the terms are WITHDRAWN and the decision is recorded in the audit row.
+  - **Fee terms:** the operator recording them without a decision gets P0001. With a `FEES` decision of another tenant it gets 42501. With a current `FEES` decision of the named tenant, `decision_id` is stored. The existing fee-terms tests in `039` are updated to cite a decision; this is a permitted change.
   - **Immutability:** on an APPROVED row, `update … set approval_decision_id = <another>` raises P0001 `'approved terms are immutable'`.
 - [ ] **Step 2: Run the file.** Expected: FAIL (`function public.approve_monvelo_brand_terms(uuid, uuid, uuid) does not exist`).
 - [ ] **Step 3: Write the migration.**
@@ -492,6 +519,9 @@ Paths and URLs never reach an audit row.
     - an adjustment without a reason gets P0001;
     - a warehouse of tenant B gets 42501 (`'warehouse not found in this tenant'`);
     - a `TENANT_ADMIN` gets 42501.
+  - **Zero-backdoor catalog guard (user, 2026-10-29):**
+    - every `public` function whose body inserts, updates or deletes `monvelo_brand_terms`, `monvelo_tenant_settings`, `monvelo_tenant_fee_terms`, `central_products`, `inventory_batches` or `stock_movements` either takes a `p_decision_id uuid` argument and calls `assert_citable_decision`, or is in the named allowlist: `propose_monvelo_brand_terms`, plus trigger and guard functions that do not mutate those tables;
+    - a positive control proves the scan finds `set_monvelo_tenant_settings`.
   - **Movement records:**
     - one row per call;
     - as postgres, `update stock_movements` raises P0001;

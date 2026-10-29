@@ -894,6 +894,17 @@ Warehouse managers named in `warehouses.manager_id` keep working as now.
   - One hard copy per report. It is never replaced or deleted; a wrong copy means a correcting report with its own hard copy.
   - The report's readers can download the attached copy. Copies to the tenant's contacts are sent only once it is attached.
   - Claude's calls (open to change): the formats and size limit, and that the uploader is the CSM.
+- **Zero unaudited backdoors (user, 2026-10-29; binding).** No risk, financial or commercial setting of a tenant changes without citing a current decision whose report is ZSM-approved with its signed hard copy attached. This holds with or without a CSM, and covers:
+  - **Brand terms** (rebate, interest-free days, late charge): approval and withdrawal, subject `BRAND_TERMS`.
+  - **Monvelo settings** (enabled, opening limit, maximum limit, approval cap): subject `MONVELO_SETTINGS`.
+  - **Teafair's fee terms:** recorded by the operator, subject `FEES`.
+  - **Catalogue and stock movements:** subjects `CATALOGUE` and `STOCK`.
+
+  A catalog test proves that every function writing these tables cites a decision or is on a named allowlist. **Exempt (Claude's calls, open to change):**
+  - proposing brand terms (a draft);
+  - `set_web_defaults` (routing);
+  - the web fare and commission rate (migration only);
+  - the operator's controls over agents (caps, approval, suspension, payout accounts). These concern lenders, not a tenant's agreement, and stay audited operator decisions.
 
 ### 16.5 The tenant settlement ledger (Claude's call; names open to change)
 
@@ -970,8 +981,9 @@ With the ZSM and the CSM both Teafair people, the brand's agreement shows
 only in the contact report. So every approval of brand terms, including
 two-ZSM approval while a tenant has no CSM (§16.3 bridging), cites a
 `BRAND_TERMS` decision whose report is ZSM-approved and has its signed hard
-copy attached (§16.4). Monvelo settings under the bridging rule may still be
-set without a decision.
+copy attached (§16.4). Monvelo settings and every other tenant risk,
+financial or commercial setting follow the same rule (§16.4, "Zero unaudited
+backdoors"; user, 2026-10-29).
 
 ### 17.4 Delivery
 
