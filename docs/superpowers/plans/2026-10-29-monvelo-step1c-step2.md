@@ -405,8 +405,8 @@ Paths and URLs never reach an audit row.
       - a ZSM gets 42501 `'brand terms are approved by the client service manager'`;
       - the CSM must pass `p_decision_id`, checked by `assert_citable_decision(…, 'BRAND_TERMS')`, else P0001 `'cite the contact report decision that agreed these terms'`.
     - **Without one (the bridging rule):**
-      - the old rule holds: a ZSM other than `proposed_by`, else 42501 `'terms are approved by a second ZSM'`;
-      - a decision, if passed, is checked and stored.
+      - a ZSM other than `proposed_by` approves, else 42501 `'terms are approved by a second ZSM'`;
+      - **the decision is mandatory here too (user, A6 §17.3).** `p_decision_id` is checked by `assert_citable_decision(…, 'BRAND_TERMS')`, so the report must be ZSM-approved with its hard copy attached. Without it: P0001 `'cite the contact report decision that agreed these terms'`.
     - `p_decision_id` goes into the idempotency request; the result keys are unchanged.
   - **RPC** `set_monvelo_tenant_settings(p_idempotency_key uuid, p_enabled boolean, p_opening_limit numeric, p_approval_cap numeric, p_max_limit numeric default null, p_decision_id uuid default null)`. Drop the 4-argument version.
     - Caller: `ZSM` or `CLIENT_SERVICE_MANAGER`.
@@ -415,7 +415,10 @@ Paths and URLs never reach an audit row.
     - Stores `decision_id` and `max_limit`.
 
 - [ ] **Step 1: Write the failing tests** in `048`:
-  - **Bridging:** no CSM. Two ZSMs propose and approve with no decision, and the result is APPROVED. `039` still passes unchanged.
+  - **Bridging:** no CSM.
+    - Two ZSMs propose and approve, citing a current, ZSM-approved `BRAND_TERMS` decision with a hard copy, and the result is APPROVED.
+    - Approval without a decision gets P0001.
+    - `039`'s approval calls are updated to cite a decision. Its fixtures file, review and attach a contact report as postgres. This is the one permitted change to `039`.
   - **With the CSM ACTIVE:**
     - the second ZSM's approval gets 42501;
     - the CSM's approval without a decision gets P0001;
@@ -430,7 +433,7 @@ Paths and URLs never reach an audit row.
   - **Immutability:** on an APPROVED row, `update … set approval_decision_id = <another>` raises P0001 `'approved terms are immutable'`.
 - [ ] **Step 2: Run the file.** Expected: FAIL (`function public.approve_monvelo_brand_terms(uuid, uuid, uuid) does not exist`).
 - [ ] **Step 3: Write the migration.**
-- [ ] **Step 4: Run** `039`, `048`, then the green gate. Expected: PASS.
+- [ ] **Step 4: Run** `039` (updated as above), `048`, then the green gate. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(db): the CSM approves brand terms and settings citing a decision; two-ZSM bridging (A6 §16.3)`
 
 ### Task 4: Catalogue and stock movements
@@ -499,6 +502,60 @@ Paths and URLs never reach an audit row.
 - [ ] **Step 5: Commit.** `feat(db): catalogue and stock-movement RPCs citing a contact report decision (A6 §16.3)`
 
 Step 1c is complete when Task 4 is green.
+
+### Task 1d: Teafair field structure: zones are states, multi-zone ZSMs (A6 §17)
+
+Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29.
+
+**Files:**
+- Create:
+  - `supabase/migrations/20261029125000_teafair_field_structure.sql`
+  - `supabase/tests/database/056_teafair_field_structure.test.sql`
+- Modify:
+  - every pgTAP fixture that inserts into `public.zones` (about 40 inserts) so it gives a `state_code`, and every fixture that gives a ZSM `tenant_users` row a `zone_id`;
+  - `supabase/seed.sql` or the migrations' TEAFAIR seed, if they create zones or ZSMs;
+  - `gateway.integration.ts` fixtures, the same way.
+
+**Interfaces:**
+- **Zones are states.**
+  - Add `zones.state_code text not null`, with FK `→ ng_states (code)` and `unique (tenant_id, state_code)`, indexed.
+  - Backfill existing rows by matching `lower(zone_name)` to `lower(ng_states.name)`. If a row cannot be matched, the migration fails and names it; it never guesses.
+  - `zone_name` stays as a display name.
+- **One ZSM, many zones.**
+  - `zones.zsm_id` is the source of truth for a ZSM's coverage. A ZSM covers every zone in a tenant where `zsm_id` is them, and in every tenant where they hold an ACTIVE ZSM membership.
+  - **`tenant_users` for a ZSM:**
+    - drop the CHECK `role <> 'ZSM' or zone_id is not null`;
+    - add `tenant_users_zsm_no_zone`: `check (role <> 'ZSM' or zone_id is null)`;
+    - the backfill first sets each ZSM's old `zone_id` zone's `zsm_id` to that ZSM where it is null, then sets `zone_id` null.
+  - **New helper** `zsm_zone_ids(p_tenant_id uuid, p_profile_id uuid) returns setof uuid`: the zones of that tenant whose `zsm_id` is the profile, given an ACTIVE ZSM membership. It is stable, security definer and internal. `my_zsm_zone_ids()` returns the caller's zones in their active tenant and is granted to `authenticated` for policies.
+  - The `zones` trigger that checks `zsm_id` has a ZSM membership (`20261006120400`, about line 97) stays.
+- **Every function and policy that scopes a ZSM by `tenant_users.zone_id` is recreated from its live `pg_get_functiondef`**, so that "the ZSM's zone" becomes "one of `zsm_zone_ids`".
+  - **Inventory first, live:** `select proname from pg_proc where pronamespace = 'public'::regnamespace and prosrc ~ 'zone_id'`, and `pg_policies` whose `qual` names `zone_id`. Read each one.
+  - Known today: `invite_tenant_user`, `upsert_zone`, `upsert_territory`, `upsert_area`, `assign_ticket`, `chat_staff_zone`, `chat_is_available`, `my_chat_channel_ids`, `hide_chat_message`, `monvelo_assign_shop_code` and `web_route_try`, plus any RLS helper that joins a ZSM's zone.
+  - Where a function picks *one* zone for a ZSM (for example `chat_staff_zone`, or routing to "the ZSM"), it uses the zone of the object in hand: the territory's zone, or the order's zone. It never takes an arbitrary one of the ZSM's zones.
+  - Grants and signatures are unchanged.
+  - **Chat:** a multi-zone ZSM is a member of every ZONE channel of their zones.
+- **The field force is Teafair staff** (§17.2).
+  - No new code: only a platform administrator appoints a ZSM (already enforced), and ZSMs invite TM, ASM, ZSA and ASA within their zones.
+  - `invite_tenant_user`'s zone check becomes "the territory is in one of my zones".
+- **Docs:** `supabase/CLAUDE.md` gets a "Teafair field structure (A6 §17)" section. Task 10 folds the counts.
+
+- [ ] **Step 1: Write the failing tests** in `056`:
+  - `zones.state_code` exists, is NOT NULL and references `ng_states`. A second Lagos zone in the same tenant gets 23505.
+  - One ZSM is `zsm_id` on Lagos and Ogun in tenant A and on Lagos in tenant B, with no `zone_id` on the memberships. A ZSM row with a `zone_id` gets 23514.
+  - That ZSM:
+    - invites a TM into an Ogun territory, and into a Lagos territory;
+    - gets 42501 inviting into a territory of a zone they don't cover (Oyo, whose `zsm_id` is another ZSM);
+    - does the same in tenant B, scoped to B's zones only.
+  - `upsert_territory` and `upsert_area` work in both of the ZSM's zones and refuse elsewhere.
+  - Chat: the ZSM is in both ZONE channels of tenant A.
+  - `assign_ticket` and `web_route_try` behave as before for a single-zone ZSM, and route by the object's zone for a multi-zone ZSM. Mirror their existing tests in `011`/`021`/`022` (find them).
+  - Monvelo: `monvelo_assign_shop_code` and `enrol_monvelo_shop` accept a ZSM in either covered zone.
+  - The backfill migration fails clearly on a zone name that matches no state. Test this with a savepoint and a temp copy, or document it if it cannot be tested in pgTAP.
+- [ ] **Step 2: Run** `056`. Expected: FAIL.
+- [ ] **Step 3: Write the migration and update every fixture.** The whole suite must pass, not only `056`.
+- [ ] **Step 4: The green gate.** Expected: PASS, deno 0 failed, integration 0 failed.
+- [ ] **Step 5: Commit.** `feat(db): zones are states; a Teafair ZSM covers many zones across tenants (A6 §17)`
 
 ---
 

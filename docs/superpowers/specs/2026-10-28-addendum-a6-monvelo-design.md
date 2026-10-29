@@ -1,7 +1,7 @@
 # Addendum A6 to Spec A: Monvelo, inventory financing for neighbourhood shops
 
 **Date:** 2026-10-28
-**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15) and 2026-10-29 (§16)
+**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15) and 2026-10-29 (§16, §17)
 **Authority:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) still governs. Its §9 rules hold without exception. Where this addendum changes an earlier decision, it says so.
 
 ## 1. Intent
@@ -933,5 +933,52 @@ Warehouse managers named in `warehouses.manager_id` keep working as now.
   - the fulfilment helpers `fulfilment_can_dispatch` and `fulfilment_delivery_path`;
   - the catalogue and stock-movement RPCs, each citing a decision;
   - the §16.5 ledger and the §16.6 reads.
-- **The §15 rename plan is unchanged.** Its Task 5 name `monvelo_agents` matches `monvelo.md`. Tasks 5–7 stay on hold until the user has finished the rename-map review.
+- **The §15 rename plan** is complete (2026-10-29). Its Task 5 name `monvelo_agents` matches `monvelo.md`.
 - **Nothing is pushed or deployed.**
+
+## 17. Amendment 2026-10-29: Teafair field structure
+
+**Status:** user rulings 2026-10-29 (binding).
+
+### 17.1 The ZSM is a Teafair official
+
+- **The ZSM is a Teafair official, not the brand's staff.** One ZSM oversees several tenants.
+- **Zones are states.** Each zone is one Nigerian state.
+- **One ZSM, several zones.** A ZSM can oversee more than one zone.
+
+In the schema:
+- **Zones:** each zone references `ng_states` (`zones.state_code`), at most one zone per state per tenant. `zone_name` is a display name.
+- **Coverage:** `zones.zsm_id` is the source of truth for a ZSM's coverage. A ZSM covers every zone where they are `zsm_id`, in every tenant where they hold an ACTIVE ZSM membership.
+- **Membership:** the ZSM's `tenant_users` row carries no `zone_id`.
+- **Scope checks:** every check that used "the ZSM's zone" becomes "one of the ZSM's zones". A function that needs one zone uses the zone of the object in hand (the territory's or the order's).
+
+### 17.2 The field force is Teafair staff
+
+ZSM, TM, ASM, ZSA and ASA are all Teafair staff. Teafair runs the
+route-to-market for its brands, and the brand's own people only read
+(`TENANT_ADMIN`, §16.3). This builds on what already exists:
+- **Appointment:** a platform administrator appoints ZSMs (already enforced).
+- **Invites:** ZSMs invite the rest within their zones.
+- **Several brands:** a person working on several brands holds one membership per brand.
+
+Wherever §3 and §16 call a ZSM "the tenant's" ZSM, read it as the ZSM
+covering that tenant.
+
+### 17.3 Brand terms always cite the brand's signed agreement
+
+With the ZSM and the CSM both Teafair people, the brand's agreement shows
+only in the contact report. So every approval of brand terms, including
+two-ZSM approval while a tenant has no CSM (§16.3 bridging), cites a
+`BRAND_TERMS` decision whose report is ZSM-approved and has its signed hard
+copy attached (§16.4). Monvelo settings under the bridging rule may still be
+set without a decision.
+
+### 17.4 Delivery
+
+- **Task 1d** of `docs/superpowers/plans/2026-10-29-monvelo-step1c-step2.md`, after Step 1c and before Step 2:
+  - `zones.state_code` with a backfill by state name, failing loudly on a zone it cannot match;
+  - multi-zone ZSM coverage, with the helper `zsm_zone_ids`;
+  - each function and policy that scoped a ZSM by `tenant_users.zone_id`, recreated from its live definition;
+  - test fixtures updated.
+- **§17.3** is built in Task 3 (CSM approvals).
+- Nothing is pushed or deployed.
