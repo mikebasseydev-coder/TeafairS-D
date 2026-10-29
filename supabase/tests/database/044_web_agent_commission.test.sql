@@ -4,14 +4,16 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(21);
+select plan(23);
 
 -- ── fixtures (as postgres): RATECO, fare 750, a POS partner and venue, a DSA ──
 insert into public.tenants (id, name, code) values ('10000000-0000-0000-0000-000000000004', 'Rate Co', 'RATECO');
 insert into public.tenant_settings (tenant_id, web_transport_fare) values ('10000000-0000-0000-0000-000000000004', 750);
 insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000001', '2348000000001'),
-  ('20000000-0000-0000-0000-000000000002', '2348000000002');
+  ('20000000-0000-0000-0000-000000000002', '2348000000002'),
+  ('20000000-0000-0000-0000-000000000003', '2348000000003'),
+  ('20000000-0000-0000-0000-000000000004', '2348000000004');
 insert into public.zones (id, tenant_id, zone_name) values
   ('30000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000004', 'Lagos');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
@@ -25,6 +27,18 @@ select '10000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-00000000
        '40000000-0000-0000-0000-000000000004', tu.id, 'ACTIVE', true
   from public.tenant_users tu
  where tu.tenant_id = '10000000-0000-0000-0000-000000000004' and tu.role = 'ZSM';
+insert into public.tenant_users (tenant_id, profile_id, role, territory_id, reports_to_id, status, is_primary)
+select '10000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000003', 'POS_AGENT',
+       '40000000-0000-0000-0000-000000000004', tu.id, 'ACTIVE', true
+  from public.tenant_users tu
+ where tu.tenant_id = '10000000-0000-0000-0000-000000000004' and tu.role = 'ZSM';
+insert into public.tenant_users (tenant_id, profile_id, role, territory_id, reports_to_id, status, is_primary)
+select '10000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000004', 'TM',
+       '40000000-0000-0000-0000-000000000004', tu.id, 'ACTIVE', true
+  from public.tenant_users tu
+ where tu.tenant_id = '10000000-0000-0000-0000-000000000004' and tu.role = 'ZSM';
+update public.territories set tm_id = '20000000-0000-0000-0000-000000000004'
+ where id = '40000000-0000-0000-0000-000000000004';
 insert into public.warehouses (id, tenant_id, name, kind, territory_id) values
   ('70000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000004', 'REG-IKEJA', 'REGIONAL',
    '40000000-0000-0000-0000-000000000004');
@@ -38,9 +52,9 @@ insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, 
    '+2348000000005', 'ACCT_rate01', 'ACTIVE', '20000000-0000-0000-0000-000000000001', now());
 insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id) values
   ('61000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000004', '60000000-0000-0000-0000-000000000004',
-   '20000000-0000-0000-0000-000000000001', 'MP-0004');
+   '20000000-0000-0000-0000-000000000003', 'MP-0004');
 insert into public.web_referral_codes (tenant_id, code, agent_id, venue_id, created_by) values
-  ('10000000-0000-0000-0000-000000000004', 'RATE-POS', '20000000-0000-0000-0000-000000000001',
+  ('10000000-0000-0000-0000-000000000004', 'RATE-POS', '20000000-0000-0000-0000-000000000003',
    '61000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000001');
 insert into public.web_referral_codes (tenant_id, code, agent_id, created_by) values
   ('10000000-0000-0000-0000-000000000004', 'RATE-DSA', '20000000-0000-0000-0000-000000000002',
@@ -100,6 +114,24 @@ select is(pg_temp.quote('RATE-POS', 'RC-SMALL') -> 'split', 'null'::jsonb,
   'a share that rounds to 0.00 (1 bps of 3.00) gives no split');
 update public.tenant_settings set web_agent_commission_bps = 150
  where tenant_id = '10000000-0000-0000-0000-000000000004';
+
+-- only a POS agent can hold a venue-bound code (A6 15.5 rule 2)
+insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_terminal_id) values
+  ('61000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000004', '60000000-0000-0000-0000-000000000004',
+   '20000000-0000-0000-0000-000000000002', 'MP-0005');
+select set_config('role', 'authenticated', true),
+       set_config('request.jwt.claims', json_build_object(
+         'sub', '20000000-0000-0000-0000-000000000001', 'role', 'authenticated',
+         'app_metadata', json_build_object('active_tenant_id', '10000000-0000-0000-0000-000000000004'))::text, true);
+select throws_ok(
+  $$select public.upsert_web_referral_code('dddddddd-0000-0000-0000-000000000001', 'RATE-DSA2',
+      '20000000-0000-0000-0000-000000000002', '61000000-0000-0000-0000-000000000005', null, null, null, null, true)$$,
+  'P0001', 'a venue-bound code needs a POS agent', 'a DSA who holds a venue cannot get a venue-bound code');
+select lives_ok(
+  $$select public.upsert_web_referral_code('dddddddd-0000-0000-0000-000000000002', 'RATE-POS2',
+      '20000000-0000-0000-0000-000000000003', '61000000-0000-0000-0000-000000000004', null, null, null, null, true)$$,
+  'a POS agent gets a venue-bound code');
+reset role;
 
 -- ── a placed order carries the split into the payment and the commission row ──
 select set_config('role', 'service_role', true), set_config('request.jwt.claims', '{"role":"service_role"}', true);

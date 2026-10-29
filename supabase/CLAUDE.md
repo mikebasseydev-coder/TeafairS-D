@@ -666,9 +666,13 @@ names.
 - Redeploy every importer of `_shared/payments/`: `process-payment`,
   `reconcile-funds`, `web-checkout`, `web-commission-release` and
   `monvelo-agent-register`.
-- Deploy `web-commission-release` immediately after the migrations, before or
-  together with cron migration `20261028130500`; otherwise the 06:00 UTC job
-  calls a missing function and logs a 404.
+- Deploy `web-commission-release` in the same window as the migration push,
+  outside the 06:00 UTC run. If the push and the deploy straddle 06:00, the job
+  logs one 404 and runs again the next day.
+- Idempotency keys logged under the old op names (`upsert_agent_code`,
+  `set_terminal_venue`, `request_settlement_change`,
+  `approve_settlement_change`) raise TF002 if replayed after the push; no client
+  exists, so no action.
 - `supabase functions delete fintech-commission-release` only if it was
   deployed by then (the 2026-10-15 record lists six functions, so it was not).
 - Never run `supabase config push`.

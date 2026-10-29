@@ -6,6 +6,8 @@
 **Amended by:** A1 — `2026-10-15-web-storefront-agent-attribution-design.md`; A2 — `2026-10-15-buyer-contact-privacy-design.md`
 (public gateways, web orders, agent codes, terminal venues)
 
+> **Names in this spec predate A6 §15 (2026-10-28):** `FINTECH_AGENT` is now `POS_AGENT`; `fintech_partners`, `fintech_terminals`, `agent_codes`, `commission_records` are `web_pos_partners`, `web_pos_venues`, `web_referral_codes`, `web_commissions`; `fintech_advances` is dropped; `fintech-commission-release` is `web-commission-release`. See A6 §15.4.
+
 ## Executive summary
 
 Teafair is a multi-tenant Route-to-Market (RTM) and embedded-liquidity platform

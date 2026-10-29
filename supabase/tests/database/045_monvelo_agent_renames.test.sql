@@ -74,8 +74,8 @@ reset role;
 -- boundary
 select is((select array_agg(proname::text order by proname) from pg_proc
             where pronamespace = 'public'::regnamespace
-              and prosrc ~ 'public\.(web_pos_partners|web_pos_venues|web_referral_codes|web_commissions)'
-              and prosrc ~ 'public\.monvelo_'),
+              and prosrc ~ '(^|[^a-z_])(web_pos_partners|web_pos_venues|web_referral_codes|web_commissions)\y'
+              and prosrc ~ '(^|[^a-z_])monvelo_[a-z]'),
   null::text[], 'no body names both a web table and a Monvelo table');
 select is((select array_agg(conname::text order by conname) from pg_constraint
             where contype = 'f' and connamespace = 'public'::regnamespace
@@ -84,12 +84,12 @@ select is((select array_agg(conname::text order by conname) from pg_constraint
   null::text[], 'no foreign key joins the web and Monvelo domains');
 select is((select array_agg(proname::text order by proname) from pg_proc
             where pronamespace = 'public'::regnamespace and proname !~ 'monvelo'
-              and prosrc ~ 'public\.monvelo_'),
+              and prosrc ~ '(^|[^a-z_])monvelo_[a-z]'),
   null::text[], 'no function without monvelo in its name reads a Monvelo table');
 -- positive control: the boundary pattern bites a known Monvelo body
 select is((select count(*)::int > 0 from pg_proc
             where pronamespace = 'public'::regnamespace and proname = 'register_monvelo_agent'
-              and prosrc ~ 'public\.monvelo_'), true, 'the boundary pattern matches a known Monvelo body');
+              and prosrc ~ '(^|[^a-z_])monvelo_[a-z]'), true, 'the boundary pattern matches a known Monvelo body');
 
 select * from finish();
 rollback;

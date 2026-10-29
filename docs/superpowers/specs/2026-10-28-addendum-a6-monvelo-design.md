@@ -751,7 +751,8 @@ The remote has the 29 migrations up to `20261015130200`. It therefore holds `fin
 
 **Functions:**
 - Every importer of `_shared/payments/` must be redeployed: `process-payment`, `reconcile-funds`, `web-checkout`, `web-commission-release` and `monvelo-agent-register`. Their bundles otherwise still hold the old code.
-- Deploy `web-commission-release` immediately after the migrations. Until then, the 06:00 UTC cron call meets a missing function and logs a 404.
+- Deploy `web-commission-release` in the same window as the migration push, outside the 06:00 UTC run. If the push and the deploy straddle 06:00, the job logs one 404 and runs again the next day.
+- Idempotency keys logged under the old op names (`upsert_agent_code`, `set_terminal_venue`, `request_settlement_change`, `approve_settlement_change`) raise TF002 if replayed after the push; no client exists, so no action.
 - `fintech-commission-release` is not on the remote: the 2026-10-15 record lists six functions. If it has been deployed by push time, delete it with `supabase functions delete fintech-commission-release`.
 
 **Never** run `supabase config push`. The renamed `[functions.web-commission-release]` entry only affects local `verify_jwt`. Set it in the dashboard if the remote needs it.
@@ -885,6 +886,14 @@ Warehouse managers named in `warehouses.manager_id` keep working as now.
 - **Recipients:** `contact_report_recipients(report_id, name, channel, address)` lists the tenant's contacts in copy. They need no app login. Reports are sent through the A5 message router (WhatsApp now, email when Resend is live), and every send is logged.
 - **Insert-only, and kept at least 5 years:** `UPDATE` and `DELETE` are revoked and refused by trigger. A mistake is corrected by a new report that supersedes the old one, and a superseded report's decisions can no longer be cited.
 - **Readers:** the tenant's `TENANT_ADMIN`, CSM and ZSMs, and platform staff.
+- **The signed hard copy (user, 2026-10-29; binding).** Every contact report has a hard copy, and it is uploaded.
+  - The CSM scans or photographs the signed paper report and uploads it as a PDF, JPEG or PNG of up to 10 MB, into a private bucket.
+  - Uploading follows the A5 pattern: a slot RPC, a gateway that signs a one-time upload URL, and a claim that checks the file is really there.
+  - **A ZSM reviews the report first (user, 2026-10-29; binding).** Any ACTIVE ZSM of the tenant approves or rejects it, and a rejection says what must be corrected. The hard copy can be uploaded only after an approval. A rejected report is corrected by a superseding report, which is reviewed in turn. Each report has one review, which is insert-only.
+  - **A report's decisions cannot be cited until it is ZSM-approved and its hard copy is attached.**
+  - One hard copy per report. It is never replaced or deleted; a wrong copy means a correcting report with its own hard copy.
+  - The report's readers can download the attached copy. Copies to the tenant's contacts are sent only once it is attached.
+  - Claude's calls (open to change): the formats and size limit, and that the uploader is the CSM.
 
 ### 16.5 The tenant settlement ledger (Claude's call; names open to change)
 
