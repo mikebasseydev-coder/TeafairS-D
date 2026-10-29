@@ -69,7 +69,7 @@ select is(
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN','MONVELO_OPERATOR','MONVELO_FINANCE']);
 select enum_has_labels('public', 'tenant_role_enum',
-  array['ZSM','TM','ASM','DSM','DSA','POS_AGENT','RETAIL_SHOP_OWNER','ZSA','ASA']);
+  array['ZSM','TM','ASM','DSM','DSA','POS_AGENT','RETAIL_SHOP_OWNER','ZSA','ASA','CLIENT_SERVICE_MANAGER','TENANT_ADMIN','LOGISTICS_MANAGER']);
 select enum_has_labels('public', 'tenant_status_enum', array['ACTIVE','SUSPENDED','INACTIVE']);
 select enum_has_labels('public', 'tenant_user_status_enum', array['ACTIVE','INVITED','DISABLED']);
 select enum_has_labels('public', 'kyc_status_enum', array['UNVERIFIED','PENDING','VERIFIED','REJECTED']);

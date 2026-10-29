@@ -74,9 +74,9 @@ select is(
     where n.nspname = 'public'
       and has_function_privilege('authenticated', p.oid, 'execute')
       and p.prorettype = 'jsonb'::regtype
-      and p.proname not in ('set_active_tenant', 'record_monvelo_fee_terms')
+      and p.proname not in ('set_active_tenant', 'record_monvelo_fee_terms', 'appoint_client_service_manager')
       and 'p_tenant_id' = any(p.proargnames)),
-  0, 'no write RPC accepts a tenant id (decision 4); set_active_tenant only proposes one, and record_monvelo_fee_terms is the platform-role exception');
+  0, 'no write RPC accepts a tenant id (decision 4); set_active_tenant only proposes one, and record_monvelo_fee_terms and appoint_client_service_manager are the platform-role exceptions');
 select ok(not has_function_privilege('anon', 'public.upsert_zone(uuid,uuid,text,jsonb)', 'execute'),
   'anon cannot execute write RPCs');
 select ok(not has_function_privilege('authenticated', 'public.idempotency_begin(uuid,text,jsonb)', 'execute'),

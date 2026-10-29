@@ -14,7 +14,7 @@ language sql stable as $$
 $$;
 
 select enum_has_labels('public', 'tenant_role_enum',
-  array['ZSM','TM','ASM','DSM','DSA','POS_AGENT','RETAIL_SHOP_OWNER','ZSA','ASA']);
+  array['ZSM','TM','ASM','DSM','DSA','POS_AGENT','RETAIL_SHOP_OWNER','ZSA','ASA','CLIENT_SERVICE_MANAGER','TENANT_ADMIN','LOGISTICS_MANAGER']);
 select is(pg_temp.bodies_matching('FINTECH_AGENT'), null::text[], 'no body names FINTECH_AGENT');
 
 select hasnt_table('public', 'fintech_advances', 'fintech_advances is gone');
