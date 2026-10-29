@@ -1,7 +1,7 @@
 # Addendum A6 to Spec A: Monvelo, inventory financing for neighbourhood shops
 
 **Date:** 2026-10-28
-**Status:** approved by the user 2026-10-28
+**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15) and 2026-10-29 (§16)
 **Authority:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) still governs. Its §9 rules hold without exception. Where this addendum changes an earlier decision, it says so.
 
 ## 1. Intent
@@ -773,3 +773,121 @@ The remote has the 29 migrations up to `20261015130200`. It therefore holds `fin
 1. **Renaming the two staff RPCs** (`upsert_agent_code` → `upsert_web_referral_code`, `set_terminal_venue` → `set_web_pos_venue`, with `p_terminal_id` → `p_venue_id`). **Answer: rename.**
 2. **`orders.agent_code_id` → `referral_code_id`.** **Answer: rename**, along with the staff evidence key.
 3. **Should `request_settlement_change` / `approve_settlement_change` get the `monvelo_` prefix?** **Answer: yes**: `request_monvelo_settlement_change` and `approve_monvelo_settlement_change`. They change a Monvelo agent's payout account (recruiter requests via `monvelo-agent-register`, operator approves); "settlement" alone collides with the web domain's Paystack settlements.
+
+## 16. Amendment 2026-10-29: the `monvelo.md` proposal and two tenant roles
+
+**Status:** user rulings 2026-10-29 (binding); Claude's calls are marked and open to change.
+**Source:** the user's proposal `monvelo.md` (repository root, kept as received, not adopted) and Claude's review of it (2026-10-29).
+
+### 16.1 The proposal
+
+`monvelo.md` describes the same model as this addendum: the brand pays the
+lender's return as a cost of sale, the shop pays 0% within the interest-free
+window, the Monvelo operator approves agents, and agents are matched to shops
+by distance. **Its SQL is not applied.** It recreates tables that exist
+under other names, and it breaks Spec A §9 in several ways:
+- it reads claims through `current_setting` and writes policies for every command;
+- it uses `NUMERIC(12,2)` and enum workflow statuses;
+- it puts `ON DELETE CASCADE` on financial rows and uses single-column tenant FKs.
+
+Its RLS would either return no rows (restrictive policies only) or expose
+tenant data (ten tables without RLS, and a balance view that bypasses RLS).
+
+Its names map onto this addendum as follows:
+
+| `monvelo.md` | This addendum |
+|---|---|
+| inventory loan (`inventory_loans`) | `monvelo_financings` + `monvelo_financing_lines` (§4.4) |
+| interest subsidy (`interest_subsidies`) | the rebate: `monvelo_rebate_payables` (§4.4) |
+| cost-of-sales ledger (`tenant_ledger_transactions`) | the tenant settlement ledger (§16.4) behind `monvelo_tenant_settlements` |
+| `shops`, `tenant_shop_registrations` | `retail_shops`, `monvelo_shop_enrolments` |
+| `products`, `warehouse_stock`, `deliveries` | `central_products`, `inventory_batches`, `order_fulfilments` |
+| `monvelo_agents` | `monvelo_fintech_agents`, renamed `monvelo_agents` by the §15 rename plan (Task 5) |
+| `fintech_partners`, `FINTECH_AGENT` | not used: `web_pos_partners` and `POS_AGENT` belong to the web domain (§15) |
+
+### 16.2 Rulings (user, 2026-10-29; binding)
+
+1. **The 10% is the brand-paid rebate.** It is the "interest subsidy" the manufacturer absorbs as a cost of sale, so the shop pays 0% for the interest-free days.
+   - It stays a per-brand, dated `rebate_bps` (§4.2; Purerigin 10%).
+   - "Interest subsidy" and "rebate" name one thing; the schema keeps *rebate*.
+   - The late charge (§4.2, default 10% once after the window) is separate and unchanged.
+2. **Tenants never choose, link to or approve agents.** This reaffirms 2026-10-28.
+   - Agent registration, territory links and approvals belong to `MONVELO_OPERATOR` alone.
+   - There is no agent–tenant link table.
+3. **No prepaid pool.** §4.4 stands: Teafair pays the rebate, then deducts rebates and fees from the tenant's settlement. An insert-only ledger sits behind each settlement statement (§16.4).
+4. **Two new tenant roles:** `TENANT_ADMIN` and `LOGISTICS_MANAGER` (§16.3).
+5. **Tenant billing is out of scope.** There is no subscription or trial status. This milestone covers B2B financing, inventory loans and settlements only.
+6. **No credit score until legal and risk review.** The deterministic limit rules of §7.2 govern meanwhile.
+
+### 16.3 The two roles
+
+New values `TENANT_ADMIN` and `LOGISTICS_MANAGER` in `tenant_role_enum`.
+Both are **tenant-wide**: no zone, territory or area anchor. The
+definitions are `monvelo.md`'s, mapped onto what exists (user confirmed
+2026-10-29).
+
+**`TENANT_ADMIN`** ("manages cost-of-sales subsidy ledgers, product catalogs, and custom brand financing terms"):
+
+| Duty | Today | With this amendment |
+|---|---|---|
+| Subsidy ledger | — | Reads the tenant's settlement statements, the §16.4 ledger and the Monvelo book. **Read only**: `MONVELO_FINANCE` records payouts and remittances. |
+| Product catalogue | `central_products` changes only by migration | New catalogue RPCs (add and update products, prices, NAFDAC numbers, pack sizes) |
+| Brand financing terms | A ZSM proposes and a different ZSM approves (§3, §4.2) | A ZSM or `TENANT_ADMIN` proposes; a `TENANT_ADMIN` approves; proposer and approver are different people |
+| Subsidy thresholds | A ZSM sets `monvelo_tenant_settings` | `TENANT_ADMIN` sets them |
+| Staff | — | Not included: `monvelo.md` gives this role no staff duties. ZSMs keep inviting. |
+
+**`LOGISTICS_MANAGER`** ("manages warehouse stock dispatch, verifies delivery receipts, and updates stock movement status"):
+
+| Duty | Today | With this amendment |
+|---|---|---|
+| Dispatch | `mark_order_dispatched` (A5): a ZSM or the warehouse's `manager_id` | Also any `LOGISTICS_MANAGER` of the tenant, for every warehouse |
+| Delivery receipts | `mark_order_delivered` (A5, courier path with the delivery code) | Also `LOGISTICS_MANAGER`. **A Monvelo financing still becomes DELIVERED only on the shop owner's OTP (§4.4).** |
+| Stock movements | `inventory_batches` changes only by migration | New stock-movement RPCs (receipt, transfer, adjustment) with a movement record |
+| Same-day supply | — | Reads FUNDED financings awaiting delivery, so stock leaves before the 23:59 REFUND_DUE sweep |
+
+Warehouse managers named in `warehouses.manager_id` keep working as now.
+
+**Claude's calls (open to change):**
+- A platform administrator appoints a `TENANT_ADMIN`, as for a ZSM. A ZSM invites a `LOGISTICS_MANAGER`.
+- Until a tenant has an active `TENANT_ADMIN`, the §4.2 rule (two different ZSMs) and the ZSM's settings right continue. This keeps tenants that are already live (TEAFAIR) from being blocked.
+- The catalogue and stock-movement RPCs are RTM core, not Monvelo. They write `central_products` and `inventory_batches`, so they carry no `monvelo_` prefix, and §4's rule that Monvelo functions write only Monvelo tables still holds.
+- A2 is unchanged: neither role is added to the readers of `order_contacts`.
+
+### 16.4 The tenant settlement ledger (Claude's call; names open to change)
+
+**`monvelo_tenant_ledger_entries`**: one insert-only row per money event on a tenant's Monvelo account.
+- **Columns:**
+  - `id`, `tenant_id`, `business_date` (Africa/Lagos);
+  - `entry_type` (`text` + `CHECK`: `FUNDED_GROSS`, `REBATE`, `FEE`, `REFUND`, `REMITTANCE`);
+  - `financing_id?`, `rebate_payable_id?`;
+  - `amount NUMERIC(15,2)`, `created_at`.
+- **Sign rule, enforced by `CHECK`:** positive for what Teafair owes the tenant (`FUNDED_GROSS`), negative for every deduction or payment out (`REBATE`, `FEE`, `REFUND`, `REMITTANCE`).
+- **Who writes it:** only the Monvelo transaction that causes the entry (funding webhook, rebate payout, refund, remittance note), never by hand.
+- **Protection:** `UPDATE` and `DELETE` are revoked from every role, and a trigger refuses both. Rows are kept at least 5 years (§7.4).
+- **Settlements:** each `monvelo_tenant_settlements` row equals the sum of that tenant's entries for its date, by type.
+- **Readers:** the tenant's `TENANT_ADMIN` and ZSMs, and `MONVELO_FINANCE`.
+
+### 16.5 Kept from the review (Claude's calls; open to change)
+
+- **Agent proximity search:** an RPC for platform staff only. It searches the agent's registered location as `geography`, so the spatial index is used, and returns agent ids and distances, never phone numbers. It feeds supply-day notices (§5) and allocation (§7.1).
+- **Per-shop limits:** the current limit and its history are stored on the enrolment, so §7.2's rules have somewhere to live.
+- **Order financing status:** a read showing whether a trade order was paid in cash or financed, and where the financing stands. It is a `security_invoker` view or an RPC, not a second status column on `orders`.
+
+**Not adopted:**
+- the parallel tables of §16.1;
+- a credit score (ruling 6);
+- an agent's live location;
+- cash collection (§2, §7.4);
+- a prepaid pool (ruling 3);
+- tenant subscriptions (ruling 5).
+
+### 16.6 Effect on delivery
+
+- **Step 2 plan additions:**
+  - the two enum values, in their own migration (a new enum value cannot be used in the transaction that adds it);
+  - the role checks in the terms and settings RPCs;
+  - the fulfilment helpers `fulfilment_can_dispatch` and `fulfilment_delivery_path`;
+  - the catalogue and stock-movement RPCs;
+  - the §16.4 ledger and the §16.5 reads.
+- **The §15 rename plan is unchanged.** Its Task 5 name `monvelo_agents` matches `monvelo.md`. Tasks 5–7 stay on hold until the user has finished the rename-map review.
+- **Nothing is pushed or deployed.**
