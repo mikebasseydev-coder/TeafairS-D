@@ -22,6 +22,8 @@ the authority; this file is the working summary.
 | Web transport fare | done (local) |
 | Sentry observability (Edge Functions) | done (local) |
 | Auth hardening (audit H1, H2, M1, L1) and the Send SMS / Send Email hooks | done (local) |
+| Domain separation and renames (A6 §15) | done (local) |
+| Monvelo (A6) Step 1 | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -39,7 +41,7 @@ tenant member, and audit rows cannot be scrubbed afterwards.
 ### Deploying Spec D1
 
 The eight Spec D1 migrations (`20261020120000`–`20261020130300`) and the
-functions `reconcile-funds`, `fintech-commission-release`,
+functions `reconcile-funds`, `web-commission-release`,
 `storefront-locations` and `web-order-status` (plus the changed
 `process-payment`, `storefront-catalogue` and `web-checkout`) are local only.
 **D1 never deploys without A1 and A2.** Nothing is pushed until explicitly
@@ -403,8 +405,8 @@ One migration (`20261024140000_web_retail_pricing`), local only. User
 decisions 2026-10-24: the web is for consumers, at full retail price.
 
 - **No web discounts.** Existing link discounts are cleared on push, and a
-  trigger on `agent_codes` refuses new ones: P0001 "Web discounts are switched
-  off: Teafairweb sells at full retail price." (`upsert_agent_code` keeps its
+  trigger on `web_referral_codes` refuses new ones: P0001 "Web discounts are switched
+  off: Teafairweb sells at full retail price." (`upsert_web_referral_code` keeps its
   signature; pass null.) Web lines are billed at `unit_price`; the cart's
   `discount` is always 0 and the catalogue has no `discount` key. CHECK
   `orders_web_no_discount` (NOT VALID, so A1-era orders keep theirs).
@@ -414,20 +416,24 @@ decisions 2026-10-24: the web is for consumers, at full retail price.
   (goods plus fare). `orders.transport_fare` records it; only `ONLINE` orders
   carry one, never above the total. Refunded only if the order is cancelled
   before dispatch or never delivered (policy text; staff refund in Paystack).
-- **POS agent bounty:** `tenant_settings.web_agent_bounty` (TEAFAIR 500). When
-  set, a link bound to a POS terminal pays the partner exactly that amount
-  through the Paystack split (`commission_bps` 0, `bps_applied` 0 on the
-  commission record); D1 settlement checks Paystack's share against it as
-  before. When null (other tenants), the partner's `commission_bps` applies to
-  the goods only. The fare is never commissioned. Codeless and DSA links pay
-  no bounty. Everything else goes to the merchant's main account.
+- **POS agent commission (A6 §15.5, replaces the flat ₦500 bounty).**
+  `tenant_settings.web_agent_commission_bps` (integer 0-10000, default 0,
+  written by migration only) is 0 for every tenant, TEAFAIR included, until
+  the user agrees rates, so no order splits yet. The share is
+  `round(goods_total * bps / 10000, 2)`, on goods only and never on the fare,
+  paid through the Paystack split (`commission_bps` is the tenant rate,
+  `partner_share` the share). It applies only when the order's referral code
+  is tied to a POS venue whose partner is ACTIVE. Codeless orders, DSA/DSM
+  links, a SUSPENDED partner, a rate of 0 and a share that rounds to 0 all
+  get `split` null, no `payments.split_*` and no `web_commissions` row.
+  `web_pos_partners.commission_bps` and `web_agent_bounty` are dropped.
   `web-checkout` needed no change: it charges the quote total and splits
   `partner_share`.
 - **Evidence bundle:** the order header shows `goods_total`,
-  `discount_amount`, `transport_fare`, `total_amount` and `agent_code_id`;
+  `discount_amount`, `transport_fare`, `total_amount` and `referral_code_id`;
   each payment shows `agent_commission`.
-- Ruling: the bounty is a per-tenant setting, like the fare; tenants without
-  one keep D1's percentage. Settings are written by migration only.
+- Ruling: the commission rate is a per-tenant setting, like the fare, written
+  by migration only.
 
 ### Sentry observability
 
@@ -603,13 +609,104 @@ functions `send-auth-sms` and `send-auth-email`, local only. From the
 6. Meta: the `teafair_otp` authentication template is now also the sign-in
    code. With no SMS fallback, a number not on WhatsApp cannot sign in.
 
+### Domain separation (A6 §15)
+
+Migrations `20261028130000`-`20261028130500`, pgTAP 042-045, local only.
+User ruling 2026-10-28: Monvelo is strictly B2B trade financing; web sales
+never move to Monvelo. The `fintech_*` names are gone.
+
+| Domain | Owns | Never |
+|---|---|---|
+| Web | `web_pos_partners`, `web_pos_venues`, `web_referral_codes`, `web_commissions`; `tenant_settings.web_*`; storefront and checkout RPCs; `web-checkout`, `web-commission-release`, `web-order-status`, `storefront-*` | reads or writes a `monvelo_` table; has an FK onto one |
+| Monvelo | every `monvelo_` table, `areas`, the ZSA/ASA anchors, `MONVELO_*` platform roles; `monvelo-*` gateways | reads or writes a `web_` table; has an FK onto one; pays through the web commission path |
+| Shared | `payments` and the Paystack webhook (`process-payment`, `settle_paystack_payment`, `apply_paystack_refund`); `reconcile-funds`; `_shared/payments/`; OTP; the message router; `retail_shops`, `profiles`, `tenants`, `orders` | - |
+
+Renames: `fintech_partners` -> `web_pos_partners`, `fintech_terminals` ->
+`web_pos_venues`, `agent_codes` -> `web_referral_codes`, `commission_records`
+-> `web_commissions`, `FINTECH_AGENT` -> `POS_AGENT`,
+`monvelo_fintech_agents`/`_members` -> `monvelo_agents`/`monvelo_agent_members`,
+`upsert_agent_code` -> `upsert_web_referral_code`, `set_terminal_venue` ->
+`set_web_pos_venue`, `request_settlement_change`/`approve_settlement_change` ->
+`request_monvelo_settlement_change`/`approve_monvelo_settlement_change`,
+`fintech-commission-release` -> `web-commission-release`,
+`_shared/fintech-liquidity/` -> `_shared/payments/`. `fintech_advances` is
+dropped (Monvelo financing replaces it). The full mapping is A6 §15.4. The two
+staff RPC results changed: `upsert_web_referral_code` returns
+`referral_code_id`, `set_web_pos_venue` returns `venue_id`; and
+`order-dispute-evidence` shows `order.referral_code_id`. Public (teafairweb)
+responses and the wire keys `subaccount_code`, `commission_bps`,
+`partner_share` and the Paystack metadata `agent_code` are unchanged.
+
+**Naming note.** The `fintech_liquidity_*` migration files keep their
+historical names; they hold OTP, the Paystack webhook and D1 money; the domains
+are `web_*` and `monvelo_*`.
+
+**The commission rule** is under "Teafairweb retail pricing" above: only POS
+referral-link orders earn, at `tenant_settings.web_agent_commission_bps`
+(0 for every tenant for now).
+
+**The guard** is `042_domain_separation_guard.test.sql`: no function body
+names an old identifier (case-sensitive patterns, `terminal_id` tested after
+stripping `network_terminal_id`, `commission_bps` banned only as a column
+access), no constraint, index, policy or trigger carries an old name, the old
+objects are absent, and no cron job names `fintech-commission-release`. `045`
+proves the boundary: no body names both a `public.web_` and a `public.monvelo_`
+table, and no FK joins the two domains.
+
+**Deploy notes (A6 §15.8; user actions, later; nothing is pushed).** The
+remote has the 29 migrations to `20261015130200` and still holds the old
+names.
+
+- Pre-push checks (any non-zero result needs a decision):
+  1. `select count(*) from public.fintech_advances;` must be 0 (its rows are lost).
+  2. `select count(*) from public.fintech_partners where commission_bps > 0;`
+     those per-partner rates are dropped; every tenant's rate is 0 afterwards.
+  3. `select count(*) from public.tenant_users where role = 'FINTECH_AGENT';`
+     informational; those memberships become `POS_AGENT`.
+- Redeploy every importer of `_shared/payments/`: `process-payment`,
+  `reconcile-funds`, `web-checkout`, `web-commission-release` and
+  `monvelo-agent-register`.
+- Deploy `web-commission-release` immediately after the migrations, before or
+  together with cron migration `20261028130500`; otherwise the 06:00 UTC job
+  calls a missing function and logs a 404.
+- `supabase functions delete fintech-commission-release` only if it was
+  deployed by then (the 2026-10-15 record lists six functions, so it was not).
+- Never run `supabase config push`.
+
+### Monvelo (A6), Step 1
+
+Migrations `20261028120000`-`20261028120600` (plus the §15 renames above),
+pgTAP 036-041 and 045, local only. Nothing of A6 §16 (CSM, TENANT_ADMIN,
+LOGISTICS_MANAGER, contact reports, tenant ledger) is built.
+
+- **Tables:** `areas`; `monvelo_agents` and `monvelo_agent_members`;
+  `monvelo_shop_enrolments` and `monvelo_consent_challenges` (enrolments and
+  challenges); `monvelo_agent_nominations`; `monvelo_tenant_settings`;
+  `monvelo_brand_terms`; `monvelo_tenant_fee_terms`.
+- **RPCs:** `upsert_area`, `set_monvelo_tenant_settings`,
+  `propose_monvelo_brand_terms`, `approve_monvelo_brand_terms`,
+  `withdraw_monvelo_brand_terms`, `record_monvelo_fee_terms`,
+  `register_monvelo_agent`, `approve_monvelo_agent`, `suspend_monvelo_agent`,
+  `set_monvelo_agent_caps`, `add_monvelo_member`,
+  `request_monvelo_settlement_change`, `approve_monvelo_settlement_change`,
+  `start_monvelo_consent`, `enrol_monvelo_shop`,
+  `withdraw_monvelo_shop_consent`, `nominate_monvelo_agent`,
+  `close_monvelo_nomination`.
+- **Gateways:** `monvelo-agent-register` (Paystack account resolution, then
+  `register_monvelo_agent`) and `monvelo-shop-consent` (the owner consent
+  code). No new secrets: both need `GATEWAY_SECRET`, and
+  `monvelo-agent-register` also needs the Paystack key (`PAYSTACK_SECRET_KEY`).
+- **Roles:** `ZSA` (zone) and `ASA` (area) are the street-agent anchors on
+  `tenant_role_enum`; `order_channel_enum` `FIELD_DSA` is renamed
+  `FIELD_SALES`.
+
 ### Monvelo consent MV-SHARE-2026-10
 
 Migration `20261028120600_monvelo_shop_enrolment`, function `monvelo-shop-consent`
 (A6 §4.1, NDPA 2023, ruling 10), local only.
 
 - **The consent text.** The owner agrees that Teafair may share the shop's
-  name, shop code, location and area with registered Monvelo fintech agents for
+  name, shop code, location and area with registered Monvelo agents for
   stock financing, and may withdraw at any time. The words are shown in the
   app (Spec B); the WhatsApp message is the authentication OTP template, which
   carries no custom text. Every enrolment records `consent_version`
@@ -636,13 +733,18 @@ supabase/
 ├── migrations/        hand-written, ordered — Supabase CLI owns all DDL
 ├── tests/database/    pgTAP, run by `supabase test db`
 └── functions/         Edge Functions — one flat directory per function
-    └── _shared/       core/ (gateway kernel, public-gateway) · auth/ · commerce/ · fintech-liquidity/
+    └── _shared/       core/ (gateway kernel, public-gateway) · auth/ · commerce/ · payments/ · monvelo/ · messaging/ · storage/ · support/ · fulfilment/
 ```
 
-Code is grouped by domain: `auth`, `rtm-core`, `commerce`,
-`fintech-liquidity`. Migration and pgTAP file names carry the domain
+Code is grouped by domain: `auth`, `rtm-core`, `commerce` (the web
+storefront; its tables are `web_*`), `payments` (shared Paystack code),
+`monvelo` and the supporting `messaging`, `storage`, `support`, `fulfilment`.
+Migration and pgTAP file names carry the domain
 (`…_auth_pin_verification.sql`, `008_fintech_liquidity_otp.test.sql`). A
-domain gets a `_shared/<domain>/` folder once it has code.
+domain gets a `_shared/<domain>/` folder once it has code. The
+`fintech_liquidity_*` migration and test files keep their historical names;
+they hold OTP, the Paystack webhook and D1 money; the domains are `web_*`
+and `monvelo_*`.
 
 Migrations are **hand-written**, not generated from declarative schemas: grants,
 column privileges, comments and `cron.schedule` are outside what `db diff`
@@ -727,7 +829,7 @@ one responsibility per file. Third-party versions appear only in
 - **System functions** use `serviceRpc()` and authenticate the caller
   themselves: the Auth hooks `auth-verify-claims`, `send-auth-sms` and `send-auth-email`, and `process-payment` (`charge.success`,
   `refund.processed`) by signature; the cron-invoked `reconcile-funds`
-  (`{mode: "sweep" | "refunds"}`) and `fintech-commission-release` (`{}`;
+  (`{mode: "sweep" | "refunds"}`) and `web-commission-release` (`{}`;
   Spec D1) by the `x-cron-secret` header, compared in constant time against
   `CRON_SECRET` (`_shared/core/cron.ts`). The sweep takes its batch from
   `claim_unconfirmed_payments(50)`, which stamps `last_swept_at` on every row
@@ -766,7 +868,7 @@ exercised (R18).
 `KUDISMS_SENDER_ID`) anywhere real. `web-checkout` also needs
 `TURNSTILE_SECRET_KEY`, `WEB_ALLOWED_ORIGINS` and `WEB_CHECKOUT_CALLBACK_URL`
 (see `functions/.env.example`). `reconcile-funds` and
-`fintech-commission-release` need `CRON_SECRET` or they fail at boot.
+`web-commission-release` need `CRON_SECRET` or they fail at boot.
 `support-ticket-open` needs `SUPPORT_TICKET_SECRET_KEY` (addendum A3, above).
 
 The integration test runs its own fake Paystack (Initialize, Verify, List
@@ -786,7 +888,7 @@ it calls the cron functions directly.
 ### Cron jobs (Spec D1 §10)
 
 `pg_cron` calls `reconcile-funds` (sweep every 5 min, refunds 05:00 UTC) and
-`fintech-commission-release` (06:00 UTC) through `pg_net`
+`web-commission-release` (06:00 UTC) through `pg_net`
 (`public.invoke_system_function`). It reads the base URL and the shared secret
 from Vault; the migrations hold no secret values. Create both once **per
 environment** (SQL editor or `psql`):
@@ -815,7 +917,7 @@ mode. Transactions, Verify and refunds behave as they do live, but test mode
 is not expected to produce real subaccount settlements. The commission release
 path (List Settlements, Settlement Transactions) has therefore been proven only
 against the integration fake. Its first real check comes after go-live:
-watch the first `fintech-commission-release` runs and the `release_commission`
+watch the first `web-commission-release` runs and the `release_commission`
 audit rows (`share_verified`).
 
 ## Testing
