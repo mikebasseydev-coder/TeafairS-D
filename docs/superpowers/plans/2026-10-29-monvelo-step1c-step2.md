@@ -288,15 +288,17 @@ attached signed hard copy.
   - **one review per report:** `unique (report_id)`. A rejected report is corrected by a superseding report, which gets its own review.
   - SELECT policy: as for the report tables.
 - **RPC** `review_contact_report(p_idempotency_key uuid, p_report_id uuid, p_outcome text, p_note text default null) returns jsonb`:
-  - caller: `assert_tenant_role(array['ZSM'])`, an ACTIVE ZSM of the report's tenant. Another tenant's report is 42501 `'contact report not found'`;
+  - **callers:**
+    - an ACTIVE ZSM of the report's tenant. Another tenant's report is 42501 `'contact report not found'`;
+    - **operator fallback (user, 2026-10-29):** a `MONVELO_OPERATOR` (platform role, via `assert_platform_role`) may review **only when the report's tenant has no ACTIVE ZSM membership**. Otherwise it gets 42501 `'this tenant has an active ZSM; the ZSM reviews'`. The tenant is taken from the report, never from a parameter. `reviewed_by` is the operator, and the audit row records `reviewer_kind = 'OPERATOR_FALLBACK'`;
   - a superseded report is P0001 `'only the current version of a report can be reviewed'`;
   - a second review is 23505 `'this contact report has already been reviewed'`;
   - REJECTED without a note is P0001 `'say what must be corrected'`;
   - audit row with the reference and outcome (the note is kept in the table, not the audit row);
   - returns `{review_id, report_id, outcome}`;
   - granted to `authenticated`.
-- The CSM (who filed it), a `TENANT_ADMIN` or a TM calling it gets 42501.
-- Claude's calls (open to change): any ACTIVE ZSM of the tenant may review; there is no platform substitute when a tenant has no ZSM.
+- The CSM (who filed it), a `TENANT_ADMIN` or a TM calling it gets 42501. Other platform roles get 42501.
+- Claude's call (open to change): any ACTIVE ZSM of the tenant may review.
 
 The hard-copy upload below requires an APPROVED review.
 The upload follows the A5 photo pattern:
@@ -363,6 +365,10 @@ Paths and URLs never reach an audit row.
     - **Review:**
       - requesting a slot before any review gets P0001 (ZSM approval message);
       - the CSM, a `TENANT_ADMIN` and a TM calling `review_contact_report` get 42501, and tenant B's ZSM gets 42501;
+      - **operator fallback:**
+        - a `MONVELO_OPERATOR` reviewing a report of tenant A (which has an ACTIVE ZSM) gets 42501;
+        - for tenant C, which has no ACTIVE ZSM, the operator's APPROVED review is stored with `reviewed_by` = the operator, and its decisions become citable once the hard copy is attached;
+        - a `MONVELO_FINANCE` profile gets 42501;
       - REJECTED without a note gets P0001; REJECTED with a note is stored, and a slot request then gets P0001 (rejected message);
       - a correction of the rejected report is reviewed APPROVED;
       - a second review of the same report gets 23505;

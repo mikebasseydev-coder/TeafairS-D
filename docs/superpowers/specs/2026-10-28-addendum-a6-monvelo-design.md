@@ -889,7 +889,7 @@ Warehouse managers named in `warehouses.manager_id` keep working as now.
 - **The signed hard copy (user, 2026-10-29; binding).** Every contact report has a hard copy, and it is uploaded.
   - The CSM scans or photographs the signed paper report and uploads it as a PDF, JPEG or PNG of up to 10 MB, into a private bucket.
   - Uploading follows the A5 pattern: a slot RPC, a gateway that signs a one-time upload URL, and a claim that checks the file is really there.
-  - **A ZSM reviews the report first (user, 2026-10-29; binding).** Any ACTIVE ZSM of the tenant approves or rejects it, and a rejection says what must be corrected. The hard copy can be uploaded only after an approval. A rejected report is corrected by a superseding report, which is reviewed in turn. Each report has one review, which is insert-only.
+  - **A ZSM reviews the report first (user, 2026-10-29; binding).** Any ACTIVE ZSM of the tenant approves or rejects it, and a rejection says what must be corrected. **When the tenant has no ACTIVE ZSM, a `MONVELO_OPERATOR` reviews instead** (user, 2026-10-29). The audit row records the operator fallback. The hard copy can be uploaded only after an approval. A rejected report is corrected by a superseding report, which is reviewed in turn. Each report has one review, which is insert-only.
   - **A report's decisions cannot be cited until it is ZSM-approved and its hard copy is attached.**
   - One hard copy per report. It is never replaced or deleted; a wrong copy means a correcting report with its own hard copy.
   - The report's readers can download the attached copy. Copies to the tenant's contacts are sent only once it is attached.
