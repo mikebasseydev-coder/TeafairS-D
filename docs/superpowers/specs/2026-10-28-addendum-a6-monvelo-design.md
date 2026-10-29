@@ -799,7 +799,7 @@ Its names map onto this addendum as follows:
 |---|---|
 | inventory loan (`inventory_loans`) | `monvelo_financings` + `monvelo_financing_lines` (§4.4) |
 | interest subsidy (`interest_subsidies`) | the rebate: `monvelo_rebate_payables` (§4.4) |
-| cost-of-sales ledger (`tenant_ledger_transactions`) | the tenant settlement ledger (§16.4) behind `monvelo_tenant_settlements` |
+| cost-of-sales ledger (`tenant_ledger_transactions`) | the tenant settlement ledger (§16.5) behind `monvelo_tenant_settlements` |
 | `shops`, `tenant_shop_registrations` | `retail_shops`, `monvelo_shop_enrolments` |
 | `products`, `warehouse_stock`, `deliveries` | `central_products`, `inventory_batches`, `order_fulfilments` |
 | `monvelo_agents` | `monvelo_fintech_agents`, renamed `monvelo_agents` by the §15 rename plan (Task 5) |
@@ -814,46 +814,79 @@ Its names map onto this addendum as follows:
 2. **Tenants never choose, link to or approve agents.** This reaffirms 2026-10-28.
    - Agent registration, territory links and approvals belong to `MONVELO_OPERATOR` alone.
    - There is no agent–tenant link table.
-3. **No prepaid pool.** §4.4 stands: Teafair pays the rebate, then deducts rebates and fees from the tenant's settlement. An insert-only ledger sits behind each settlement statement (§16.4).
-4. **Two new tenant roles:** `TENANT_ADMIN` and `LOGISTICS_MANAGER` (§16.3).
+3. **No prepaid pool.** §4.4 stands: Teafair pays the rebate, then deducts rebates and fees from the tenant's settlement. An insert-only ledger sits behind each settlement statement (§16.5).
+4. **New tenant roles:** `TENANT_ADMIN` and `LOGISTICS_MANAGER`, and (user, later the same day) a Teafair `CLIENT_SERVICE_MANAGER` who represents the tenant in house. Contact reports are the source of truth (§16.3).
 5. **Tenant billing is out of scope.** There is no subscription or trial status. This milestone covers B2B financing, inventory loans and settlements only.
 6. **No credit score until legal and risk review.** The deterministic limit rules of §7.2 govern meanwhile.
 
-### 16.3 The two roles
+### 16.3 The tenant's representation: CSM, contact reports, and two roles
 
-New values `TENANT_ADMIN` and `LOGISTICS_MANAGER` in `tenant_role_enum`.
-Both are **tenant-wide**: no zone, territory or area anchor. The
-definitions are `monvelo.md`'s, mapped onto what exists (user confirmed
-2026-10-29).
+**The model (user, 2026-10-29).** Teafair works with its tenants as an
+agency works with a client:
+- A Teafair **Client Service Manager (CSM)** represents the tenant in house and makes the tenant's changes in the app.
+- After each meeting or call, the CSM files a **contact report**, with the tenant's contacts in copy.
+- **The contact report is the source of truth.** Every change the CSM or the CSM's logistics staff make on the tenant's behalf cites the report that agreed it.
+- The tenant reads its reports; it does not operate the app.
 
-**`TENANT_ADMIN`** ("manages cost-of-sales subsidy ledgers, product catalogs, and custom brand financing terms"):
+New values in `tenant_role_enum`: `CLIENT_SERVICE_MANAGER`, `TENANT_ADMIN`,
+`LOGISTICS_MANAGER`. All three are **tenant-wide**: no zone, territory or
+area anchor.
 
-| Duty | Today | With this amendment |
-|---|---|---|
-| Subsidy ledger | — | Reads the tenant's settlement statements, the §16.4 ledger and the Monvelo book. **Read only**: `MONVELO_FINANCE` records payouts and remittances. |
-| Product catalogue | `central_products` changes only by migration | New catalogue RPCs (add and update products, prices, NAFDAC numbers, pack sizes) |
-| Brand financing terms | A ZSM proposes and a different ZSM approves (§3, §4.2) | A ZSM or `TENANT_ADMIN` proposes; a `TENANT_ADMIN` approves; proposer and approver are different people |
-| Subsidy thresholds | A ZSM sets `monvelo_tenant_settings` | `TENANT_ADMIN` sets them |
-| Staff | — | Not included: `monvelo.md` gives this role no staff duties. ZSMs keep inviting. |
+**`CLIENT_SERVICE_MANAGER`** (Teafair staff, in house):
+- holds one `tenant_users` membership for each tenant they serve (`unique (tenant_id, profile_id)` already allows one per tenant); appointed only by a platform administrator, so the role is always Teafair's own staff;
+- files the tenant's contact reports (§16.4);
+- **approves brand terms that a ZSM proposed** (§4.2), citing the contact report in which the brand agreed them. This is the brand's approval required by §2 and §14 Q2, and it replaces the second-ZSM approval;
+- sets `monvelo_tenant_settings` (enabled, opening limit, approval cap), citing a contact report;
+- maintains the catalogue through new catalogue RPCs (products, prices, NAFDAC numbers, pack sizes), each change citing a contact report;
+- invites the tenant's `LOGISTICS_MANAGER`s and `TENANT_ADMIN` logins.
 
-**`LOGISTICS_MANAGER`** ("manages warehouse stock dispatch, verifies delivery receipts, and updates stock movement status"):
+**`TENANT_ADMIN`** (the tenant's own login, **read only**):
+
+| Reads | Notes |
+|---|---|
+| Contact reports and their decisions | the source of truth |
+| Settlement statements and the §16.5 ledger | `MONVELO_FINANCE` records payouts and remittances |
+| The Monvelo book, daily and weekly reports | as A6 §4.4 |
+| Brand terms, catalogue, Monvelo settings | as set by the CSM |
+
+The `monvelo.md` definition ("manages cost-of-sales subsidy ledgers, product
+catalogs, and custom brand financing terms") is carried out by the CSM on
+the tenant's behalf. The `TENANT_ADMIN` reads the results.
+
+**`LOGISTICS_MANAGER`** (Teafair staff in the CSM's purview: `reports_to_id` is the tenant's CSM):
 
 | Duty | Today | With this amendment |
 |---|---|---|
 | Dispatch | `mark_order_dispatched` (A5): a ZSM or the warehouse's `manager_id` | Also any `LOGISTICS_MANAGER` of the tenant, for every warehouse |
 | Delivery receipts | `mark_order_delivered` (A5, courier path with the delivery code) | Also `LOGISTICS_MANAGER`. **A Monvelo financing still becomes DELIVERED only on the shop owner's OTP (§4.4).** |
-| Stock movements | `inventory_batches` changes only by migration | New stock-movement RPCs (receipt, transfer, adjustment) with a movement record |
+| Stock movements | `inventory_batches` changes only by migration | New stock-movement RPCs (receipt, transfer, adjustment), each citing the contact report that agreed it, with a movement record |
 | Same-day supply | — | Reads FUNDED financings awaiting delivery, so stock leaves before the 23:59 REFUND_DUE sweep |
 
 Warehouse managers named in `warehouses.manager_id` keep working as now.
 
 **Claude's calls (open to change):**
-- A platform administrator appoints a `TENANT_ADMIN`, as for a ZSM. A ZSM invites a `LOGISTICS_MANAGER`.
-- Until a tenant has an active `TENANT_ADMIN`, the §4.2 rule (two different ZSMs) and the ZSM's settings right continue. This keeps tenants that are already live (TEAFAIR) from being blocked.
-- The catalogue and stock-movement RPCs are RTM core, not Monvelo. They write `central_products` and `inventory_batches`, so they carry no `monvelo_` prefix, and §4's rule that Monvelo functions write only Monvelo tables still holds.
-- A2 is unchanged: neither role is added to the readers of `order_contacts`.
+- **Order dispatch and delivery do not cite a contact report.** They are proven by their own records: the A5 delivery code and photo, or the shop owner's OTP. Contact reports govern what was agreed with the tenant, not each order.
+- **Bridging rule:** until a tenant has an active CSM, the §4.2 rule (two different ZSMs) and the ZSM's settings right continue, so TEAFAIR is not blocked.
+- **Naming:** the catalogue, stock-movement and contact-report objects are RTM core, not Monvelo. They carry no `monvelo_` prefix, and §4's rule that Monvelo functions write only Monvelo tables still holds.
+- **Buyer contacts:** A2 is unchanged. None of the three roles is added to the readers of `order_contacts`.
 
-### 16.4 The tenant settlement ledger (Claude's call; names open to change)
+### 16.4 Contact reports (Claude's call; names open to change)
+
+**`contact_reports`**: one row per meeting or call:
+- **Columns:**
+  - `id`, `reference` (`CR-…`), `tenant_id`;
+  - `met_at`, `channel` (`text` + `CHECK`: `MEETING`, `CALL`, `VIDEO`, `MESSAGE`);
+  - `attendees` (names and sides), `summary`;
+  - `filed_by` (the CSM), `filed_at`;
+  - `supersedes_id?` (a correction refers to the report it corrects).
+- **Decisions:** one `contact_report_decisions(report_id, tenant_id, id, subject, text)` row per agreed decision. A change in the app cites a **decision**, not just a report:
+  - `monvelo_brand_terms.approval_decision_id`;
+  - the settings, catalogue and stock-movement records each carry `decision_id`.
+- **Recipients:** `contact_report_recipients(report_id, name, channel, address)` lists the tenant's contacts in copy. They need no app login. Reports are sent through the A5 message router (WhatsApp now, email when Resend is live), and every send is logged.
+- **Insert-only, and kept at least 5 years:** `UPDATE` and `DELETE` are revoked and refused by trigger. A mistake is corrected by a new report that supersedes the old one, and a superseded report's decisions can no longer be cited.
+- **Readers:** the tenant's `TENANT_ADMIN`, CSM and ZSMs, and platform staff.
+
+### 16.5 The tenant settlement ledger (Claude's call; names open to change)
 
 **`monvelo_tenant_ledger_entries`**: one insert-only row per money event on a tenant's Monvelo account.
 - **Columns:**
@@ -865,9 +898,9 @@ Warehouse managers named in `warehouses.manager_id` keep working as now.
 - **Who writes it:** only the Monvelo transaction that causes the entry (funding webhook, rebate payout, refund, remittance note), never by hand.
 - **Protection:** `UPDATE` and `DELETE` are revoked from every role, and a trigger refuses both. Rows are kept at least 5 years (§7.4).
 - **Settlements:** each `monvelo_tenant_settlements` row equals the sum of that tenant's entries for its date, by type.
-- **Readers:** the tenant's `TENANT_ADMIN` and ZSMs, and `MONVELO_FINANCE`.
+- **Readers:** the tenant's `TENANT_ADMIN`, CSM and ZSMs, and `MONVELO_FINANCE`.
 
-### 16.5 Kept from the review (Claude's calls; open to change)
+### 16.6 Kept from the review (Claude's calls; open to change)
 
 - **Agent proximity search:** an RPC for platform staff only. It searches the agent's registered location as `geography`, so the spatial index is used, and returns agent ids and distances, never phone numbers. It feeds supply-day notices (§5) and allocation (§7.1).
 - **Per-shop limits:** the current limit and its history are stored on the enrolment, so §7.2's rules have somewhere to live.
@@ -881,13 +914,15 @@ Warehouse managers named in `warehouses.manager_id` keep working as now.
 - a prepaid pool (ruling 3);
 - tenant subscriptions (ruling 5).
 
-### 16.6 Effect on delivery
+### 16.7 Effect on delivery
 
 - **Step 2 plan additions:**
-  - the two enum values, in their own migration (a new enum value cannot be used in the transaction that adds it);
-  - the role checks in the terms and settings RPCs;
+  - the three enum values, in their own migration (a new enum value cannot be used in the transaction that adds it);
+  - `invite_tenant_user` rules: a platform administrator appoints a CSM; a CSM invites `LOGISTICS_MANAGER` (reporting to that CSM) and `TENANT_ADMIN`;
+  - the §16.4 contact reports and their sending;
+  - the CSM approval with a cited decision in the terms and settings RPCs;
   - the fulfilment helpers `fulfilment_can_dispatch` and `fulfilment_delivery_path`;
-  - the catalogue and stock-movement RPCs;
-  - the §16.4 ledger and the §16.5 reads.
+  - the catalogue and stock-movement RPCs, each citing a decision;
+  - the §16.5 ledger and the §16.6 reads.
 - **The §15 rename plan is unchanged.** Its Task 5 name `monvelo_agents` matches `monvelo.md`. Tasks 5–7 stay on hold until the user has finished the rename-map review.
 - **Nothing is pushed or deployed.**
