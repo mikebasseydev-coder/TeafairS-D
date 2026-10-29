@@ -5,9 +5,9 @@ import { z } from "../_shared/core/deps.ts";
 import type { Rpc } from "../_shared/core/db.ts";
 import { errorResponse, GatewayError } from "../_shared/core/errors.ts";
 import { json } from "../_shared/core/http.ts";
-import type { VerifyTransaction } from "../_shared/fintech-liquidity/paystack.ts";
-import { applyRefunds, settleVerified } from "../_shared/fintech-liquidity/settle.ts";
-import type { ListRefunds } from "../_shared/fintech-liquidity/paystack-refunds.ts";
+import type { VerifyTransaction } from "../_shared/payments/paystack.ts";
+import { applyRefunds, settleVerified } from "../_shared/payments/settle.ts";
+import type { ListRefunds } from "../_shared/payments/paystack-refunds.ts";
 import { eventTime, withinReplayWindow } from "./replay-window.ts";
 import { paystackSignatureValid } from "./signature.ts";
 

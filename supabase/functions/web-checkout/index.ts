@@ -2,7 +2,7 @@ import { serviceRpc } from "../_shared/core/db.ts";
 import { requireEnv } from "../_shared/core/env.ts";
 import { allowedOriginsFromEnv } from "../_shared/core/public-gateway.ts";
 import { turnstileVerifier } from "../_shared/commerce/turnstile.ts";
-import { paystackInitializer } from "../_shared/fintech-liquidity/paystack.ts";
+import { paystackInitializer } from "../_shared/payments/paystack.ts";
 import { createWebCheckoutHandler } from "./handler.ts";
 import { observe } from "../_shared/core/observability.ts";
 

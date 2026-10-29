@@ -4,7 +4,7 @@ import type {
   FetchSubaccountId,
   ListSettlements,
   ListSettlementTransactions,
-} from "../_shared/fintech-liquidity/paystack-settlements.ts";
+} from "../_shared/payments/paystack-settlements.ts";
 import { createCommissionReleaseHandler } from "./handler.ts";
 
 const SECRET = "cron_secret";

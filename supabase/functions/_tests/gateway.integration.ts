@@ -605,7 +605,7 @@ Deno.test({
       id: settlementId, status: "success", currency: "NGN", total_amount: 9300, settlement_date: new Date().toISOString(),
       transactions: [{ id: charge.id, reference, amount: 620000, subaccount: { subaccount_code: "ACCT_it01" }, fees_split: charge.fees_split }],
     });
-    const res = await cron("fintech-commission-release", {});
+    const res = await cron("web-commission-release", {});
     const counts = await res.json();
     assertEquals(res.status, 200, JSON.stringify(counts));
     assert((counts.outcomes.settled ?? 0) >= 1, JSON.stringify(counts));
@@ -669,7 +669,7 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    for (const [fn, body] of [["reconcile-funds", { mode: "sweep" }], ["fintech-commission-release", {}]] as const) {
+    for (const [fn, body] of [["reconcile-funds", { mode: "sweep" }], ["web-commission-release", {}]] as const) {
       const res = await cron(fn, body, "not-the-cron-secret");
       const text = await res.text();
       assertEquals(res.status, 401, `${fn}: ${text}`);

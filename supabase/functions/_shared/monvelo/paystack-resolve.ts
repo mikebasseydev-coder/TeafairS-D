@@ -3,7 +3,7 @@
 // account exists and returns the name the bank holds for it.
 import { z } from "../core/deps.ts";
 import { GatewayError } from "../core/errors.ts";
-import { type PaystackOpts, paystackGet } from "../fintech-liquidity/paystack-client.ts";
+import { type PaystackOpts, paystackGet } from "../payments/paystack-client.ts";
 
 const response = z.object({
   status: z.boolean(),

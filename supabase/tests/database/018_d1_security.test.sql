@@ -37,10 +37,10 @@ grant execute on function pg_temp.act_as(uuid, uuid) to authenticated;
 
 -- cron
 select has_extension('pg_net');
-select is((select count(*)::int from cron.job where jobname in ('reconcile-funds-sweep','reconcile-funds-refunds','fintech-commission-release')), 3, 'three D1 cron jobs');
+select is((select count(*)::int from cron.job where jobname in ('reconcile-funds-sweep','reconcile-funds-refunds','web-commission-release')), 3, 'three D1 cron jobs');
 select is((select schedule from cron.job where jobname = 'reconcile-funds-sweep'), '*/5 * * * *', 'sweep every five minutes');
 select is((select schedule from cron.job where jobname = 'reconcile-funds-refunds'), '0 5 * * *', '06:00 Lagos');
-select is((select schedule from cron.job where jobname = 'fintech-commission-release'), '0 6 * * *', '07:00 Lagos');
+select is((select schedule from cron.job where jobname = 'web-commission-release'), '0 6 * * *', '07:00 Lagos');
 select is(public.invoke_system_function('reconcile-funds', '{}'::jsonb), null, 'no Vault secrets: posts nothing');
 
 -- privileges

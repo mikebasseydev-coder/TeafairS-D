@@ -485,7 +485,7 @@ enabled = true
 [functions.reconcile-funds]
 verify_jwt = false
 
-[functions.fintech-commission-release]
+[functions.web-commission-release]
 verify_jwt = false
 
 [functions.storefront-locations]

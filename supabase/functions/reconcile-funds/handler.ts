@@ -7,9 +7,9 @@ import { cronAuthorized } from "../_shared/core/cron.ts";
 import { errorResponse, GatewayError } from "../_shared/core/errors.ts";
 import { json } from "../_shared/core/http.ts";
 import { parseJsonBody } from "../_shared/core/validate.ts";
-import type { VerifyTransaction } from "../_shared/fintech-liquidity/paystack.ts";
-import type { ListRefunds } from "../_shared/fintech-liquidity/paystack-refunds.ts";
-import { applyRefunds, settleVerified } from "../_shared/fintech-liquidity/settle.ts";
+import type { VerifyTransaction } from "../_shared/payments/paystack.ts";
+import type { ListRefunds } from "../_shared/payments/paystack-refunds.ts";
+import { applyRefunds, settleVerified } from "../_shared/payments/settle.ts";
 
 export type ReconcileFundsDeps = {
   cronSecret: string;

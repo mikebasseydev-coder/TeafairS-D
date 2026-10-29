@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(31);
+select plan(33);
 
 create function pg_temp.bodies_matching(p_pattern text) returns text[]
 language sql stable as $$
@@ -76,6 +76,10 @@ select is((select count(*)::int from pg_constraint
           (select count(*)::int from pg_constraint
             where connamespace = 'public'::regnamespace and conrelid::regclass::text in ('web_pos_partners','web_pos_venues','web_referral_codes','web_commissions')),
           'every constraint of a web table carries the new prefix');
+
+-- Task 6: the release job moved to web-commission-release
+select is((select count(*)::int from cron.job where jobname = 'fintech-commission-release' or command like '%fintech-commission-release%'), 0, 'no job calls the old function');
+select is((select command from cron.job where jobname = 'web-commission-release'), $$select public.invoke_system_function('web-commission-release', '{}'::jsonb)$$, 'the release job calls web-commission-release');
 
 select * from finish();
 rollback;

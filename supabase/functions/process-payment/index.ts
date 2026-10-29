@@ -1,7 +1,7 @@
 import { serviceRpc } from "../_shared/core/db.ts";
 import { requireEnv } from "../_shared/core/env.ts";
-import { paystackVerifier } from "../_shared/fintech-liquidity/paystack.ts";
-import { paystackRefundLister } from "../_shared/fintech-liquidity/paystack-refunds.ts";
+import { paystackVerifier } from "../_shared/payments/paystack.ts";
+import { paystackRefundLister } from "../_shared/payments/paystack-refunds.ts";
 import { createProcessPaymentHandler } from "./handler.ts";
 import { observe } from "../_shared/core/observability.ts";
 

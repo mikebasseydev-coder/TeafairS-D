@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
-import type { VerifyTransaction } from "../_shared/fintech-liquidity/paystack.ts";
-import type { ListRefunds } from "../_shared/fintech-liquidity/paystack-refunds.ts";
+import type { VerifyTransaction } from "../_shared/payments/paystack.ts";
+import type { ListRefunds } from "../_shared/payments/paystack-refunds.ts";
 import { createReconcileFundsHandler } from "./handler.ts";
 
 const SECRET = "cron_secret";

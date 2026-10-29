@@ -13,7 +13,7 @@ import { idempotencyKey } from "../_shared/core/validate.ts";
 import { clientIp } from "../_shared/commerce/client-ip.ts";
 import { normalizePhone } from "../_shared/commerce/phone.ts";
 import type { VerifyTurnstile } from "../_shared/commerce/turnstile.ts";
-import type { InitializeTransaction } from "../_shared/fintech-liquidity/paystack.ts";
+import type { InitializeTransaction } from "../_shared/payments/paystack.ts";
 
 export type WebCheckoutDeps = PublicGatewayDeps & {
   verifyTurnstile: VerifyTurnstile;

@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
-import type { InitializeRequest, InitializeTransaction } from "../_shared/fintech-liquidity/paystack.ts";
+import type { InitializeRequest, InitializeTransaction } from "../_shared/payments/paystack.ts";
 import { createWebCheckoutHandler } from "./handler.ts";
 
 const ORIGIN = "https://teafairweb.com";
