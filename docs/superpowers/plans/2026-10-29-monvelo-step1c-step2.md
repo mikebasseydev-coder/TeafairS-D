@@ -269,6 +269,122 @@ Each commit message ends with a blank line, then `Co-Authored-By: Claude Opus 5.
 - [ ] **Step 4: Run the file, then the green gate.** Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(db): contact reports, decisions, recipients and the send log (A6 §16.4)`
 
+### Task 2b: ZSM review and the signed hard copy of a contact report (user, 2026-10-29)
+
+**Rules (user):**
+- Every contact report has a hard copy, and it is uploaded.
+- **A ZSM of the tenant reviews the report before the hard copy is uploaded.**
+
+A report's decisions cannot be cited until it has a ZSM approval **and** an
+attached signed hard copy.
+
+**The ZSM review:**
+- **Table `contact_report_reviews`** (insert-only, the same trigger and revokes as the report tables):
+  - `id`, `tenant_id`, `report_id`;
+  - `outcome text check in ('APPROVED','REJECTED')`;
+  - `note text`, required for REJECTED, `check (length(btrim(note)) <= 2000)`;
+  - `reviewed_by → profiles`, `reviewed_at default now()`;
+  - composite FK `(tenant_id, report_id) → contact_reports`, `unique (tenant_id, id)`;
+  - **one review per report:** `unique (report_id)`. A rejected report is corrected by a superseding report, which gets its own review.
+  - SELECT policy: as for the report tables.
+- **RPC** `review_contact_report(p_idempotency_key uuid, p_report_id uuid, p_outcome text, p_note text default null) returns jsonb`:
+  - caller: `assert_tenant_role(array['ZSM'])`, an ACTIVE ZSM of the report's tenant. Another tenant's report is 42501 `'contact report not found'`;
+  - a superseded report is P0001 `'only the current version of a report can be reviewed'`;
+  - a second review is 23505 `'this contact report has already been reviewed'`;
+  - REJECTED without a note is P0001 `'say what must be corrected'`;
+  - audit row with the reference and outcome (the note is kept in the table, not the audit row);
+  - returns `{review_id, report_id, outcome}`;
+  - granted to `authenticated`.
+- The CSM (who filed it), a `TENANT_ADMIN` or a TM calling it gets 42501.
+- Claude's calls (open to change): any ACTIVE ZSM of the tenant may review; there is no platform substitute when a tenant has no ZSM.
+
+The hard-copy upload below requires an APPROVED review.
+The upload follows the A5 photo pattern:
+1. an RPC registers a pending slot;
+2. a user gateway signs a one-time upload URL;
+3. the client uploads to a private bucket;
+4. a claim RPC checks that the object is really there.
+
+Paths and URLs never reach an audit row.
+
+**Files:**
+- Create:
+  - `supabase/migrations/20261029120250_contact_report_review_hard_copy.sql`
+  - `supabase/tests/database/055_contact_report_hard_copy.test.sql`
+  - `supabase/functions/contact-report-upload/{index,handler,handler.test}.ts`
+- Modify:
+  - `001_schema_shape.test.sql` (`tables_are`);
+  - `supabase/config.toml` (only if the user-gateway pattern needs a section; the A5 staff gateway shows what is needed);
+  - `supabase/functions/_shared/storage/` (a bucket constant and the field schema for PDF and images, alongside `attachment.ts`).
+
+**Interfaces:**
+- Consumes: Task 2's tables and `assert_citable_decision`; the A5 pattern in `20261023120300_a5_upload_slots.sql` (slot RPC, `my_support_attachment_paths()` and the `support_attachments_select` policy on `storage.objects`, `storage_purge_queue`) and in `supabase/functions/support-staff-attachment/`.
+- Produces:
+  - **Bucket** `contact-reports`: private, `file_size_limit` 10485760, `allowed_mime_types` `application/pdf`, `image/jpeg`, `image/png`.
+  - **Table `contact_report_hard_copies`:**
+    - `id`, `tenant_id`, `report_id`;
+    - `storage_path text not null unique`, matching `^contact-reports/<report_id>/<id>\.(pdf|jpg|png)$`;
+    - `mime_type` (the three types), `size_bytes bigint check (between 1 and 10485760)`;
+    - `uploaded_by → profiles`, `created_at`, `attached_at timestamptz null`;
+    - composite FK `(tenant_id, report_id) → contact_reports`;
+    - **one attached copy per report:** a unique partial index on `(report_id) where attached_at is not null`;
+    - **never deleted:** a trigger refuses DELETE and TRUNCATE. It allows only one UPDATE, `attached_at` from null to a value, and refuses every other change with P0001 `'a hard copy is never changed; file a correction'`. UPDATE and DELETE are revoked from the API roles.
+    - SELECT policy: the same as the contact-report tables (§ Task 2).
+  - **RPC** `request_contact_report_hard_copy(p_idempotency_key uuid, p_report_id uuid, p_mime_type text, p_size_bytes bigint) returns jsonb`:
+    - caller: the tenant's `CLIENT_SERVICE_MANAGER`;
+    - the report must be of the caller's tenant (else 42501 `'contact report not found'`) and have no attached copy (else P0001 `'this contact report already has its hard copy'`);
+    - the report must have an APPROVED ZSM review, else P0001 `'a ZSM must approve this contact report before its hard copy is uploaded'`. A REJECTED review gives P0001 `'this contact report was rejected; file a correction'`;
+    - inserts a pending row;
+    - returns `{hard_copy_id, storage_path}` (the path goes only to the gateway, which keeps it server-side);
+    - granted to `authenticated`.
+  - **RPC** `attach_contact_report_hard_copy(p_idempotency_key uuid, p_hard_copy_id uuid) returns jsonb`:
+    - caller: the CSM;
+    - the object must exist in `storage.objects` (bucket `contact-reports`, that path), else P0001 `'the hard copy has not been uploaded yet'`;
+    - sets `attached_at`;
+    - audit row with the report reference, mime type and size, never the path;
+    - returns `{report_id, reference, attached_at}`;
+    - granted to `authenticated`.
+  - **Download:** a policy on `storage.objects` for bucket `contact-reports` lets a reader of the report read the **attached** copy's path only, through a helper `my_contact_report_hard_copy_paths()` in the `my_support_attachment_paths()` style.
+  - **Cleanup:** a pending row older than 24 h is left in place, since rows are never deleted. Its object, if one was uploaded, is queued in `storage_purge_queue` by extending the existing nightly `cleanup_pending_upload_slots()`, recreated from its live body.
+  - **`assert_citable_decision`**, recreated. After the supersede check, in this order:
+    - a decision whose report has no APPROVED review is P0001 `'a ZSM must approve this contact report before it is cited'`;
+    - one with no attached hard copy is P0001 `'upload the signed hard copy of this contact report before citing it'`.
+  - **Gateway** `contact-report-upload`:
+    - a user gateway, the caller's JWT forwarded;
+    - Zod body `{idempotency_key, report_id, mime_type, size_bytes}`;
+    - calls `request_contact_report_hard_copy`, then `signUpload('contact-reports', path)`;
+    - returns `{hard_copy_id, upload_url}`;
+    - uses `observe("contact-report-upload", …)`;
+    - handler tests mirror `support-staff-attachment`.
+  - **The deliveries of Task 2** are sent (Step 6) only once the hard copy is attached. Step 1c sends nothing.
+
+- [ ] **Step 1: Write the failing tests.**
+  - In `055`:
+    - **Review:**
+      - requesting a slot before any review gets P0001 (ZSM approval message);
+      - the CSM, a `TENANT_ADMIN` and a TM calling `review_contact_report` get 42501, and tenant B's ZSM gets 42501;
+      - REJECTED without a note gets P0001; REJECTED with a note is stored, and a slot request then gets P0001 (rejected message);
+      - a correction of the rejected report is reviewed APPROVED;
+      - a second review of the same report gets 23505;
+      - reviewing a superseded report gets P0001;
+      - as postgres, `update contact_report_reviews` raises P0001;
+      - citing an approved report's decision before the hard copy gets P0001 (hard-copy message), and citing an unreviewed report's decision gets P0001 (review message).
+    - After an APPROVED review, the CSM requests a slot for a PDF of 200 KB and gets a path under `contact-reports/<report_id>/`.
+    - Attaching before any object exists gets P0001.
+    - Insert a `storage.objects` row as postgres (bucket, name) to stand in for the upload, then attach: `attached_at` is set and the same key replays.
+    - A second request for the same report gets P0001.
+    - Citing the report's decision before the attach gets P0001 with the hard-copy message; after the attach the citation passes (re-check via `assert_citable_decision` as postgres).
+    - As postgres: changing `storage_path` raises P0001, and deleting raises P0001.
+    - A ZSM or a `TENANT_ADMIN` requesting a slot gets 42501; tenant B's CSM gets 42501.
+    - Storage read: the `TENANT_ADMIN` of tenant A can SELECT the attached object's row in `storage.objects`; a TM cannot; nobody can read a pending (unattached) object.
+    - A 20 MB size or a `text/plain` type gets rejected (23514 or P0001).
+  - In `handler.test.ts`: a valid body returns `{hard_copy_id, upload_url}`; a bad mime type is 400; the RPC gets the caller's JWT; nothing in the response holds the storage path.
+- [ ] **Step 2: Run** `055` and the handler test. Expected: FAIL.
+- [ ] **Step 3: Write the migration, the shared storage constant and the gateway.**
+- [ ] **Step 4: Run** `047`, `055`, `deno check supabase/functions/contact-report-upload/index.ts`, then the green gate. Expected: PASS.
+  - Task 3's `048` and Task 4's `049` fixtures must have a ZSM approve the report and attach a hard copy (insert the `storage.objects` row as postgres) before citing. Their briefs carry this.
+- [ ] **Step 5: Commit.** `feat: ZSM review and signed hard copy of a contact report, both required before citing (A6 §16.4)`
+
 ### Task 3: CSM approval of brand terms and settings
 
 **Files:**
