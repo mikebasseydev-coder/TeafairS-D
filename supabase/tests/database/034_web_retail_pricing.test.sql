@@ -128,9 +128,9 @@ select is(
   'PURERIGIN-COCONUT-OIL-100ML:3000.00,PURERIGIN-COCONUT-OIL-200ML:5000.00', 'lines are billed at the retail price');
 select is(
   (select p.amount::text || '|' || coalesce(p.split_subaccount_code, '') || '|' || coalesce(p.split_bps::text, '')
-            || coalesce(p.split_amount::text, '')
+            || '|' || coalesce(p.split_amount::text, '')
      from public.payments p where p.paystack_reference = 'TFW-bounty-1'),
-  '13750.00||', 'at rate 0 the payment carries no split snapshot');
+  '13750.00|||', 'at rate 0 the payment carries no split snapshot');
 select throws_ok(
   $$select public.place_web_order('b0000000-0000-0000-0000-000000000002', 'GRACE-POS',
       '[{"sku_code":"PURERIGIN-COCONUT-OIL-200ML","qty":1}]',

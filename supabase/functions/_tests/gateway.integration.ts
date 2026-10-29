@@ -201,6 +201,8 @@ Deno.test({
     const [lga] = (await must(admin.from("ng_lgas").select("id").eq("state_code", "LA").eq("name", "Ikeja"))) ?? [];
     IKEJA = lga.id;
     await must(admin.from("tenants").insert({ id: ids.tenant, name: `IT ${run}`, code: `IT_${run.toUpperCase().replace(/[^A-Z0-9]/g, "")}`.slice(0, 16) }));
+    // A6 15.5: the tenant rate drives every POS-link split (0 by default); set it once so no test is order-dependent
+    await must(admin.from("tenant_settings").upsert({ tenant_id: ids.tenant, web_agent_commission_bps: 150 }));
     await must(admin.from("zones").insert({ id: ids.zone, tenant_id: ids.tenant, zone_name: "Lagos" }));
     await must(admin.from("territories").insert({ id: ids.territory, tenant_id: ids.tenant, zone_id: ids.zone, territory_name: "Ikeja" }));
     await must(admin.from("tenant_users").insert([
@@ -584,8 +586,6 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    // A6 15.5: the tenant rate drives the split (set by migration in production)
-    await must(admin.from("tenant_settings").upsert({ tenant_id: ids.tenant, web_agent_commission_bps: 150 }));
     const placed = await place(webOrder());
     const reference = String(placed.paystack_reference);
     // 6200.00 at 150 bps: the partner's share is 93.00

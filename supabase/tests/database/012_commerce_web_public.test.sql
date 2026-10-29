@@ -228,7 +228,7 @@ select is(public.quote_web_order('GRACE-01',
 select is(public.quote_web_order('GRACE-01',
             '[{"sku_code":"MILO-400","qty":2},{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   '{"web_pos_partner_id":"60000000-0000-0000-0000-000000000001","subaccount_code":"ACCT_grace01","commission_bps":150,"partner_share":93.00}'::jsonb,
-  'an active partner takes commission_bps of the total');
+  'an active partner link pays the tenant web_agent_commission_bps of the total');
 select is(public.quote_web_order('GRACE-FIX', '[{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) -> 'split',
   'null'::jsonb, 'a partner that is not ACTIVE gets no split');
 select is(public.quote_web_order('GRACE-FIX', '[{"sku_code":"MAGGI-12","qty":1}]', md5('ng_lga:LA:Ikeja')::uuid) ->> 'total',
