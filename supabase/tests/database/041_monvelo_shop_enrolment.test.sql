@@ -5,10 +5,24 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(79);
 
+-- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
+update public.operational_states set app_enabled = true, web_enabled = true;
+set local session_replication_role = replica;
+insert into public.tenant_operational_states (tenant_id, state_code, app_enabled, web_enabled, decision_id)
+select t.id, s.code, true, true, gen_random_uuid() from public.tenants t cross join public.ng_states s
+on conflict do nothing;
+set local session_replication_role = origin;
+
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria',   'NESTLE'),
   ('10000000-0000-0000-0000-000000000002', 'Unilever Nigeria', 'UNILEVER');
+-- A6 §18.4: the tenants created above opt in to every state for this file's fixtures
+set local session_replication_role = replica;
+insert into public.tenant_operational_states (tenant_id, state_code, app_enabled, web_enabled, decision_id)
+select t.id, s.code, true, true, gen_random_uuid() from public.tenants t cross join public.ng_states s
+on conflict do nothing;
+set local session_replication_role = origin;
 
 -- 02 ZSA (zone 1) · 04 ASA (area 1) · 05 ASA (area 3) · 06 ZSA (zone 2)
 -- · 07 stranger · 14 owner of S1 · 15 owner of S2-S5 · 16 Unilever ZSA

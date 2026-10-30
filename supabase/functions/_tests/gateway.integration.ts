@@ -188,6 +188,41 @@ const cron = (fn: string, body: unknown, secret = CRON_SECRET) =>
 let users: Record<"tm" | "dsm" | "dsa" | "owner" | "agent" | "tfTm" | "tfWm" | "tfDsm" | "tfDsa" | "tfZsm", { id: string; email: string }>;
 let IKEJA: string;
 
+// A6 18.4: a platform administrator switches Lagos on; a brand then opts in to it,
+// citing a DISTRIBUTION decision (filed by its CSM, approved by its ZSM, hard copy attached)
+async function switchOnLagos(csmTenants: Array<{ tenant: string; csm: { id: string; email: string }; zsm: { id: string; email: string } }>) {
+  const platform = await createUser(71);
+  await must(admin.from("profiles").update({ platform_role: "PLATFORM_SUPER_ADMIN" }).eq("id", platform.id));
+  const root = await asUser(platform.email);
+  await must(root.db.rpc("set_state_operational", {
+    p_idempotency_key: crypto.randomUUID(), p_state_code: "LA", p_app_enabled: true, p_web_enabled: true, p_reason: "integration run",
+  }));
+  for (const { tenant, csm, zsm } of csmTenants) {
+    const c = await asUser(csm.email);
+    const z = await asUser(zsm.email);
+    const filed = await must(c.db.rpc("file_contact_report", {
+      p_idempotency_key: crypto.randomUUID(),
+      p_report: {
+        met_at: new Date(Date.now() - 3600_000).toISOString(), channel: "MEETING",
+        attendees: [{ name: "Ada", side: "TEAFAIR" }], summary: "Agreed the states the brand distributes in.",
+        decisions: [{ subject: "DISTRIBUTION", text: "Distribute in Lagos" }],
+        recipients: [{ name: "Chidi", channel: "WHATSAPP", address: "+2348031112222" }],
+      },
+    })) as { report_id: string };
+    await must(z.db.rpc("review_contact_report", { p_idempotency_key: crypto.randomUUID(), p_report_id: filed.report_id, p_outcome: "APPROVED" }));
+    const slot = await must(c.db.rpc("request_contact_report_hard_copy", {
+      p_idempotency_key: crypto.randomUUID(), p_report_id: filed.report_id, p_mime_type: "application/pdf", p_size_bytes: 1000,
+    })) as { storage_path: string; hard_copy_id: string };
+    const up = await admin.storage.from("contact-reports").upload(slot.storage_path, new Uint8Array(1000).fill(7), { contentType: "application/pdf" });
+    if (up.error) throw up.error;
+    await must(c.db.rpc("attach_contact_report_hard_copy", { p_idempotency_key: crypto.randomUUID(), p_hard_copy_id: slot.hard_copy_id }));
+    const [decision] = (await must(c.db.from("contact_report_decisions").select("id").eq("report_id", filed.report_id))) as Array<{ id: string }>;
+    await must(c.db.rpc("set_tenant_operational_state", {
+      p_idempotency_key: crypto.randomUUID(), p_state_code: "LA", p_app_enabled: true, p_web_enabled: true, p_decision_id: decision.id,
+    }));
+  }
+}
+
 Deno.test({
   name: "fixtures",
   sanitizeOps: false,
@@ -198,6 +233,9 @@ Deno.test({
       owner: await createUser(4), agent: await createUser(5), tfTm: await createUser(6),
       tfWm: await createUser(7), tfDsm: await createUser(8), tfDsa: await createUser(9), tfZsm: await createUser(10),
     };
+    const itCsm = await createUser(72);
+    const itZsm = await createUser(73);
+    const tfCsm = await createUser(74);
     const [lga] = (await must(admin.from("ng_lgas").select("id").eq("state_code", "LA").eq("name", "Ikeja"))) ?? [];
     IKEJA = lga.id;
     await must(admin.from("tenants").insert({ id: ids.tenant, name: `IT ${run}`, code: `IT_${run.toUpperCase().replace(/[^A-Z0-9]/g, "")}`.slice(0, 16) }));
@@ -275,6 +313,16 @@ Deno.test({
       { tenant_id: TEAFAIR, state_code: "LA", lga_id: IKEJA, territory_id: ids.tfTerritory },
       { onConflict: "tenant_id,state_code,lga_id" },
     ));
+    // A6 18.4: Lagos on, and both brands opted in
+    await must(admin.from("tenant_users").insert([
+      { tenant_id: ids.tenant, profile_id: itCsm.id, role: "CLIENT_SERVICE_MANAGER", status: "ACTIVE", is_primary: true },
+      { tenant_id: ids.tenant, profile_id: itZsm.id, role: "ZSM", status: "ACTIVE", is_primary: true },
+      { tenant_id: TEAFAIR, profile_id: tfCsm.id, role: "CLIENT_SERVICE_MANAGER", status: "ACTIVE", is_primary: true },
+    ]));
+    await switchOnLagos([
+      { tenant: ids.tenant, csm: itCsm, zsm: itZsm },
+      { tenant: TEAFAIR, csm: tfCsm, zsm: users.tfZsm },
+    ]);
   },
 });
 
@@ -1063,7 +1111,7 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    const u = await createUser(11);
+    const u = await createUser(91);
     const client = createClient(API, ANON, { auth: { persistSession: false } });
     const before = resendEmails.length;
     await must(client.auth.resetPasswordForEmail(u.email, { redirectTo: "http://127.0.0.1:3000/reset-password" }));

@@ -4,6 +4,14 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(111);
 
+-- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
+update public.operational_states set app_enabled = true, web_enabled = true;
+set local session_replication_role = replica;
+insert into public.tenant_operational_states (tenant_id, state_code, app_enabled, web_enabled, decision_id)
+select t.id, s.code, true, true, gen_random_uuid() from public.tenants t cross join public.ng_states s
+on conflict do nothing;
+set local session_replication_role = origin;
+
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 -- These fixtures insert ONLINE orders directly and are not about consent, so
 -- stamp it for them (027 tests the CHECK itself).
@@ -66,6 +74,12 @@ select is((select count(*)::int from public.ng_lgas where (state_code, name) in 
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'T1', 'T1CODE'),
   ('10000000-0000-0000-0000-000000000002', 'T2', 'T2CODE');
+-- A6 §18.4: the tenants created above opt in to every state for this file's fixtures
+set local session_replication_role = replica;
+insert into public.tenant_operational_states (tenant_id, state_code, app_enabled, web_enabled, decision_id)
+select t.id, s.code, true, true, gen_random_uuid() from public.tenants t cross join public.ng_states s
+on conflict do nothing;
+set local session_replication_role = origin;
 insert into public.tenant_settings (tenant_id) values
   ('10000000-0000-0000-0000-000000000001'),
   ('10000000-0000-0000-0000-000000000002');

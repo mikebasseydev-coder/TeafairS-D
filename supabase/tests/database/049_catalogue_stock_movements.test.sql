@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(73);
+select plan(74);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- tenant A = TEAFAIR: 1 CSM · 2 ZSM · 3 LOGISTICS_MANAGER · 4 TENANT_ADMIN · 5 TM · 6 DSA
@@ -311,7 +311,7 @@ create function pg_temp.norm(s text) returns text language sql immutable as $$
 -- every guarded table a body writes (any schema prefix or none)
 create function pg_temp.writes(s text) returns setof text language sql immutable as $$
   select distinct m[1] from regexp_matches(pg_temp.norm(s),
-    '(?:insert into|update(?: only)?|delete from|merge into|truncate(?: table)?(?: only)?) (?:\w+\.)?(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements)\M',
+    '(?:insert into|update(?: only)?|delete from|merge into|truncate(?: table)?(?: only)?) (?:\w+\.)?(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements|operational_states|operational_state_events|tenant_operational_states|tenant_operational_state_events)\M',
     'g') as m $$;
 -- dynamic SQL or COPY as a statement
 create function pg_temp.dynamic(s text) returns boolean language sql immutable as $$
@@ -354,7 +354,10 @@ create temp table subjects (tbl text primary key, subject text not null);
 insert into subjects values
   ('monvelo_brand_terms', 'BRAND_TERMS'), ('monvelo_tenant_settings', 'MONVELO_SETTINGS'),
   ('monvelo_tenant_fee_terms', 'FEES'), ('central_products', 'CATALOGUE'),
-  ('inventory_batches', 'STOCK'), ('stock_movements', 'STOCK');
+  ('inventory_batches', 'STOCK'), ('stock_movements', 'STOCK'),
+  ('tenant_operational_states', 'DISTRIBUTION'), ('tenant_operational_state_events', 'DISTRIBUTION'),
+  -- the platform switch cites no decision: its only writer is allowlisted below
+  ('operational_states', 'PLATFORM_SWITCH'), ('operational_state_events', 'PLATFORM_SWITCH');
 
 -- Named allowlist, each with its reason (A6 §16.4). No other function may write
 -- these tables without citing the right decision. There are no order-fulfilment
@@ -362,7 +365,8 @@ insert into subjects values
 -- that reason.
 create temp table allowlist (proname text primary key, reason text not null);
 insert into allowlist values
-  ('propose_monvelo_brand_terms', 'a draft: PROPOSED terms have no effect until approved, and approval cites a decision');
+  ('propose_monvelo_brand_terms', 'a draft: PROPOSED terms have no effect until approved, and approval cites a decision'),
+  ('set_state_operational', 'platform switch, audited with a required reason and insert-only history');
 
 -- dynamic SQL or COPY, named separately: none may exist unless listed with a reason
 create temp table dynamic_allowlist (sch text, proname text, reason text not null, primary key (sch, proname));
@@ -385,6 +389,9 @@ select ok(exists (select 1 from writes where proname = 'set_monvelo_tenant_setti
 select ok(exists (select 1 from writes where proname = 'record_stock_transfer')
       and exists (select 1 from writes where proname = 'upsert_catalogue_product'),
   'positive control: the scan finds the catalogue and stock RPCs');
+select ok(exists (select 1 from writes where proname = 'set_state_operational' and tbl = 'operational_states')
+      and exists (select 1 from writes where proname = 'set_tenant_operational_state' and tbl = 'tenant_operational_states'),
+  'positive control: the scan finds both operational-state writers');
 select is((select string_agg(w.sch || '.' || w.proname || '(' || w.args || ') writes ' || w.tbl, '; ' order by w.proname, w.tbl)
              from writes w join subjects s using (tbl)
             where w.proname not in (select proname from allowlist)
@@ -405,7 +412,9 @@ select is((select string_agg(grantee || ' ' || table_name || ' ' || privilege_ty
              from information_schema.role_table_grants
             where table_schema = 'public' and grantee in ('anon', 'authenticated')
               and table_name in ('monvelo_brand_terms', 'monvelo_tenant_settings', 'monvelo_tenant_fee_terms',
-                                 'central_products', 'inventory_batches', 'stock_movements')
+                                 'central_products', 'inventory_batches', 'stock_movements',
+                                 'operational_states', 'operational_state_events',
+                                 'tenant_operational_states', 'tenant_operational_state_events')
               and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')),
   null, 'anon and authenticated hold no write privilege on a guarded table');
 select is((select count(*)::int from information_schema.role_table_grants
@@ -418,7 +427,9 @@ select is((select string_agg(distinct table_name, ', ' order by table_name)
              from information_schema.role_table_grants
             where table_schema = 'public' and grantee = 'service_role'
               and table_name in ('monvelo_brand_terms', 'monvelo_tenant_settings', 'monvelo_tenant_fee_terms',
-                                 'central_products', 'inventory_batches', 'stock_movements')
+                                 'central_products', 'inventory_batches', 'stock_movements',
+                                 'operational_states', 'operational_state_events',
+                                 'tenant_operational_states', 'tenant_operational_state_events')
               and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')),
   'central_products, inventory_batches, monvelo_brand_terms, monvelo_tenant_fee_terms, monvelo_tenant_settings',
   'service_role write grants on guarded tables are exactly the known five (integration fixtures)');

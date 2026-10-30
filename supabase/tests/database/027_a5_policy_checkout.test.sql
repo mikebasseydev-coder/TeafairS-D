@@ -4,6 +4,14 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(59);
 
+-- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
+update public.operational_states set app_enabled = true, web_enabled = true;
+set local session_replication_role = replica;
+insert into public.tenant_operational_states (tenant_id, state_code, app_enabled, web_enabled, decision_id)
+select t.id, s.code, true, true, gen_random_uuid() from public.tenants t cross join public.ng_states s
+on conflict do nothing;
+set local session_replication_role = origin;
+
 -- the TEAFAIR tenant is seeded in every environment (005)
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number)
 select t.id, v.sku, v.name, 'Teafair', v.cat, v.price, v.wholesale, 'A1-0007'
