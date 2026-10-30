@@ -114,7 +114,8 @@ select ok(not has_table_privilege('authenticated', 'public.monvelo_pledges', 'IN
 select ok(not has_function_privilege('authenticated', 'public.monvelo_settings()', 'EXECUTE'), 'the settings getter is internal');
 select ok(has_function_privilege('authenticated', 'public.monvelo_today()', 'EXECUTE'), 'monvelo_today is callable');
 select is(public.monvelo_today(), (now() at time zone 'Africa/Lagos')::date, 'monvelo_today is the Lagos date');
-select throws_ok($$truncate public.monvelo_pledges$$, 'P0001', null, 'pledges are never truncated');
+-- financings reference pledges (Task 7), so only TRUNCATE ... CASCADE reaches the trigger
+select throws_ok($$truncate public.monvelo_pledges cascade$$, 'P0001', null, 'pledges are never truncated');
 select throws_ok($$truncate public.monvelo_supply_days$$, 'P0001', null, 'supply days are never truncated');
 
 -- ── set_monvelo_supply_day ──────────────────────────────────────────────

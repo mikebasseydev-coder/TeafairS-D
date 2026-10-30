@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(50);
+select plan(55);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- tenant A = TEAFAIR: 1 CSM · 2 ZSM · 3 second ZSM · 4 TENANT_ADMIN
@@ -233,6 +233,24 @@ select is((select enabled::text || ':' || opening_limit || ':' || approval_cap |
                   || (decision_id = pg_temp.d('A', 'MONVELO_SETTINGS'))::text
              from public.monvelo_tenant_settings where tenant_id = '7eaf0000-0000-4000-8000-000000000001'),
   'true:70000.00:30000.00:120000.00:true', 'the settings and their decision are stored');
+
+-- the tenant's credit and recovery rules (A6 §7.2, §18.2; Task 7): null keeps the current value
+select pg_temp.act_as(pg_temp.u(1), '7eaf0000-0000-4000-8000-000000000001');
+select lives_ok($$select public.set_monvelo_tenant_settings(pg_temp.k(245), true, 70000, 30000, 120000,
+    pg_temp.d('A', 'MONVELO_SETTINGS'), p_limit_growth_bps => 2500, p_default_cure_days => 7, p_post_default_limit_bps => 5000)$$,
+  'the CSM sets limit growth, cure days and the post-default limit citing a decision');
+select lives_ok($$select public.set_monvelo_tenant_settings(pg_temp.k(246), true, 80000, 30000, 120000, pg_temp.d('A', 'MONVELO_SETTINGS'))$$,
+  'a later call that leaves them out');
+select throws_ok($$select public.set_monvelo_tenant_settings(pg_temp.k(247), true, 80000, 30000, 120000,
+    pg_temp.d('A', 'MONVELO_SETTINGS'), p_default_cure_days => 366)$$,
+  '23514', null, 'cure days above 365 are refused');
+reset role;
+select is((select limit_growth_bps || ':' || default_cure_days || ':' || post_default_limit_bps || ':' || opening_limit
+             from public.monvelo_tenant_settings where tenant_id = '7eaf0000-0000-4000-8000-000000000001'),
+  '2500:7:5000:80000.00', 'left out, they keep their values while the opening limit changes');
+select is((select (after ->> 'default_cure_days')::int from public.audit_logs
+            where operation = 'set_monvelo_tenant_settings' and idempotency_key = pg_temp.k(245)),
+  7, 'the audit row holds the recovery rules');
 
 -- withdrawal with the CSM
 select pg_temp.act_as(pg_temp.u(2), '7eaf0000-0000-4000-8000-000000000001');

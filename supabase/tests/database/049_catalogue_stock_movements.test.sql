@@ -386,7 +386,8 @@ insert into order_callers values
   ('place_trade_order', 'trade placement reserves'),
   ('mark_order_dispatched', 'dispatch consumes'),
   ('apply_paystack_refund', 'a refund before dispatch releases'),
-  ('stock_reservation_sweep', 'an expired PENDING order is cancelled and released');
+  ('stock_reservation_sweep', 'an expired PENDING order is cancelled and released'),
+  ('monvelo_cancel_trade_order', 'a trade order is cancelled with its financing (A6 §18.1; Tasks 7 and 8)');
 
 -- every write statement an operational body makes that is not one of its permitted forms
 create function pg_temp.op_violations(s text) returns setof text language sql immutable as $$
