@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(66);
+select plan(72);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- tenant A = TEAFAIR: 2 CSM · 3 ZSM · 4 DSA · 8 TENANT_ADMIN
@@ -360,6 +360,31 @@ select pg_temp.act_as(pg_temp.u(9), '7eaf0000-0000-4000-8000-000000000001');
 select is(pg_temp.enrol() ->> 'enrolled', 'true', 'with both on, the ZSA enrols the shop');
 select pg_temp.act_as(pg_temp.u(12), null);
 select is(pg_temp.pledge(94) ->> 'amount', '5000.00', 'with both on, the agent pledges');
+reset role;
+
+-- ── winding down is always allowed (A6 §18.4, user ruling 2026-10-30) ──
+select pg_temp.act_as(pg_temp.u(1), null);
+select public.set_state_operational(pg_temp.k(120), 'LA', false, false, 'Lagos app paused');
+select pg_temp.act_as(pg_temp.u(12), null);
+select is(public.pledge_monvelo_funds(pg_temp.k(121), '80000000-0000-0000-0000-000000000001',
+    '60000000-0000-0000-0000-000000000001', current_setting('test.day')::date, 3000) ->> 'amount', '3000.00',
+  'in an app-off state an agent may still reduce a pledge');
+select throws_ok($$select public.pledge_monvelo_funds(pg_temp.k(122), '80000000-0000-0000-0000-000000000001',
+    '60000000-0000-0000-0000-000000000001', current_setting('test.day')::date, 6000)$$,
+  'P0001', 'Teafair is not operating in Lagos yet', 'an increase is refused in an app-off state');
+select throws_ok($$select public.pledge_monvelo_funds(pg_temp.k(123), '80000000-0000-0000-0000-000000000001',
+    '60000000-0000-0000-0000-000000000001', current_setting('test.day')::date + 7, 1000)$$,
+  'P0001', 'Teafair is not operating in Lagos yet', 'a new pledge is refused in an app-off state');
+select pg_temp.act_as(pg_temp.u(10), '7eaf0000-0000-4000-8000-000000000001');
+select is(public.set_monvelo_supply_day(pg_temp.k(124), '60000000-0000-0000-0000-000000000001',
+    extract(isodow from current_setting('test.day')::date)::int, false) ->> 'active', 'false',
+  'in an app-off state the TM may still deactivate a supply day');
+select throws_ok($$select pg_temp.supply(125)$$, 'P0001', 'Teafair is not operating in Lagos yet',
+  'activating a supply day is refused in an app-off state');
+select pg_temp.act_as(pg_temp.u(9), '7eaf0000-0000-4000-8000-000000000001');
+select throws_ok($$select public.start_monvelo_consent(pg_temp.k(126), 'test-gw-secret',
+    '71000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001')$$,
+  'P0001', 'Teafair is not operating in Lagos yet', 'a consent code is not issued in an app-off state');
 reset role;
 
 select * from finish();
