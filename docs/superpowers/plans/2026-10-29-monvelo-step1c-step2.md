@@ -741,6 +741,69 @@ Runs after Task 5 and before Task 6.
 - [ ] **Step 4: The green gate.** Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(db): ZSM powers limited to their zones; ZSM direct chat open (user ruling 2026-10-30)`
 
+### Task 1f: Operational zones, switched on state by state (user, 2026-10-30)
+
+Runs after Task 1e and before Task 6.
+
+**Ruling (user, binding):** a platform admin switches zones on as Teafair becomes fully operational in them. The Teafair app and Teafairweb accept orders only in operational zones.
+
+**Claude's calls (open to change; the user was asked 2026-10-30):**
+- the switch is per state, platform-wide (where Teafair itself operates), not per brand;
+- there are separate switches for the app and the web;
+- both are off by default;
+- switching off stops new orders and requests only. Anything already placed or funded continues.
+
+**Files:**
+- Create:
+  - `supabase/migrations/20261029130050_operational_states.sql`
+  - `supabase/tests/database/060_operational_states.test.sql`
+- Modify:
+  - `001` (`tables_are`);
+  - the storefront Edge Functions only if they filter in TypeScript (prefer the RPCs);
+  - fixtures and integration setup that place orders: switch their states on first.
+
+**Interfaces:**
+- **Table `operational_states`:**
+  - `state_code text primary key references ng_states (code)`;
+  - `app_enabled boolean not null default false`, `web_enabled boolean not null default false`;
+  - `updated_by → profiles`, `updated_at`.
+  - SELECT to `authenticated` and `anon` (the storefront must know); no API write grant.
+  - Seeded with every `ng_states` row, both switches false.
+- **Table `operational_state_events`:** insert-only history:
+  - `id`, `state_code`, `app_enabled`, `web_enabled`, `changed_by`, `changed_at`, `reason text not null`;
+  - refuses UPDATE, DELETE and TRUNCATE by trigger.
+- **RPC** `set_state_operational(p_idempotency_key uuid, p_state_code text, p_app_enabled boolean, p_web_enabled boolean, p_reason text) returns jsonb`:
+  - `PLATFORM_SUPER_ADMIN` only;
+  - writes the row and one event, audited;
+  - granted to `authenticated`.
+- **Helpers** (stable, security definer, granted for RPC use):
+  - `state_app_operational(p_state_code text) returns boolean`;
+  - `state_web_operational(p_state_code text) returns boolean`;
+  - `territory_state_code(p_tenant_id uuid, p_territory_id uuid) returns text`, via the zone's `state_code`.
+- **Enforcement on new work only:**
+  - **Teafairweb:**
+    - `place_web_order` refuses a delivery LGA whose state is not web-operational: P0001 `'we do not deliver to <State> yet'`;
+    - the storefront locations read (`storefront-locations` and its RPC or view) lists only web-operational states and their LGAs;
+    - `web_route_try` never routes into a non-operational state.
+  - **Teafair app:**
+    - `place_trade_order` (Task 6) refuses a territory whose state is not app-operational: P0001 `'Teafair is not operating in <State> yet'`;
+    - so do `enrol_monvelo_shop`, `set_monvelo_supply_day` and `pledge_monvelo_funds` (by the area's territory), and `request_monvelo_financing` (Task 7, by the order's territory).
+  - Already-placed orders, dispatch, delivery, refunds, repayments and payouts are never blocked by the switch.
+- **Zero-backdoor guard (049):** `operational_states` joins the guarded tables. Its only writer is `set_state_operational`, allowlisted with the reason "platform switch, audited with a required reason and insert-only history".
+
+- [ ] **Step 1: Write the failing tests** in `060`:
+  - only a platform admin can switch; switching writes one event and an audit row; a replay returns the first result; a missing reason is P0001; history can't be updated or deleted;
+  - with Lagos web-on and app-off, a web order to Lagos succeeds and a trade order in a Lagos territory is refused; the reverse settings give the reverse;
+  - storefront locations list only web-on states;
+  - switching Lagos off after an order was placed still lets that order be dispatched and delivered;
+  - enrolment, supply days and pledges in an app-off state are refused.
+- [ ] **Step 2: Run** `060`. Expected: FAIL.
+- [ ] **Step 3: Write the migration** (recreate `place_web_order`, `web_route_try`, the storefront locations read, `enrol_monvelo_shop`, `set_monvelo_supply_day` and `pledge_monvelo_funds` from their live definitions) and switch fixture states on.
+- [ ] **Step 4: Run** `049`, `060`, then the green gate. Expected: PASS.
+- [ ] **Step 5: Commit.** `feat(db): operational states switched on by a platform admin; app and web orders only where Teafair operates`
+
+Tasks 6 and 7 call `state_app_operational` in `place_trade_order` and `request_monvelo_financing`.
+
 ### Task 6: `place_trade_order`
 
 **Files:**

@@ -1028,3 +1028,14 @@ backdoors"; user, 2026-10-29).
 - **Tenant-wide matters stay with any active ZSM of the tenant** (Claude's call): brand-terms proposals and bridging approvals, Monvelo settings while bridging, contact-report review, web defaults, the brand approval policy, and objects with no zone.
 - **Direct chat between ZSMs of the same tenant is always open.**
 - **Delivery:** plan Task 1e, after Task 5 and before Task 6.
+
+### 18.4 Operational zones (user, 2026-10-30; binding)
+
+- **Who switches:** a platform admin switches zones on, state by state, as Teafair becomes fully operational there.
+- **What it limits:** the Teafair app and Teafairweb take new orders only in operational states.
+- **Claude's calls (open to change, asked 2026-10-30):**
+  - platform-wide per state;
+  - separate app and web switches;
+  - off by default;
+  - switching off stops new work only, never anything already placed or funded.
+- **Delivery:** plan Task 1f.
