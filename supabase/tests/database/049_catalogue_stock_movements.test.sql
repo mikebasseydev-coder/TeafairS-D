@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(55);
+select plan(73);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- tenant A = TEAFAIR: 1 CSM · 2 ZSM · 3 LOGISTICS_MANAGER · 4 TENANT_ADMIN · 5 TM · 6 DSA
@@ -249,6 +249,31 @@ select pg_temp.act_as(pg_temp.u(1), '7eaf0000-0000-4000-8000-000000000001');
 select is(public.record_stock_receipt(pg_temp.k(340), pg_temp.d('A', 'STOCK'), pg_temp.w(2), 'PUR-200', 'B2', 5, null) ->> 'quantity',
   '5.000', 'the CSM may receive stock too');
 
+-- replays, expiry mismatch on transfer, non-positive quantities, audit rows
+select pg_temp.act_as(pg_temp.u(3), '7eaf0000-0000-4000-8000-000000000001');
+select is(public.record_stock_transfer(pg_temp.k(323), pg_temp.d('A', 'STOCK'), pg_temp.w(1), pg_temp.w(2), 'PUR-200', 'B1', 12) ->> 'quantity',
+  '36.000', 'a replayed transfer returns the first answer');
+reset role;
+select is(pg_temp.qty(1)::text || ':' || pg_temp.qty(2)::text, '30.000:12.000', 'and moves nothing');
+insert into public.inventory_batches (tenant_id, warehouse_id, sku_code, batch_number, quantity, expires_at) values
+  ('7eaf0000-0000-4000-8000-000000000001', pg_temp.w(1), 'PUR-200', 'B3', 10, timestamptz '2027-01-01 00:00+00'),
+  ('7eaf0000-0000-4000-8000-000000000001', pg_temp.w(2), 'PUR-200', 'B3', 0, timestamptz '2028-02-02 00:00+00');
+select pg_temp.act_as(pg_temp.u(3), '7eaf0000-0000-4000-8000-000000000001');
+select throws_ok($$select public.record_stock_transfer(pg_temp.k(341), pg_temp.d('A', 'STOCK'), pg_temp.w(1), pg_temp.w(2), 'PUR-200', 'B3', 1)$$,
+  'P0001', 'this batch already has a different expiry', 'a transfer into a batch with a different expiry is refused');
+select throws_ok($$select public.record_stock_receipt(pg_temp.k(342), pg_temp.d('A', 'STOCK'), pg_temp.w(1), 'PUR-200', 'B1', 0, null)$$,
+  'P0001', 'quantity must be greater than zero', 'a receipt of zero is refused');
+select throws_ok($$select public.record_stock_transfer(pg_temp.k(343), pg_temp.d('A', 'STOCK'), pg_temp.w(1), pg_temp.w(2), 'PUR-200', 'B1', -1)$$,
+  'P0001', 'quantity must be greater than zero', 'a transfer of a negative quantity is refused');
+select throws_ok($$select public.record_stock_adjustment(pg_temp.k(344), pg_temp.d('A', 'STOCK'), pg_temp.w(1), 'PUR-200', 'B1', 0, 'none')$$,
+  'P0001', 'an adjustment must change the quantity', 'an adjustment of zero is refused');
+reset role;
+select is((select string_agg(operation, ',' order by operation) from public.audit_logs
+            where idempotency_key in (pg_temp.k(320), pg_temp.k(323), pg_temp.k(331))),
+  'record_stock_adjustment,record_stock_receipt,record_stock_transfer', 'a receipt, a transfer and an adjustment each write an audit row');
+select is((select after ->> 'quantity' from public.audit_logs where idempotency_key = pg_temp.k(331)), '30.000',
+  'the adjustment audit row holds the batch after');
+
 -- ── movement records ────────────────────────────────────────────────────
 reset role;
 select is((select count(*)::int from public.stock_movements), 5,
@@ -276,43 +301,127 @@ select is((select count(*)::int from public.stock_movements), 0, 'tenant B''s ZS
 
 -- ── zero unaudited backdoors (A6 §16.4; user, 2026-10-29) ───────────────
 reset role;
-create temp table writers as
-select p.proname::text as proname,
+
+-- one normaliser and one matcher, shared by the live scan and the negative controls:
+-- strip block and line comments, drop double quotes, collapse whitespace, remove
+-- whitespace around dots, lower-case.
+create function pg_temp.norm(s text) returns text language sql immutable as $$
+  select lower(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
+    s, '/\*.*?\*/', ' ', 'gs'), '--[^\n]*', ' ', 'g'), '"', '', 'g'), '\s+', ' ', 'g'), '\s*\.\s*', '.', 'g')) $$;
+-- every guarded table a body writes (any schema prefix or none)
+create function pg_temp.writes(s text) returns setof text language sql immutable as $$
+  select distinct m[1] from regexp_matches(pg_temp.norm(s),
+    '(?:insert into|update(?: only)?|delete from|merge into|truncate(?: table)?(?: only)?) (?:\w+\.)?(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements)\M',
+    'g') as m $$;
+-- dynamic SQL or COPY as a statement
+create function pg_temp.dynamic(s text) returns boolean language sql immutable as $$
+  select pg_temp.norm(s) ~ '(^|[;\s])execute (?:format|''|\$|\w)'
+      or pg_temp.norm(s) ~ '(^|[;\s])copy (?:\(|(?:\w+\.)?\w+ (?:\([^)]*\) )?(?:from|to) )' $$;
+
+-- negative controls: the matcher catches each disguise
+select is((select array_agg(x) from pg_temp.writes('update "public"."inventory_batches" set quantity = 0') x), array['inventory_batches'],
+  'control: quoted schema and table');
+select is((select array_agg(x) from pg_temp.writes('insert into /* c */ inventory_batches values (1)') x), array['inventory_batches'],
+  'control: a block comment inside the statement');
+select is((select array_agg(x) from pg_temp.writes(E'update public . central_products\n set unit_price = 1') x), array['central_products'],
+  'control: spaces around the dot and a line break');
+select is((select array_agg(x) from pg_temp.writes('merge into stock_movements using s on true') x), array['stock_movements'],
+  'control: merge into, no schema');
+select is((select array_agg(x) from pg_temp.writes('update only public.monvelo_tenant_settings as t set enabled = true') x), array['monvelo_tenant_settings'],
+  'control: update only with an alias');
+select is((select count(*)::int from pg_temp.writes('-- update public.central_products' || E'\n' || 'select 1 /* delete from inventory_batches */')), 0,
+  'control: comments alone are not writes');
+select ok(pg_temp.dynamic('execute format(''update %I'', v_tbl)') and pg_temp.dynamic('begin execute ''x''; end')
+      and pg_temp.dynamic('copy central_products from stdin') and not pg_temp.dynamic('raise exception ''upload the signed hard copy'''),
+  'control: dynamic SQL and COPY are caught, a message about a hard copy is not');
+
+-- every function and procedure outside system schemas and extensions
+create temp table fns as
+select n.nspname::text as sch, p.proname::text as proname,
        pg_get_function_identity_arguments(p.oid) as args,
-       (pg_get_function_identity_arguments(p.oid) ~ 'p_decision_id uuid') as takes_decision,
-       (p.prosrc ~ 'assert_citable_decision') as cites
-  from pg_proc p
- where p.pronamespace = 'public'::regnamespace and p.prokind = 'f'
-   and regexp_replace(p.prosrc, '--[^\n]*', '', 'g') ~*
-       '(insert\s+into|update|delete\s+from|truncate(\s+table)?|merge\s+into)\s+(only\s+)?(public\.)?(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements)\y';
+       pg_temp.norm(p.prosrc) as body
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where p.prokind in ('f', 'p') and p.prosrc is not null
+   and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
+   and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e');
+
+create temp table writes as
+select f.sch, f.proname, f.args, f.body, w as tbl
+  from fns f cross join lateral pg_temp.writes(f.body) w;
+
+-- the subject each table's writers must cite
+create temp table subjects (tbl text primary key, subject text not null);
+insert into subjects values
+  ('monvelo_brand_terms', 'BRAND_TERMS'), ('monvelo_tenant_settings', 'MONVELO_SETTINGS'),
+  ('monvelo_tenant_fee_terms', 'FEES'), ('central_products', 'CATALOGUE'),
+  ('inventory_batches', 'STOCK'), ('stock_movements', 'STOCK');
 
 -- Named allowlist, each with its reason (A6 §16.4). No other function may write
--- these tables without citing a decision. There are no order-fulfilment stock
--- decrements today; one added later is operational and joins this list with that
--- reason. Trigger and guard functions that read these tables but do not mutate
--- them never match the scan.
+-- these tables without citing the right decision. There are no order-fulfilment
+-- stock decrements today; one added later is operational and joins this list with
+-- that reason.
 create temp table allowlist (proname text primary key, reason text not null);
 insert into allowlist values
   ('propose_monvelo_brand_terms', 'a draft: PROPOSED terms have no effect until approved, and approval cites a decision');
 
-select ok(exists (select 1 from writers where proname = 'set_monvelo_tenant_settings'),
+-- dynamic SQL or COPY, named separately: none may exist unless listed with a reason
+create temp table dynamic_allowlist (sch text, proname text, reason text not null, primary key (sch, proname));
+-- Supabase-owned platform functions (not ours to change; none names a guarded table, and
+-- they run as the platform's own roles, not the API's).
+insert into dynamic_allowlist values
+  ('realtime', 'apply_rls', 'Realtime row filtering: builds read-only per-subscription SQL'),
+  ('realtime', 'cast', 'Realtime type casting of a replicated value'),
+  ('realtime', 'check_equality_op', 'Realtime filter operator check on a cast value'),
+  ('realtime', 'send', 'Realtime broadcast: inserts into realtime.messages only'),
+  ('realtime', 'send_binary', 'Realtime broadcast: inserts into realtime.messages only'),
+  ('extensions', 'grant_pg_graphql_access', 'Supabase event trigger: grants on pg_graphql objects'),
+  ('extensions', 'grant_pg_net_access', 'Supabase event trigger: grants on pg_net objects'),
+  ('storage', 'list_objects_with_delimiter', 'Storage listing: reads storage.objects'),
+  ('storage', 'search', 'Storage search: reads storage.objects'),
+  ('storage', 'search_by_timestamp', 'Storage search: reads storage.objects');
+
+select ok(exists (select 1 from writes where proname = 'set_monvelo_tenant_settings'),
   'positive control: the scan finds set_monvelo_tenant_settings');
-select ok(exists (select 1 from writers where proname = 'record_stock_transfer')
-      and exists (select 1 from writers where proname = 'upsert_catalogue_product'),
+select ok(exists (select 1 from writes where proname = 'record_stock_transfer')
+      and exists (select 1 from writes where proname = 'upsert_catalogue_product'),
   'positive control: the scan finds the catalogue and stock RPCs');
-select is((select string_agg(proname || '(' || args || ')', ', ' order by proname) from writers
-            where not (takes_decision and cites) and proname not in (select proname from allowlist)),
-  null, 'every writer of the guarded tables cites a decision or is on the named allowlist');
-select is((select count(*)::int from allowlist where proname not in (select proname from writers)), 0,
+select is((select string_agg(w.sch || '.' || w.proname || '(' || w.args || ') writes ' || w.tbl, '; ' order by w.proname, w.tbl)
+             from writes w join subjects s using (tbl)
+            where w.proname not in (select proname from allowlist)
+              and not (w.args ~ 'p_decision_id uuid'
+                       and w.body ~ ('assert_citable_decision\([^;]*''' || lower(s.subject) || ''''))),
+  null, 'every writer cites a decision of the right subject (or is on the allowlist)');
+select is((select string_agg(proname, ', ') from allowlist where proname not in (select proname from writes)), null,
   'every allowlist entry still writes a guarded table (no stale entries)');
-select is((select count(*)::int from writers w where takes_decision and not cites), 0,
-  'a writer that takes p_decision_id also checks it with assert_citable_decision');
-select is((select count(*)::int from pg_proc p
-            where p.pronamespace = 'public'::regnamespace and p.prokind = 'f'
-              and regexp_replace(p.prosrc, '--[^\n]*', '', 'g') ~*
-                  '(execute|copy)\s[^;]*(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements)'), 0,
-  'no function reaches a guarded table through dynamic SQL or COPY');
+select is((select string_agg(sch || '.' || proname, ', ' order by proname) from fns
+            where pg_temp.dynamic(body) and (sch, proname) not in (select sch, proname from dynamic_allowlist)),
+  null, 'no function uses dynamic SQL or COPY unless it is on the named dynamic-SQL allowlist');
+select is((select string_agg(sch || '.' || proname, ', ') from dynamic_allowlist
+            where (sch, proname) not in (select sch, proname from fns where pg_temp.dynamic(body))), null,
+  'every dynamic-SQL allowlist entry still uses dynamic SQL');
+
+-- table grants: no API role writes a guarded table directly
+select is((select string_agg(grantee || ' ' || table_name || ' ' || privilege_type, '; ' order by table_name, grantee, privilege_type)
+             from information_schema.role_table_grants
+            where table_schema = 'public' and grantee in ('anon', 'authenticated')
+              and table_name in ('monvelo_brand_terms', 'monvelo_tenant_settings', 'monvelo_tenant_fee_terms',
+                                 'central_products', 'inventory_batches', 'stock_movements')
+              and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')),
+  null, 'anon and authenticated hold no write privilege on a guarded table');
+select is((select count(*)::int from information_schema.role_table_grants
+            where table_schema = 'public' and grantee = 'service_role' and table_name = 'stock_movements'
+              and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')), 0,
+  'service_role holds no write privilege on stock_movements');
+-- service_role keeps its write grants on the five older tables: the integration fixtures
+-- seed them through the service-role client. Pinned, so a new grant or table shows up here.
+select is((select string_agg(distinct table_name, ', ' order by table_name)
+             from information_schema.role_table_grants
+            where table_schema = 'public' and grantee = 'service_role'
+              and table_name in ('monvelo_brand_terms', 'monvelo_tenant_settings', 'monvelo_tenant_fee_terms',
+                                 'central_products', 'inventory_batches', 'stock_movements')
+              and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')),
+  'central_products, inventory_batches, monvelo_brand_terms, monvelo_tenant_fee_terms, monvelo_tenant_settings',
+  'service_role write grants on guarded tables are exactly the known five (integration fixtures)');
 
 select * from finish();
 rollback;
-
