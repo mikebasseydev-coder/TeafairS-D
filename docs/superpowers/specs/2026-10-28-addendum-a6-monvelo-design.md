@@ -1027,6 +1027,8 @@ backdoors"; user, 2026-10-29).
 - **A ZSM's administrative and approval powers reach only their own zones.** Ticket assignment, territory coverage, web warehouses, POS venues and referral codes, dispatch, buyer-contact reads, ticket handling, audit and notification reads, and the Monvelo book are limited to rows whose zone the ZSM covers. Cross-zone attempts are refused (42501) or invisible (RLS).
 - **Tenant-wide matters stay with any active ZSM of the tenant** (Claude's call): brand-terms proposals and bridging approvals, Monvelo settings while bridging, contact-report review, web defaults, the brand approval policy, and objects with no zone.
 - **Direct chat between ZSMs of the same tenant is always open.**
+- **Uncovered zones (user, 2026-10-30; binding):** a zone with no active ZSM is reachable by every active ZSM of the brand, for every power, room and read, until a dedicated ZSM is assigned. It then belongs to that ZSM alone. A zone counts as covered only by an ACTIVE ZSM.
+- **TM audit history (user, 2026-10-30; binding):** a TM reads only audit rows about objects in its own territories. Tenant-wide rows are hidden from TMs.
 - **Delivery:** plan Task 1e, after Task 5 and before Task 6.
 
 ### 18.4 Operational zones (user, 2026-10-30; binding)
