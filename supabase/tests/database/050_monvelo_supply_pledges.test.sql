@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(47);
+select plan(56);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 insert into public.tenants (id, name, code) values
@@ -13,8 +13,13 @@ insert into public.tenants (id, name, code) values
 -- 11 member of ACTIVE agent · 12 member of PENDING agent · 13 stranger · 14 member of far agent
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-0000000000' || lpad(n::text, 2, '0'))::uuid, '23480000000' || lpad(n::text, 2, '0'), now()
-from unnest(array[1,2,3,8,9,10,11,12,13,14,15]) as n;
+from unnest(array[1,2,3,8,9,10,11,12,13,14,15,16]) as n;
 update public.profiles set platform_role = 'MONVELO_OPERATOR' where id = '20000000-0000-0000-0000-000000000009';
+
+insert into public.tenants (id, name, code) values
+  ('10000000-0000-0000-0000-000000000002', 'Unilever Nigeria', 'UNILEVER');
+insert into public.tenant_users (id, tenant_id, profile_id, role, status, is_primary) values
+  ('50000000-0000-0000-0000-000000000016', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000016', 'ZSM', 'ACTIVE', true);
 
 insert into public.zones (id, tenant_id, zone_name, state_code) values
   ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA');
@@ -58,11 +63,15 @@ insert into public.monvelo_agents (id, business_name, pos_network, network_agent
    '0123456780', '6780', '058', 'Pending POS', 'K2', '20000000-0000-0000-0000-000000000002', 'PENDING'),
   ('80000000-0000-0000-0000-000000000003', 'Far POS', 'MONIEPOINT', 'MP-3', '+2348031110003',
    extensions.st_setsrid(extensions.st_makepoint(3.35, 6.645), 4326)::extensions.geography, 'a',
-   '0123456781', '6781', '058', 'Far POS', 'K3', '20000000-0000-0000-0000-000000000002', 'ACTIVE');
+   '0123456781', '6781', '058', 'Far POS', 'K3', '20000000-0000-0000-0000-000000000002', 'ACTIVE'),
+  ('80000000-0000-0000-0000-000000000004', 'Suspended POS', 'OPAY', 'OP-4', '+2348031110004',
+   extensions.st_setsrid(extensions.st_makepoint(3.35, 6.6036), 4326)::extensions.geography, 'a',
+   '0123456782', '6782', '058', 'Suspended POS', 'K4', '20000000-0000-0000-0000-000000000002', 'SUSPENDED');
 insert into public.monvelo_agent_members (agent_id, profile_id) values
   ('80000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000011'),
   ('80000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000012'),
-  ('80000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000014');
+  ('80000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000014'),
+  ('80000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000015');
 
 create function pg_temp.act_as(p_user uuid, p_tenant uuid) returns void language sql as $$
   select set_config('role', 'authenticated', true),
@@ -103,6 +112,9 @@ select is(public.set_monvelo_supply_day('e5000000-0000-0000-0000-000000000001',
   '60000000-0000-0000-0000-000000000001', 4, true) ->> 'day_of_week', '4', 'a replay returns the same answer');
 select throws_ok($$select public.set_monvelo_supply_day('e5000000-0000-0000-0000-000000000002',
   '60000000-0000-0000-0000-000000000001', 9, true)$$, 'P0001', null, 'a bad weekday is refused');
+select public.set_monvelo_supply_day('e5000000-0000-0000-0000-000000000021', '60000000-0000-0000-0000-000000000001', 5, true);
+select public.set_monvelo_supply_day('e5000000-0000-0000-0000-000000000022', '60000000-0000-0000-0000-000000000001', 5, false);
+select is((select active from public.monvelo_supply_days where day_of_week = 5), false, 'active = false deactivates the day');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000001');
 select throws_ok($$select public.set_monvelo_supply_day('e5000000-0000-0000-0000-000000000003',
   '60000000-0000-0000-0000-000000000001', 5, true)$$, '42501', null, 'another territory''s TM is refused');
@@ -113,7 +125,8 @@ select pg_temp.act_as('20000000-0000-0000-0000-000000000010', '10000000-0000-000
 select throws_ok($$select public.set_monvelo_supply_day('e5000000-0000-0000-0000-000000000005',
   '60000000-0000-0000-0000-000000000001', 5, true)$$, '42501', null, 'a TENANT_ADMIN is refused');
 reset role;
-select is((select count(*)::int from public.audit_logs where operation = 'set_monvelo_supply_day'), 1, 'one audit row for the one effect');
+select is((select count(*)::int from public.audit_logs where operation = 'set_monvelo_supply_day'), 3, 'one audit row per effect (a replay writes none)');
+select throws_ok($$delete from public.monvelo_supply_days$$, 'P0001', null, 'supply days are never deleted');
 
 -- ── pledge_monvelo_funds ────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000011', '10000000-0000-0000-0000-000000000001');
@@ -124,6 +137,9 @@ select is(public.pledge_monvelo_funds('e5000000-0000-0000-0000-000000000012', '8
   '60000000-0000-0000-0000-000000000001', current_setting('test.thu')::date, 200000) ->> 'remaining', '200000.00',
   're-pledging 200000 raises remaining to 200000');
 select is((select count(*)::int from public.monvelo_pledges), 1, 'the member reads their own pledge');
+select is(public.pledge_monvelo_funds('e5000000-0000-0000-0000-000000000011', '80000000-0000-0000-0000-000000000001',
+  '60000000-0000-0000-0000-000000000001', current_setting('test.thu')::date, 150000) ->> 'remaining', '150000.00',
+  'a replay returns the first result');
 select throws_ok(format($$select public.pledge_monvelo_funds('e5000000-0000-0000-0000-000000000013', '80000000-0000-0000-0000-000000000001',
   '60000000-0000-0000-0000-000000000001', %L, 100000)$$, current_setting('test.wed')), 'P0001', 'that date is not a supply day for this area',
   'a Wednesday is not a supply day');
@@ -135,6 +151,8 @@ select throws_ok(format($$select public.pledge_monvelo_funds('e5000000-0000-0000
 select throws_ok(format($$select public.pledge_monvelo_funds('e5000000-0000-0000-0000-000000000016', '80000000-0000-0000-0000-000000000002',
   '60000000-0000-0000-0000-000000000001', %L, 1000)$$, current_setting('test.thu')), '42501', null, 'a member of another agent is refused');
 reset role;
+select is((select count(*)::int from public.audit_logs where operation = 'pledge_monvelo_funds'), 2, 'each pledge effect writes one audit row');
+select throws_ok($$delete from public.monvelo_pledges$$, 'P0001', null, 'pledges are never deleted');
 update public.monvelo_pledges set remaining = 0;
 select pg_temp.act_as('20000000-0000-0000-0000-000000000011', '10000000-0000-0000-0000-000000000001');
 select throws_ok(format($$select public.pledge_monvelo_funds('e5000000-0000-0000-0000-000000000017', '80000000-0000-0000-0000-000000000001',
@@ -153,6 +171,12 @@ select is((select count(*)::int from public.monvelo_pledges), 0, 'another agent'
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select is((select count(*)::int from public.monvelo_pledges), 0, 'a tenant ZSM reads none');
 
+-- ── supply day read policy ──
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select ok((select count(*) from public.monvelo_supply_days) >= 1, 'tenant staff read their tenant''s supply days');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000016', '10000000-0000-0000-0000-000000000002');
+select is((select count(*)::int from public.monvelo_supply_days), 0, 'another tenant''s staff read none');
+
 -- ── monvelo_supply_days_near ────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000011', '10000000-0000-0000-0000-000000000001');
 select is((select shop_count from public.monvelo_supply_days_near('80000000-0000-0000-0000-000000000001', 14)
@@ -164,6 +188,12 @@ select is((select count(*)::int from public.monvelo_supply_days_near('80000000-0
   'the 5 km agent sees nothing');
 select throws_ok($$select * from public.monvelo_supply_days_near('80000000-0000-0000-0000-000000000001', 7)$$, '42501', null,
   'a non-member is refused');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000012', '10000000-0000-0000-0000-000000000001');
+select throws_ok($$select * from public.monvelo_supply_days_near('80000000-0000-0000-0000-000000000002', 7)$$, '42501', null,
+  'a member of a PENDING agent is refused');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000015', '10000000-0000-0000-0000-000000000001');
+select throws_ok($$select * from public.monvelo_supply_days_near('80000000-0000-0000-0000-000000000004', 7)$$, '42501', null,
+  'a member of a SUSPENDED agent is refused');
 select ok(pg_get_function_result('public.monvelo_supply_days_near(uuid,integer)'::regprocedure) !~* 'shop_id|shop_name|location|phone',
   'the read returns totals only');
 reset role;
