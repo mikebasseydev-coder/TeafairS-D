@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(74);
+select plan(85);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- tenant A = TEAFAIR: 1 CSM · 2 ZSM · 3 LOGISTICS_MANAGER · 4 TENANT_ADMIN · 5 TM · 6 DSA
@@ -311,7 +311,7 @@ create function pg_temp.norm(s text) returns text language sql immutable as $$
 -- every guarded table a body writes (any schema prefix or none)
 create function pg_temp.writes(s text) returns setof text language sql immutable as $$
   select distinct m[1] from regexp_matches(pg_temp.norm(s),
-    '(?:insert into|update(?: only)?|delete from|merge into|truncate(?: table)?(?: only)?) (?:\w+\.)?(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements|operational_states|operational_state_events|tenant_operational_states|tenant_operational_state_events)\M',
+    '(?:insert into|update(?: only)?|delete from|merge into|truncate(?: table)?(?: only)?) (?:\w+\.)?(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements|operational_states|operational_state_events|tenant_operational_states|tenant_operational_state_events|stock_reservations)\M',
     'g') as m $$;
 -- dynamic SQL or COPY as a statement
 create function pg_temp.dynamic(s text) returns boolean language sql immutable as $$
@@ -357,16 +357,63 @@ insert into subjects values
   ('inventory_batches', 'STOCK'), ('stock_movements', 'STOCK'),
   ('tenant_operational_states', 'DISTRIBUTION'), ('tenant_operational_state_events', 'DISTRIBUTION'),
   -- the platform switch cites no decision: its only writer is allowlisted below
-  ('operational_states', 'PLATFORM_SWITCH'), ('operational_state_events', 'PLATFORM_SWITCH');
+  ('operational_states', 'PLATFORM_SWITCH'), ('operational_state_events', 'PLATFORM_SWITCH'),
+  -- reservations cite no decision: the order is their evidence (operational writers below)
+  ('stock_reservations', 'ORDER');
 
 -- Named allowlist, each with its reason (A6 §16.4). No other function may write
--- these tables without citing the right decision. There are no order-fulfilment
--- stock decrements today; one added later is operational and joins this list with
--- that reason.
+-- these tables without citing the right decision. Order-driven stock writers are
+-- the separate operational list below (A6 §18.1).
 create temp table allowlist (proname text primary key, reason text not null);
 insert into allowlist values
   ('propose_monvelo_brand_terms', 'a draft: PROPOSED terms have no effect until approved, and approval cites a decision'),
   ('set_state_operational', 'platform switch, audited with a required reason and insert-only history');
+
+-- Operational writers (A6 §18.1; Task 6b): their evidence is the order itself.
+-- They may write only inventory_batches.quantity and .quantity_reserved,
+-- stock_reservations, and stock_movements rows of the two order kinds; the
+-- check below reads every write statement in their bodies.
+create temp table operational (proname text primary key, reason text not null);
+insert into operational values
+  ('stock_reserve_order', 'reserves an order''s lines at placement (place_web_order, place_trade_order)'),
+  ('stock_consume_order', 'deducts an order''s reservations at dispatch (mark_order_dispatched)'),
+  ('stock_release_order', 'releases an order''s reservations on cancel or refund (apply_paystack_refund, the sweep)'),
+  ('record_order_return', 'restores goods that came back after dispatch, citing the order');
+-- the order transitions that may call the internal reserve / consume / release helpers
+create temp table order_callers (proname text primary key, reason text not null);
+insert into order_callers values
+  ('place_web_order', 'web placement reserves'),
+  ('place_trade_order', 'trade placement reserves'),
+  ('mark_order_dispatched', 'dispatch consumes'),
+  ('apply_paystack_refund', 'a refund before dispatch releases'),
+  ('stock_reservation_sweep', 'an expired PENDING order is cancelled and released');
+
+-- every write statement an operational body makes that is not one of its permitted forms
+create function pg_temp.op_violations(s text) returns setof text language sql immutable as $$
+  select m[1] || ' ' || m[2]
+    from regexp_matches(pg_temp.norm(s),
+      '(insert into|update(?: only)?|delete from|merge into|truncate(?: table)?(?: only)?) (?:\w+\.)?(monvelo_brand_terms|monvelo_tenant_settings|monvelo_tenant_fee_terms|central_products|inventory_batches|stock_movements|operational_states|operational_state_events|tenant_operational_states|tenant_operational_state_events|stock_reservations)\M([^;]*)',
+      'g') as m
+   where not (
+         (m[2] = 'inventory_batches' and m[1] in ('update', 'update only')
+           and substring(m[3] from '^(?: (?:as )?\w+)? set (.*)$') is not null
+           and not exists (
+             select 1 from regexp_matches(
+                 split_part(split_part(split_part(substring(m[3] from '^(?: (?:as )?\w+)? set (.*)$'),
+                   ' where ', 1), ' from ', 1), ' returning ', 1),
+                 '(?:^|, ?)(\w+) ?=', 'g') as c
+              where c[1] not in ('quantity', 'quantity_reserved')))
+      or (m[2] = 'stock_reservations' and m[1] in ('insert into', 'update', 'update only'))
+      or (m[2] = 'stock_movements' and m[1] = 'insert into'
+           and m[3] ~ '''(sale_dispatch|order_return)''' and m[3] !~ '''(receipt|transfer|adjustment)''')) $$;
+-- the live report over every function named on the operational list (overloads included)
+create function pg_temp.op_report() returns text language sql stable as $$
+  select string_agg(n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || '): ' || v,
+                    '; ' order by p.proname, v)
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    cross join lateral pg_temp.op_violations(p.prosrc) v
+   where p.proname in (select proname from operational)
+     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' $$;
 
 -- dynamic SQL or COPY, named separately: none may exist unless listed with a reason
 create temp table dynamic_allowlist (sch text, proname text, reason text not null, primary key (sch, proname));
@@ -395,11 +442,67 @@ select ok(exists (select 1 from writes where proname = 'set_state_operational' a
 select is((select string_agg(w.sch || '.' || w.proname || '(' || w.args || ') writes ' || w.tbl, '; ' order by w.proname, w.tbl)
              from writes w join subjects s using (tbl)
             where w.proname not in (select proname from allowlist)
+              and w.proname not in (select proname from operational)
               and not (w.args ~ 'p_decision_id uuid'
                        and w.body ~ ('assert_citable_decision\([^;]*''' || lower(s.subject) || ''''))),
   null, 'every writer cites a decision of the right subject (or is on the allowlist)');
 select is((select string_agg(proname, ', ') from allowlist where proname not in (select proname from writes)), null,
   'every allowlist entry still writes a guarded table (no stale entries)');
+
+-- ── the operational writers (A6 §18.1) ──────────────────────────────────
+select is((select array_agg(x order by x) from pg_temp.op_violations(
+    'update public.inventory_batches set quantity = quantity - 1, quantity_reserved = quantity_reserved - 1 where id = x;'
+    || ' insert into public.stock_reservations (quantity) values (1);'
+    || ' update stock_reservations set status = ''RELEASED'' where id = x;'
+    || ' insert into stock_movements (kind, order_id) values (''SALE_DISPATCH'', o);'
+    || ' insert into public.stock_movements (kind, order_id) values (''ORDER_RETURN'', o)') x), null,
+  'control: the permitted operational forms pass');
+select is((select array_agg(x order by x) from pg_temp.op_violations(
+    'update inventory_batches b set expires_at = null where b.id = x;'
+    || ' update inventory_batches set quantity = 0, batch_number = ''x'' where id = x;'
+    || ' insert into inventory_batches values (1);'
+    || ' insert into public.stock_movements (kind) values (''RECEIPT'');'
+    || ' delete from stock_reservations;'
+    || ' update public.central_products set unit_price = 0') x),
+  array['delete from stock_reservations', 'insert into inventory_batches', 'insert into stock_movements',
+        'update central_products', 'update inventory_batches', 'update inventory_batches'],
+  'control: any other column, table, kind or verb is caught');
+select ok(exists (select 1 from writes where proname = 'stock_consume_order' and tbl = 'inventory_batches')
+      and exists (select 1 from writes where proname = 'stock_consume_order' and tbl = 'stock_movements')
+      and exists (select 1 from writes where proname = 'stock_reserve_order' and tbl = 'stock_reservations')
+      and exists (select 1 from writes where proname = 'record_order_return' and tbl = 'stock_movements'),
+  'positive control: the scan finds the operational stock writers');
+select is(pg_temp.op_report(), null,
+  'operational writers write only quantity, quantity_reserved, reservations and order-kind movements');
+select is((select string_agg(proname, ', ') from operational where proname not in (select proname from writes)), null,
+  'every operational entry still writes a guarded table (no stale entries)');
+select is((select string_agg(sch || '.' || proname, ', ' order by proname) from fns
+            where body ~ 'stock_(reserve|consume|release)_order\('
+              and proname not in (select proname from order_callers)), null,
+  'only the named order transitions call the reserve, consume and release helpers');
+select is((select string_agg(c.proname, ', ') from order_callers c
+            where not exists (select 1 from fns f where f.proname = c.proname
+                                and f.body ~ 'stock_(reserve|consume|release)_order\(')), null,
+  'every named order transition still calls one (no stale entries)');
+select is((select string_agg(p.proname || ' ' || r, ', ')
+             from pg_proc p cross join unnest(array['anon', 'authenticated', 'service_role']) r
+            where p.pronamespace = 'public'::regnamespace
+              and p.proname in ('stock_reserve_order', 'stock_consume_order', 'stock_release_order', 'stock_reservation_sweep')
+              and has_function_privilege(r, p.oid, 'execute')), null,
+  'the helpers and the sweep have no API grant');
+select ok((select bool_and(pg_get_function_identity_arguments(p.oid) ~ 'p_order_id uuid')
+             from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'record_order_return'),
+  'record_order_return cites its order');
+-- a planted operational writer touching the catalogue fails the check
+create function public.stock_release_order(p_planted text) returns void language plpgsql
+  set search_path = public, pg_temp as $f$
+begin
+  update public.central_products set unit_price = 0 where sku_code = p_planted;
+end $f$;
+select is(pg_temp.op_report(), 'public.stock_release_order(p_planted text): update central_products',
+  'negative control: a planted operational writer that updates central_products is reported');
+drop function public.stock_release_order(text);
+select is(pg_temp.op_report(), null, 'and the report is clean once it is gone');
 select is((select string_agg(sch || '.' || proname, ', ' order by proname) from fns
             where pg_temp.dynamic(body) and (sch, proname) not in (select sch, proname from dynamic_allowlist)),
   null, 'no function uses dynamic SQL or COPY unless it is on the named dynamic-SQL allowlist');
@@ -414,13 +517,13 @@ select is((select string_agg(grantee || ' ' || table_name || ' ' || privilege_ty
               and table_name in ('monvelo_brand_terms', 'monvelo_tenant_settings', 'monvelo_tenant_fee_terms',
                                  'central_products', 'inventory_batches', 'stock_movements',
                                  'operational_states', 'operational_state_events',
-                                 'tenant_operational_states', 'tenant_operational_state_events')
+                                 'tenant_operational_states', 'tenant_operational_state_events', 'stock_reservations')
               and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')),
   null, 'anon and authenticated hold no write privilege on a guarded table');
 select is((select count(*)::int from information_schema.role_table_grants
-            where table_schema = 'public' and grantee = 'service_role' and table_name = 'stock_movements'
+            where table_schema = 'public' and grantee = 'service_role' and table_name in ('stock_movements', 'stock_reservations')
               and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')), 0,
-  'service_role holds no write privilege on stock_movements');
+  'service_role holds no write privilege on stock_movements or stock_reservations');
 -- service_role keeps its write grants on the five older tables: the integration fixtures
 -- seed them through the service-role client. Pinned, so a new grant or table shows up here.
 select is((select string_agg(distinct table_name, ', ' order by table_name)
@@ -429,7 +532,7 @@ select is((select string_agg(distinct table_name, ', ' order by table_name)
               and table_name in ('monvelo_brand_terms', 'monvelo_tenant_settings', 'monvelo_tenant_fee_terms',
                                  'central_products', 'inventory_batches', 'stock_movements',
                                  'operational_states', 'operational_state_events',
-                                 'tenant_operational_states', 'tenant_operational_state_events')
+                                 'tenant_operational_states', 'tenant_operational_state_events', 'stock_reservations')
               and privilege_type in ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')),
   'central_products, inventory_batches, monvelo_brand_terms, monvelo_tenant_fee_terms, monvelo_tenant_settings',
   'service_role write grants on guarded tables are exactly the known five (integration fixtures)');

@@ -66,15 +66,17 @@ select tables_are('public', array[
   -- Monvelo platform settings, supply days and pledges (3, addendum A6)
   'monvelo_platform_settings', 'monvelo_supply_days', 'monvelo_pledges',
   -- operational states: platform switch, brand opt-in and their insert-only histories (4, addendum A6 §18.4)
-  'operational_states', 'operational_state_events', 'tenant_operational_states', 'tenant_operational_state_events'
-], 'public holds exactly the 74 tables');
+  'operational_states', 'operational_state_events', 'tenant_operational_states', 'tenant_operational_state_events',
+  -- stock reserved per order line and batch (1, addendum A6 §18.1)
+  'stock_reservations'
+], 'public holds exactly the 75 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  74, 'RLS is enabled on all 74 tables');
+  75, 'RLS is enabled on all 75 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN','MONVELO_OPERATOR','MONVELO_FINANCE']);

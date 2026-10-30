@@ -103,6 +103,31 @@ create function pg_temp.act_as(p_user uuid, p_tenant uuid) returns void language
            'app_metadata', json_build_object('active_tenant_id', p_tenant))::text, true);
 $$;
 grant execute on function pg_temp.act_as(uuid, uuid) to authenticated;
+-- A6 Task 6b: dispatch consumes the stock reserved at placement. These paid
+-- orders are inserted directly, so give each a line, stock in its fulfilment
+-- warehouse, and its reservation.
+do $f$
+begin
+  insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price,
+                                       is_active, nafdac_number)
+  select distinct o.tenant_id, 'FIXTURE-TEA', 'Fixture tea', 'Fixture', 'Beverages', 2500, 2000, true, 'A1-0999'
+    from public.orders o
+   where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null
+  on conflict do nothing;
+  insert into public.order_items (tenant_id, order_id, sku_code, qty, unit_price)
+  select o.tenant_id, o.id, 'FIXTURE-TEA', 1, 2500
+    from public.orders o
+   where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null;
+  insert into public.inventory_batches (tenant_id, warehouse_id, sku_code, batch_number, quantity)
+  select distinct o.tenant_id, o.fulfilment_warehouse_id, 'FIXTURE-TEA', 'FIXTURE', 100
+    from public.orders o
+   where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null;
+  perform public.stock_reserve_order(o, null)
+     from public.orders o
+    where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null;
+end;
+$f$;
+
 create function pg_temp.k(n integer) returns uuid language sql as
   $$ select ('d0000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid $$;
 grant execute on function pg_temp.k(integer) to authenticated;

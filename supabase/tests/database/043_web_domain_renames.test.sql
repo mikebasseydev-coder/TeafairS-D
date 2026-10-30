@@ -5,6 +5,21 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(56);
 
+-- A6 Task 6b: placing an order reserves stock. This file is not about stock,
+-- so every ordered line finds ample stock in its order's fulfilment warehouse.
+create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
+begin
+  insert into public.inventory_batches (tenant_id, warehouse_id, sku_code, batch_number, quantity)
+  select o.tenant_id, o.fulfilment_warehouse_id, new.sku_code, 'FIXTURE', 100000
+    from public.orders o
+   where o.tenant_id = new.tenant_id and o.id = new.order_id and o.fulfilment_warehouse_id is not null
+  on conflict (warehouse_id, sku_code, batch_number) do nothing;
+  return null;
+end;
+$f$;
+create trigger a6_stock_for_line after insert on public.order_items
+  for each row execute function pg_temp.a6_stock_for_line();
+
 -- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
 update public.operational_states set app_enabled = true, web_enabled = true;
 set local session_replication_role = replica;

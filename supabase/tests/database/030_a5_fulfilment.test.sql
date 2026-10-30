@@ -97,6 +97,31 @@ select ('91000000-0000-0000-0000-00000000000' || n)::uuid, '7eaf0000-0000-4000-8
        'TFW-00000000-0000-0000-0000-00000000000' || n
   from generate_series(1, 5) n;
 
+-- A6 Task 6b: dispatch consumes the stock reserved at placement. These paid
+-- orders are inserted directly, so give each a line, stock in its fulfilment
+-- warehouse, and its reservation.
+do $f$
+begin
+  insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price,
+                                       is_active, nafdac_number)
+  select distinct o.tenant_id, 'FIXTURE-TEA', 'Fixture tea', 'Fixture', 'Beverages', 2500, 2000, true, 'A1-0999'
+    from public.orders o
+   where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null
+  on conflict do nothing;
+  insert into public.order_items (tenant_id, order_id, sku_code, qty, unit_price)
+  select o.tenant_id, o.id, 'FIXTURE-TEA', 1, 2500
+    from public.orders o
+   where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null;
+  insert into public.inventory_batches (tenant_id, warehouse_id, sku_code, batch_number, quantity)
+  select distinct o.tenant_id, o.fulfilment_warehouse_id, 'FIXTURE-TEA', 'FIXTURE', 100
+    from public.orders o
+   where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null;
+  perform public.stock_reserve_order(o, null)
+     from public.orders o
+    where o.id::text like '90000000-%' and o.status = 'PAID' and o.fulfilment_warehouse_id is not null;
+end;
+$f$;
+
 create function pg_temp.k(n integer) returns uuid language sql as
   $$ select ('a7000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid $$;
 create function pg_temp.o(n integer) returns uuid language sql as
@@ -267,8 +292,11 @@ select is((select row(f.dispatched_by, f.tracking_reference, f.pin_sent_at, f.pi
   'the fulfilment row is written, not yet sent');
 select ok((select f.delivery_pin_hash ~ '^\$2[aby]\$' and f.delivery_pin_hash = extensions.crypt('1234', f.delivery_pin_hash)
              from pg_temp.f(1) f), 'the PIN is stored as a bcrypt hash');
-select is((select after from public.audit_logs where operation = 'mark_order_dispatched' and idempotency_key = pg_temp.k(10)),
-  jsonb_build_object('order_id', pg_temp.o(1), 'status', 'IN_TRANSIT', 'has_tracking', true), 'dispatch audit');
+-- A6 Task 6b: the audit also lists the stock consumed (058 checks its lines)
+select is((select (after - 'stock') || jsonb_build_object('stock_lines', jsonb_array_length(after -> 'stock'))
+             from public.audit_logs where operation = 'mark_order_dispatched' and idempotency_key = pg_temp.k(10)),
+  jsonb_build_object('order_id', pg_temp.o(1), 'status', 'IN_TRANSIT', 'has_tracking', true, 'stock_lines', 1),
+  'dispatch audit');
 select ok((select response from public.idempotency_logs where key = pg_temp.k(10)) ? 'buyer_phone' = false,
   'the stored reply holds no phone');
 call pg_temp.as_user(5);

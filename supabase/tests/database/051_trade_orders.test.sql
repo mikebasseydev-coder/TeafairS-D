@@ -5,6 +5,21 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(30);
 
+-- A6 Task 6b: placing an order reserves stock. This file is not about stock,
+-- so every ordered line finds ample stock in its order's fulfilment warehouse.
+create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
+begin
+  insert into public.inventory_batches (tenant_id, warehouse_id, sku_code, batch_number, quantity)
+  select o.tenant_id, o.fulfilment_warehouse_id, new.sku_code, 'FIXTURE', 100000
+    from public.orders o
+   where o.tenant_id = new.tenant_id and o.id = new.order_id and o.fulfilment_warehouse_id is not null
+  on conflict (warehouse_id, sku_code, batch_number) do nothing;
+  return null;
+end;
+$f$;
+create trigger a6_stock_for_line after insert on public.order_items
+  for each row execute function pg_temp.a6_stock_for_line();
+
 -- A6 §18.4: every state is on, and every tenant opted in, for this file's fixtures
 update public.operational_states set app_enabled = true, web_enabled = true;
 set local session_replication_role = replica;
@@ -96,7 +111,10 @@ select is((select count(*)::int from public.audit_logs where operation = 'place_
 select ok(not (select coalesce(after ? 'customer_phone' or after ? 'customer_name', true) from public.audit_logs
                 where operation = 'place_trade_order' and idempotency_key = pg_temp.k(1)),
   'the audit row holds no contact details');
-select is((select count(*)::int from public.inventory_batches), 0, 'no stock was touched');
+-- A6 Task 6b: placement reserves the carton; the batch's quantity is untouched until dispatch
+select is((select trim_scale(sum(quantity)) || '|' || trim_scale(sum(quantity_reserved)) from public.inventory_batches
+            where sku_code = 'PURERIGIN-COCONUT-OIL-200ML'),
+  '100000|12', 'the carton is reserved, not deducted');
 
 -- ── lines ───────────────────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '7eaf0000-0000-4000-8000-000000000001');

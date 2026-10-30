@@ -309,6 +309,12 @@ Deno.test({
     await must(admin.from("central_products").insert({
       tenant_id: TEAFAIR, sku_code: TF_SKU, product_name: `IT Tea ${run}`, brand: "Teafair", category: "Beverages", unit_price: 1500, wholesale_price: 1200, nafdac_number: "A1-0007",
     }));
+    // A6 Task 6b: placing an order reserves stock in its fulfilment warehouse
+    await must(admin.from("inventory_batches").insert([
+      { tenant_id: ids.tenant, warehouse_id: ids.warehouse, sku_code: "MILO-400", batch_number: `IT-${run}`, quantity: 1000 },
+      { tenant_id: ids.tenant, warehouse_id: ids.warehouse, sku_code: "MAGGI-12", batch_number: `IT-${run}`, quantity: 1000 },
+      { tenant_id: TEAFAIR, warehouse_id: ids.tfWarehouse, sku_code: TF_SKU, batch_number: `IT-${run}`, quantity: 1000 },
+    ]));
     await must(admin.from("territory_coverage").upsert(
       { tenant_id: TEAFAIR, state_code: "LA", lga_id: IKEJA, territory_id: ids.tfTerritory },
       { onConflict: "tenant_id,state_code,lga_id" },
