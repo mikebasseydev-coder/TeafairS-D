@@ -1021,3 +1021,10 @@ backdoors"; user, 2026-10-29).
   - `default_cure_days`: how long after clearing before its brands lend again (default 0);
   - `post_default_limit_bps`: the limit after a cure, as a share of the opening limit (default 10000, the earlier "back to the opening limit").
 - **Delivery:** plan Task 6b (stock) and Task 7 (freeze and cure rules).
+
+### 18.3 ZSM scope and ZSM chat (user, 2026-10-30; binding)
+
+- **A ZSM's administrative and approval powers reach only their own zones.** Ticket assignment, territory coverage, web warehouses, POS venues and referral codes, dispatch, buyer-contact reads, ticket handling, audit and notification reads, and the Monvelo book are limited to rows whose zone the ZSM covers. Cross-zone attempts are refused (42501) or invisible (RLS).
+- **Tenant-wide matters stay with any active ZSM of the tenant** (Claude's call): brand-terms proposals and bridging approvals, Monvelo settings while bridging, contact-report review, web defaults, the brand approval policy, and objects with no zone.
+- **Direct chat between ZSMs of the same tenant is always open.**
+- **Delivery:** plan Task 1e, after Task 5 and before Task 6.

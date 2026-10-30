@@ -681,6 +681,66 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
 - [ ] **Step 4: Run the file, then the green gate.** Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(db): Monvelo supply days, pledges and the staff proximity search (A6 §4.3, §16.6)`
 
+### Task 1e: ZSM powers limited to their zones; ZSM direct chat open (user, 2026-10-30)
+
+Runs after Task 5 and before Task 6.
+
+**Rulings (user, binding):**
+- A ZSM's administrative and approval powers reach only their assigned zones (`zones.zsm_id`). Cross-zone mutations are blocked in the RPC and RLS layers.
+- Direct chat stays open between all ZSMs of a tenant, with no zone barrier.
+
+**The rule (Claude's call, open to change):**
+- **Zonal objects are in scope.** Anything with a zone, through its territory, area, order, ticket, shop or warehouse, is within a ZSM's power only if that zone is in `zsm_zone_ids`.
+- **Tenant-wide objects stay with any ACTIVE ZSM of the tenant.** These have no zone:
+  - brand terms proposal and bridging approval;
+  - Monvelo settings while bridging;
+  - contact-report review;
+  - `set_web_defaults` and `set_brand_approval_policy`;
+  - tickets and orders with no territory.
+
+**Files:**
+- Create:
+  - `supabase/migrations/20261029130020_zsm_zone_scope.sql`
+  - `supabase/tests/database/059_zsm_zone_scope.test.sql`
+- Modify: any pgTAP fixture whose ZSM acts across zones (give it `zsm_id` on the zone it acts in).
+
+**Interfaces.** Recreate each function and policy below from its live definition, same signature and grants. Replace "any ZSM of the tenant" with "a ZSM whose `zsm_zone_ids` contains the object's zone":
+- **Functions** (live inventory 2026-10-30; re-check with `prosrc ~ '''ZSM'''` and `prosrc !~ 'zsm_zone_ids'`):
+  - `assign_ticket` (target territory and ticket territory);
+  - `support_lock_ticket` (the ZSM override);
+  - `my_support_message_ticket_ids`;
+  - `redact_ticket_customer_data`;
+  - `get_order_dispute_evidence`;
+  - `set_territory_coverage`, `set_territory_web_warehouse`;
+  - `upsert_web_referral_code`, `set_web_pos_venue` (by the venue or territory);
+  - `fulfilment_can_dispatch`, `fulfilment_delivery_path`, `my_fulfilment_order_ids`, `resend_delivery_pin` (the ZSM branch only; the LOGISTICS_MANAGER and warehouse-manager branches are unchanged);
+  - `web_route_try` (it already routes by the territory's zone; verify).
+- **Policies:**
+  - `order_contacts.order_contacts_select_zsm_or_tm` (A2: the ZSM of the order's zone, and the order's TM);
+  - `audit_logs.audit_logs_select_zsm_tm`;
+  - `notification_logs.notification_logs_select_zsm`;
+  - `support_messages.support_messages_select_handler`;
+  - `support_ticket_contacts.support_ticket_contacts_select_handler`.
+
+  Each limits ZSM rows to rows whose zone is in `my_zsm_zone_ids()`. Rows with no zone stay visible to any ZSM of the tenant.
+- **Chat:**
+  - `get_or_create_direct_channel` allows any two ACTIVE ZSMs of the same tenant to open a direct channel, whatever their zones;
+  - `chat_is_available` and `post_chat_message` follow;
+  - ZONE channels stay zone-scoped.
+- **Left as they are, being tenant-wide or platform:** `approve_`, `propose_` and `withdraw_monvelo_brand_terms`; `set_monvelo_tenant_settings`; `review_contact_report`; `my_contact_report_tenant_ids`; `set_web_defaults`; `set_brand_approval_policy`; `notify_tenant_zsms`; `my_monvelo_staff_tenant_ids` (enrolment reads are narrowed in Task 7 below); `appoint_zone_manager`; `set_zone_zsm`.
+
+- [ ] **Step 1: Write the failing tests** in `059`. Fixture: ZSM Z covers Lagos, Z2 covers Oyo, same tenant.
+  - Z assigning a ticket into an Oyo territory gets 42501; into Lagos it works.
+  - Z sets Lagos territory coverage and web warehouse, but not Oyo's (42501).
+  - Z reads `order_contacts`, the ticket messages and contacts, and the audit and notification rows of Lagos orders and tickets, but none for Oyo. Z2 sees the reverse. An order or ticket with no territory is visible to both.
+  - Z dispatching or re-sending the PIN for an Oyo order gets 42501. The LM still dispatches both.
+  - Z and Z2 can open a direct channel and post in it.
+  - `web_route_try` sends an Oyo web order to Z2, not Z.
+- [ ] **Step 2: Run** `059`. Expected: FAIL.
+- [ ] **Step 3: Write the migration and adjust fixtures.**
+- [ ] **Step 4: The green gate.** Expected: PASS.
+- [ ] **Step 5: Commit.** `feat(db): ZSM powers limited to their zones; ZSM direct chat open (user ruling 2026-10-30)`
+
 ### Task 6: `place_trade_order`
 
 **Files:**
@@ -889,7 +949,7 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
       - fintech members: `claimed_by_agent_id in (select my_monvelo_agent_ids()) or funder_agent_id in (…)`;
       - the raiser: `raised_by = (select auth.uid())`;
       - the territory: `territory_id in (select my_monvelo_territory_ids())`;
-      - the tenant book: `tenant_id in (select my_tenant_ids_with_role(array['ZSM','TENANT_ADMIN','CLIENT_SERVICE_MANAGER']))`;
+      - the tenant book: `tenant_id in (select my_tenant_ids_with_role(array['TENANT_ADMIN','CLIENT_SERVICE_MANAGER']))`, plus a ZSM for financings whose area's territory is in a zone of `my_zsm_zone_ids()` (user, 2026-10-30, Task 1e rule);
       - logistics: `(status = 'FUNDED' and tenant_id in (select my_tenant_ids_with_role(array['LOGISTICS_MANAGER'])))`;
       - `(select is_monvelo_staff())`.
     - **Lines:** `(tenant_id, financing_id) in (select tenant_id, id from public.monvelo_financings)`.
