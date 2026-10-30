@@ -145,8 +145,13 @@ select is(array(select z from public.my_zsm_zone_ids() z order by z),
   array['30000000-0000-0000-0000-000000000031', '30000000-0000-0000-0000-000000000032']::uuid[],
   'my_zsm_zone_ids: Z''s zones in the active tenant A');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002');
-select is(array(select public.my_zsm_zone_ids()),
-  array['30000000-0000-0000-0000-000000000034']::uuid[], 'my_zsm_zone_ids: Z''s zones in the active tenant B');
+-- A6 §18.3 (user ruling 2026-10-30): zones with no ACTIVE ZSM stay within
+-- reach of every ACTIVE ZSM of the tenant; B's Ogun and Oyo have none
+select is(array(select z from public.my_zsm_zone_ids() z order by z),
+  array(select z.id from public.zones z
+         where z.tenant_id = '10000000-0000-0000-0000-000000000002'
+           and z.state_code in ('LA', 'OG', 'OY') order by z.id),
+  'my_zsm_zone_ids: Z''s zones in the active tenant B (Lagos covered; Ogun and Oyo uncovered)');
 reset role;
 
 -- ── invite_tenant_user: "the territory is in one of my zones" ───────────
@@ -168,10 +173,11 @@ select lives_ok(
   $$select public.invite_tenant_user('d0000000-0000-0000-0000-000000000004', '+2348000000005', 'TM',
       '40000000-0000-0000-0000-000000000044', null)$$,
   'at B, Z invites into B''s Lagos territory');
-select throws_ok(
+-- B's Ogun has no ZSM: Z, B's only ZSM, may invite there (A6 §18.3)
+select lives_ok(
   $$select public.invite_tenant_user('d0000000-0000-0000-0000-000000000005', '+2348000000006', 'TM',
       '40000000-0000-0000-0000-000000000045', null)$$,
-  '42501', null, 'at B, Z cannot invite into B''s Ogun (Z covers Ogun only at A)');
+  'at B, Z invites into B''s uncovered Ogun (no ZSM covers it at B)');
 select throws_ok(
   $$select public.invite_tenant_user('d0000000-0000-0000-0000-000000000006', '+2348000000006', 'TM',
       '40000000-0000-0000-0000-000000000042', null)$$,

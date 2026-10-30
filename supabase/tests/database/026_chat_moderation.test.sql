@@ -67,6 +67,13 @@ update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
  where id = '30000000-0000-0000-0000-000000000001';
 update public.zones set zsm_id = '20000000-0000-0000-0000-000000000012'
  where id = '30000000-0000-0000-0000-000000000009';
+-- A6 §18.3: an uncovered zone is open to every ZSM, so A's Kano gets its own
+-- ZSM (Z2, who is also B's ZSM)
+insert into public.tenant_users (id, tenant_id, profile_id, role, status, is_primary) values
+  ('50000000-0000-0000-0000-000000000092', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000012',
+   'ZSM', 'ACTIVE', false);
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000012'
+ where id = '30000000-0000-0000-0000-000000000002';
 
 create function pg_temp.act_as(p_user uuid, p_tenant uuid) returns void language sql as $$
   select set_config('role', 'authenticated', true),

@@ -47,6 +47,12 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
 -- A6 §17: a ZSM's coverage is zones.zsm_id, not a zone on the membership
 update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
  where id = '30000000-0000-0000-0000-000000000001';
+-- A6 §18.3: an uncovered zone is open to every ZSM, so Kano gets its own ZSM
+insert into public.tenant_users (id, tenant_id, profile_id, role, status, is_primary) values
+  ('50000000-0000-0000-0000-000000000089', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000008',
+   'ZSM', 'ACTIVE', true);
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000008'
+ where id = '30000000-0000-0000-0000-000000000009';
 
 create function pg_temp.act_as(p_user uuid, p_tenant uuid) returns void language sql as $$
   select set_config('role', 'authenticated', true),

@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(80);
+select plan(90);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
@@ -27,11 +27,12 @@ create trigger a5_stamp_consent before insert on public.orders
 -- 06 POS agent Ikeja · 07 POS agent Ibadan · 08 platform administrator
 -- 09 TM of Ikeja (a membership only: territories.tm_id stays empty, so routing
 --    still falls back to the zone's ZSM)
+-- 10, 11 accounts with verified phones, not yet members (invitees)
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria', 'NESTLE');
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-0000000000' || lpad(n::text, 2, '0'))::uuid, '23480000000' || lpad(n::text, 2, '0'), now()
-from generate_series(1, 9) n;
+from generate_series(1, 11) n;
 update public.profiles set platform_role = 'PLATFORM_SUPER_ADMIN' where id = '20000000-0000-0000-0000-000000000008';
 
 insert into public.zones (id, tenant_id, zone_name, state_code) values
@@ -495,6 +496,24 @@ select is(pg_temp.ids($$select order_id::text from public.order_fulfilments$$),
   array['90000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000002',
         '90000000-0000-0000-0000-000000000004'],
   'with Oyo uncovered, Z reads Oyo fulfilments');
+-- fix round 2: the administrative powers and chat rooms follow the same rule
+select lives_ok(
+  $$select public.invite_tenant_user(pg_temp.k(60), '2348000000010', 'TM', '40000000-0000-0000-0000-000000000043', null)$$,
+  'with Oyo uncovered, Z invites a TM into an Oyo territory');
+select lives_ok(
+  $$select public.upsert_territory(pg_temp.k(61), '40000000-0000-0000-0000-000000000043',
+      '30000000-0000-0000-0000-000000000033', 'Ibadan', null)$$,
+  'with Oyo uncovered, Z edits an Oyo territory');
+select lives_ok(
+  $$select public.upsert_area(pg_temp.k(62), null, '40000000-0000-0000-0000-000000000043', 'Bodija')$$,
+  'with Oyo uncovered, Z edits an Oyo area');
+select lives_ok(
+  $$select public.upsert_zone(pg_temp.k(63), '30000000-0000-0000-0000-000000000033', null,
+      '{"type":"Polygon","coordinates":[[[3.8,7.3],[4.0,7.3],[4.0,7.5],[3.8,7.5],[3.8,7.3]]]}'::jsonb)$$,
+  'with Oyo uncovered, Z edits Oyo''s boundary');
+select is((select count(*)::int from public.chat_channels
+            where channel_type = 'ZONE' and zone_id = '30000000-0000-0000-0000-000000000033'), 1,
+  'with Oyo uncovered, Z sees Oyo''s ZONE channel');
 select pg_temp.act_as(2);
 select lives_ok($$select pg_temp.resend(52, 4)$$, 'with Oyo uncovered, Z2 reaches it too');
 -- a platform administrator gives Oyo back to Z2: Z is refused again
@@ -511,6 +530,22 @@ select is(pg_temp.ids($$select order_id::text from public.order_contacts$$),
   'nor read Oyo buyer contacts');
 select is((select count(*)::int from public.audit_logs where operation = 'zsm_scope_fixture2'), 1,
   'nor Oyo audit rows');
+select throws_ok(
+  $$select public.invite_tenant_user(pg_temp.k(64), '2348000000011', 'TM', '40000000-0000-0000-0000-000000000043', null)$$,
+  '42501', null, 'with Oyo covered by Z2, Z cannot invite into an Oyo territory');
+select throws_ok(
+  $$select public.upsert_territory(pg_temp.k(65), '40000000-0000-0000-0000-000000000043',
+      '30000000-0000-0000-0000-000000000033', 'Ibadan', null)$$,
+  '42501', null, 'nor edit an Oyo territory');
+select throws_ok(
+  $$select public.upsert_area(pg_temp.k(66), null, '40000000-0000-0000-0000-000000000043', 'Dugbe')$$,
+  '42501', null, 'nor an Oyo area');
+select throws_ok(
+  $$select public.upsert_zone(pg_temp.k(67), '30000000-0000-0000-0000-000000000033', null, null)$$,
+  '42501', 'this zone is not yours', 'nor Oyo''s boundary');
+select is((select count(*)::int from public.chat_channels
+            where channel_type = 'ZONE' and zone_id = '30000000-0000-0000-0000-000000000033'), 0,
+  'nor see Oyo''s ZONE channel');
 
 -- ── web routing ─────────────────────────────────────────────────────────
 reset role;
