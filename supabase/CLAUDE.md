@@ -731,7 +731,8 @@ Migration `20261028120600_monvelo_shop_enrolment`, function `monvelo-shop-consen
 
 ### Teafair field structure (A6 §17)
 
-Migration `20261029125000_teafair_field_structure`, pgTAP 056, local only.
+Migrations `20261029125000_teafair_field_structure` and
+`20261029125100_zone_management`, pgTAP 056 and 057, local only.
 User rulings 2026-10-29: the ZSM is a Teafair official overseeing several
 tenants; zones are states; one ZSM can cover several zones.
 
@@ -743,17 +744,39 @@ tenants; zones are states; one ZSM can cover several zones.
   guesses. **Pre-push:** on the remote, rename every zone to its state's
   `ng_states.name` first:
   `select z.tenant_id, z.id, z.zone_name from zones z left join ng_states s on lower(s.name) = lower(btrim(z.zone_name)) where s.code is null;`
-  must return 0 rows. `upsert_zone` keeps its signature: a new zone's name
-  must be a state name (P0001 otherwise) and gives its `state_code`; an edit
-  renames freely and keeps the state.
+  must return 0 rows.
+- **Zones and ZSMs belong to the platform (`20261029125100`).** Three audited
+  `PLATFORM_SUPER_ADMIN` RPCs (`authenticated`; `appoint_zone_manager` and
+  `create_zone` take `p_tenant_id`, the platform-role exception, as
+  `appoint_client_service_manager`):
+  - `appoint_zone_manager(key, tenant, phone)`: a confirmed phone becomes an
+    INVITED ZSM with no zone, notified (`TENANT_INVITE`); an existing member
+    is 23505, a non-ACTIVE tenant P0001.
+  - `create_zone(key, tenant, state_code)`: the zone is named after its state;
+    a second zone for a state is 23505 "this tenant already has a zone for
+    that state".
+  - `set_zone_zsm(key, zone, profile)`: the tenant comes from the zone; null
+    clears coverage; otherwise the profile must be an ACTIVE ZSM of that
+    tenant (P0001); audited with `zsm_id` before and after.
+
+  `upsert_zone` keeps its signature but no longer creates zones (42501 "zones
+  are created by a platform administrator"); a ZSM edits only a zone in their
+  `zsm_zone_ids` (42501 "this zone is not yours"), only its boundary, and a
+  name other than the state's is P0001 "a zone is named after its state".
+  `invite_tenant_user` still refuses a ZSM invite.
 - **Coverage is `zones.zsm_id`.** A ZSM covers every zone where they are
   `zsm_id`, in each tenant where they hold an ACTIVE ZSM membership. A ZSM's
   `tenant_users` row carries no zone (CHECK `tenant_users_zsm_no_zone`, which
   replaces `tenant_users_zsm_has_zone`). The backfill made each ACTIVE ZSM
   the `zsm_id` of their old zone where it had none (earliest membership
   first; others are listed in a NOTICE), then cleared `zone_id`. A platform
-  administrator sets `zones.zsm_id` (no RPC; the `zones_check_manager`
-  trigger still requires an ACTIVE ZSM of the tenant).
+  administrator sets `zones.zsm_id` with `set_zone_zsm` (the
+  `zones_check_manager` trigger still requires an ACTIVE ZSM of the tenant).
+  **Pre-push:** list the ZSMs who will lose their old zone's coverage (an
+  INVITED or DISABLED ZSM, one whose zone already has another `zsm_id`, one
+  sharing a zone with an earlier ACTIVE ZSM, or one with no zone), and plan a
+  `set_zone_zsm` for each after the push:
+  `with pick as (select distinct on (tenant_id, zone_id) tenant_id, zone_id, profile_id from public.tenant_users where role = 'ZSM' and status = 'ACTIVE' and zone_id is not null order by tenant_id, zone_id, created_at, id) select tu.tenant_id, tu.profile_id, tu.status, tu.zone_id from public.tenant_users tu left join public.zones z on z.tenant_id = tu.tenant_id and z.id = tu.zone_id left join pick p on p.tenant_id = tu.tenant_id and p.zone_id = tu.zone_id where tu.role = 'ZSM' and (tu.status <> 'ACTIVE' or coalesce(z.zsm_id, p.profile_id) is distinct from tu.profile_id);`
 - **Helpers.** `zsm_zone_ids(tenant, profile)` (internal, SECURITY DEFINER)
   and `my_zsm_zone_ids()` (the caller's zones in the active tenant,
   `authenticated`, for policies). `chat_staff_zone_ids(tenant, profile)`
@@ -763,14 +786,15 @@ tenants; zones are states; one ZSM can cover several zones.
   territory must be in one of my zones; a ZSA takes the zone of the territory
   named in the invite, or the ZSM's only zone; a ZSM covering several zones
   must name a territory, P0001; the ZSA's manager must cover that zone),
-  `upsert_territory`, `upsert_area`, `upsert_zone`, `hide_chat_message`,
+  `upsert_territory`, `upsert_area`, `hide_chat_message`,
   `my_chat_channel_ids` (a multi-zone ZSM is in every ZONE channel and
   territory room of their zones) and `get_or_create_direct_channel` (zone
   rules compare zone sets). `assign_ticket` and `web_route_try` already route
   by the object's zone through `zones.zsm_id` and are unchanged.
   `start_monvelo_consent` checks the ZSA's own `zone_id` and is unchanged.
 - **The field force is Teafair staff** (§17.2): only a platform administrator
-  appoints a ZSM; ZSMs invite TM, ASM, ZSA and ASA within their zones.
+  appoints a ZSM (`appoint_zone_manager`); ZSMs invite TM, ASM, ZSA and ASA
+  within their zones.
 
 ## Layout
 

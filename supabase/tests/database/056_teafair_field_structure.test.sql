@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(57);
+select plan(54);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- A = Nestle, B = Unilever.
@@ -244,17 +244,8 @@ select throws_ok(
       '40000000-0000-0000-0000-000000000043', 'Bodija')$$,
   '42501', null, 'Z cannot create an area in an Oyo territory');
 
--- ── upsert_zone: a new zone is a state ──────────────────────────────────
-select lives_ok(
-  $$select public.upsert_zone('d1000000-0000-0000-0000-000000000009', null, 'Kano', null)$$,
-  'a ZSM creates a zone named by its state');
-select throws_ok(
-  $$select public.upsert_zone('d1000000-0000-0000-0000-000000000010', null, 'Ibadan', null)$$,
-  'P0001', 'a zone is a Nigerian state: name it by its state', 'a zone name that is not a state is refused');
+-- (zone creation and upsert_zone edits: see 057, A6 §17 fix round 1)
 reset role;
-select is((select state_code from public.zones
-            where tenant_id = '10000000-0000-0000-0000-000000000001' and zone_name = 'Kano'),
-  'KN', 'the new zone carries its state code');
 
 -- ── chat ────────────────────────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');

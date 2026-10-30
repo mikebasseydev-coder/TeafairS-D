@@ -78,9 +78,10 @@ select is(
     where n.nspname = 'public'
       and has_function_privilege('authenticated', p.oid, 'execute')
       and p.prorettype = 'jsonb'::regtype
-      and p.proname not in ('set_active_tenant', 'record_monvelo_fee_terms', 'appoint_client_service_manager')
+      and p.proname not in ('set_active_tenant', 'record_monvelo_fee_terms', 'appoint_client_service_manager',
+                            'appoint_zone_manager', 'create_zone')
       and 'p_tenant_id' = any(p.proargnames)),
-  0, 'no write RPC accepts a tenant id (decision 4); set_active_tenant only proposes one, and record_monvelo_fee_terms and appoint_client_service_manager are the platform-role exceptions');
+  0, 'no write RPC accepts a tenant id (decision 4); set_active_tenant only proposes one, and record_monvelo_fee_terms, appoint_client_service_manager, appoint_zone_manager and create_zone are the platform-role exceptions');
 select ok(not has_function_privilege('anon', 'public.upsert_zone(uuid,uuid,text,jsonb)', 'execute'),
   'anon cannot execute write RPCs');
 select ok(not has_function_privilege('authenticated', 'public.idempotency_begin(uuid,text,jsonb)', 'execute'),
@@ -94,13 +95,15 @@ select ok(not has_function_privilege('authenticated', 'public.escalate_stale_pic
 
 -- ── upsert_zone: actor and tenant come from the JWT ─────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+-- A6 §17: zones are created by a platform administrator (create_zone, 057);
+-- a ZSM edits their own zone, which carries the contract checks here
 select lives_ok(
-  $$select public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ondo', null)$$,
-  'a ZSM can create a zone');
+  $$select public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Lagos', null)$$,
+  'a ZSM can edit their own zone');
 reset role;
 select is(
-  (select tenant_id from public.zones where zone_name = 'Ondo'),
-  '10000000-0000-0000-0000-000000000001'::uuid, 'the zone lands in the tenant from the claim');
+  (select tenant_id from public.audit_logs where idempotency_key = 'aaaaaaaa-0000-0000-0000-000000000001'),
+  '10000000-0000-0000-0000-000000000001'::uuid, 'the write lands in the tenant from the claim');
 select is(
   (select count(*)::int from public.audit_logs
     where idempotency_key = 'aaaaaaaa-0000-0000-0000-000000000001'
@@ -111,17 +114,18 @@ select is(
 -- ── idempotency (§3.3, §7.2) ────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select is(
-  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ondo', null),
-  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ondo', null),
+  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Lagos', null),
+  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Lagos', null),
   'a replayed key returns the original response');
 reset role;
-select is((select count(*)::int from public.zones where zone_name = 'Ondo'), 1,
+select is((select count(*)::int from public.idempotency_logs where key = 'aaaaaaaa-0000-0000-0000-000000000001'), 1,
   'a replayed key does not write twice');
 select is((select count(*)::int from public.audit_logs where idempotency_key = 'aaaaaaaa-0000-0000-0000-000000000001'), 1,
   'a replayed key does not audit twice');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
-  $$select public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Oyo', null)$$,
+  $$select public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Lagos',
+      '{"type":"Polygon","coordinates":[[[3.1,6.4],[3.6,6.4],[3.6,6.7],[3.1,6.7],[3.1,6.4]]]}')$$,
   'TF002', null, 'a key reused with a different payload is refused (409)');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
@@ -155,7 +159,7 @@ select is(
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
   $$select public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000006', '30000000-0000-0000-0000-000000000002', 'Hijack', null)$$,
-  'P0001', null, 'a ZSM cannot edit another tenant''s zone');
+  '42501', 'this zone is not yours', 'a ZSM cannot edit another tenant''s zone');
 
 -- ── upsert_territory ────────────────────────────────────────────────────
 select lives_ok(

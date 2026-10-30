@@ -40,6 +40,10 @@ insert into public.central_products (tenant_id, sku_code, product_name, brand, c
 insert into public.audit_logs (tenant_id, operation, entity_type, entity_id, source) values
   ('10000000-0000-0000-0000-000000000001', 'TEST', 'tenants', 'nestle', 'SYSTEM');
 
+-- A6 §17: the Teafair ZSM covers Teafair's Lagos zone
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
+ where id = '30000000-0000-0000-0000-000000000001';
+
 create function pg_temp.act_as(p_user uuid, p_tenant uuid) returns void language sql as $$
   select set_config('role', 'authenticated', true),
          set_config('request.jwt.claims', json_build_object(
@@ -61,7 +65,7 @@ select lives_ok(
   $$select public.set_brand_approval_policy('bbbbbbbb-0000-0000-0000-000000000001', 'Teafair', 'ASM')$$,
   'a Teafair ZSM sets brand policy for Teafair house brands');
 select lives_ok(
-  $$select public.upsert_zone('bbbbbbbb-0000-0000-0000-000000000002', null, 'Ogun', null)$$,
+  $$select public.upsert_zone('bbbbbbbb-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000001', 'Lagos', null)$$,
   'a Teafair ZSM manages Teafair''s own zones');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
@@ -73,8 +77,8 @@ select is((select count(*)::int from public.audit_logs
 
 reset role;
 select is(
-  (select tenant_id from public.zones where zone_name = 'Ogun'),
-  '7eaf0000-0000-4000-8000-000000000001'::uuid, 'Teafair''s zone lands in the Teafair tenant');
+  (select tenant_id from public.audit_logs where idempotency_key = 'bbbbbbbb-0000-0000-0000-000000000002'),
+  '7eaf0000-0000-4000-8000-000000000001'::uuid, 'Teafair''s zone edit lands in the Teafair tenant');
 
 select * from finish();
 rollback;
