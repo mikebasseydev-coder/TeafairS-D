@@ -48,6 +48,11 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
    'ZSM', null, null, null, 'ACTIVE', true);
 update public.territories set tm_id = '20000000-0000-0000-0000-000000000002'
  where id = '40000000-0000-0000-0000-000000000001';
+-- A6 §17/§18.3: zones.zsm_id is the ZSM's coverage; A's ZSM covers both zones
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
+ where id in ('30000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000009');
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000009'
+ where id = '30000000-0000-0000-0000-000000000002';
 
 insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values

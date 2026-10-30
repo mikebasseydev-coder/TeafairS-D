@@ -69,6 +69,13 @@ insert into public.web_phone_verifications (phone, code_hash, expires_at, verifi
   ('+2348032222222', 'x', now() + interval '10 minutes', now(),
    encode(extensions.digest('tok-2', 'sha256'), 'hex'), now() + interval '30 minutes');
 
+-- A6 §17/§18.3: zones.zsm_id is a ZSM's coverage; each tenant's ACTIVE ZSM
+-- covers the zones it acts in
+update public.zones z
+   set zsm_id = (select tu.profile_id from public.tenant_users tu
+                  where tu.tenant_id = z.tenant_id and tu.role = 'ZSM' and tu.status = 'ACTIVE'
+                  order by tu.created_at, tu.profile_id limit 1)
+ where z.zsm_id is null;
 create function pg_temp.quote(p_code text, p_sku text) returns jsonb language sql as $$
   select public.web_price_cart(public.web_storefront_code(p_code),
            jsonb_build_array(jsonb_build_object('sku_code', p_sku, 'qty', 1)))

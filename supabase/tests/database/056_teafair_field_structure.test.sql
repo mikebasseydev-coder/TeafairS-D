@@ -297,13 +297,17 @@ select is((public.web_route_try('10000000-0000-0000-0000-000000000001', null,
             (select id from public.ng_lgas where state_code = 'OY' limit 1))).accountable_id,
   '20000000-0000-0000-0000-000000000002'::uuid, 'web routing in Oyo falls back to Oyo''s ZSM (single-zone Z2)');
 -- assign_ticket: no territory has a TM manager here, so the accountable
--- person is the ZSM of the target territory's zone
-select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+-- person is the ZSM of the target territory's zone. A ZSM routes only within
+-- their own zones (A6 §18.3), so the ticket starts with no territory and Oyo's
+-- ZSM routes it into Oyo.
+update public.support_tickets set territory_id = null where id = '60000000-0000-0000-0000-000000000001';
+select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
 do $$ begin perform public.assign_ticket('d3000000-0000-0000-0000-000000000001',
   '60000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000043'); end $$;
 reset role;
 select is((select accountable_id from public.support_tickets where id = '60000000-0000-0000-0000-000000000001'),
   '20000000-0000-0000-0000-000000000002'::uuid, 'assign_ticket into Oyo: accountable is Oyo''s ZSM (single-zone)');
+update public.support_tickets set territory_id = null where id = '60000000-0000-0000-0000-000000000001';
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 do $$ begin perform public.assign_ticket('d3000000-0000-0000-0000-000000000002',
   '60000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000042'); end $$;

@@ -51,6 +51,13 @@ insert into public.web_referral_codes (tenant_id, code, agent_id, venue_id, crea
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category, sale_category,
                                      nafdac_number, unit_price, wholesale_price) values
   ('10000000-0000-0000-0000-000000000003', 'BC-SHEA', 'Shea butter', 'BrandCo', 'Skin care', 'COSMETICS', 'A7-1234', 2000, 1500);
+-- A6 §17/§18.3: zones.zsm_id is a ZSM's coverage; each tenant's ACTIVE ZSM
+-- covers the zones it acts in
+update public.zones z
+   set zsm_id = (select tu.profile_id from public.tenant_users tu
+                  where tu.tenant_id = z.tenant_id and tu.role = 'ZSM' and tu.status = 'ACTIVE'
+                  order by tu.created_at, tu.profile_id limit 1)
+ where z.zsm_id is null;
 -- a buyer whose WhatsApp number is already verified (token "tok-1")
 insert into public.web_phone_verifications (phone, code_hash, expires_at, verified_at, token_hash, token_expires_at) values
   ('+2348031111111', 'x', now() + interval '10 minutes', now(),

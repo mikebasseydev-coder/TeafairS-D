@@ -255,6 +255,8 @@ update public.tenant_users set status = 'DISABLED' where id = '50000000-0000-000
 select throws_ok($$select public.web_route_order('10000000-0000-0000-0000-000000000001', null, md5('ng_lga:LA:Ikeja')::uuid)$$,
   'P0001', 'We don''t deliver to this area yet.', 'no accountable person refused');
 update public.tenant_users set status = 'ACTIVE' where id in ('50000000-0000-0000-0000-000000000003', '50000000-0000-0000-0000-000000000007');
+-- A6 §18.3: the ZSM manages only zones they cover; restore Lagos coverage
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001' where id = '30000000-0000-0000-0000-000000000001';
 
 -- management RPCs
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');

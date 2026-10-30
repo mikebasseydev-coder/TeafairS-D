@@ -96,6 +96,11 @@ update public.territories set tm_id = '20000000-0000-0000-0000-000000000002'
  where id = '40000000-0000-0000-0000-000000000001';
 update public.territories set tm_id = '20000000-0000-0000-0000-000000000003'
  where id = '40000000-0000-0000-0000-000000000003';
+-- A6 §17/§18.3: zones.zsm_id is the ZSM's coverage
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
+ where id = '30000000-0000-0000-0000-000000000001';
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000009'
+ where id = '30000000-0000-0000-0000-000000000002';
 
 -- D1 routing: each used territory ships web orders from its own REGIONAL
 -- warehouse. Ikoyi has no TM and serves Lagos/Eti-Osa: a ZSM's code, which

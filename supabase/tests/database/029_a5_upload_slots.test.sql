@@ -55,6 +55,13 @@ update public.territories set tm_id = '20000000-0000-0000-0000-000000000002'
 update public.territories set tm_id = '20000000-0000-0000-0000-000000000003'
  where id = '40000000-0000-0000-0000-000000000002';
 
+-- A6 §17/§18.3: zones.zsm_id is a ZSM's coverage; each tenant's ACTIVE ZSM
+-- covers the zones it acts in
+update public.zones z
+   set zsm_id = (select tu.profile_id from public.tenant_users tu
+                  where tu.tenant_id = z.tenant_id and tu.role = 'ZSM' and tu.status = 'ACTIVE'
+                  order by tu.created_at, tu.profile_id limit 1)
+ where z.zsm_id is null;
 -- an ONLINE Ikeja order sold by the DSA (A2-strict: the seller never reads its tickets)
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
                            public_reference, delivery_lga_id, territory_id, fulfilment_warehouse_id) values

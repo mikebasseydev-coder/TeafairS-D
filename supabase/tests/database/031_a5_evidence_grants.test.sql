@@ -38,6 +38,13 @@ update public.territories set tm_id = '20000000-0000-0000-0000-000000000002'
 insert into public.central_products (tenant_id, sku_code, product_name, brand, category, unit_price, wholesale_price, nafdac_number)
 values ('7eaf0000-0000-4000-8000-000000000001', 'TEA-1', 'Black tea', 'Teafair', 'Beverages', 500, 400, 'A1-0007');
 
+-- A6 §17/§18.3: zones.zsm_id is a ZSM's coverage; each tenant's ACTIVE ZSM
+-- covers the zones it acts in
+update public.zones z
+   set zsm_id = (select tu.profile_id from public.tenant_users tu
+                  where tu.tenant_id = z.tenant_id and tu.role = 'ZSM' and tu.status = 'ACTIVE'
+                  order by tu.created_at, tu.profile_id limit 1)
+ where z.zsm_id is null;
 -- one delivered, paid, part-refunded web order with a ticket and two photos
 insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
                            public_reference, delivery_lga_id, territory_id, fulfilment_warehouse_id,

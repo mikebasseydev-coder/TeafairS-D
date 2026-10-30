@@ -58,6 +58,13 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000006',
    'DSM', null, '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000002', 'DISABLED', true);
 
+-- A6 §17/§18.3: zones.zsm_id is a ZSM's coverage; each tenant's ACTIVE ZSM
+-- covers the zones it acts in
+update public.zones z
+   set zsm_id = (select tu.profile_id from public.tenant_users tu
+                  where tu.tenant_id = z.tenant_id and tu.role = 'ZSM' and tu.status = 'ACTIVE'
+                  order by tu.created_at, tu.profile_id limit 1)
+ where z.zsm_id is null;
 -- tickets, inserted directly as postgres
 insert into public.support_tickets (id, tenant_id, public_reference, kind, category, territory_id, accountable_id) values
   ('60000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'TK-AAAAA1', 'PRE_PURCHASE', 'PRODUCT',
