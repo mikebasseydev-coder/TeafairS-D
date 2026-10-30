@@ -802,7 +802,16 @@ Runs after Task 1e and before Task 6.
 - [ ] **Step 4: Run** `049`, `060`, then the green gate. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(db): operational states switched on by a platform admin; app and web orders only where Teafair operates`
 
-Tasks 6 and 7 call `state_app_operational` in `place_trade_order` and `request_monvelo_financing`.
+**Brand opt-in (user, 2026-10-30; binding):**
+- `tenant_operational_states (tenant_id, state_code, app_enabled, web_enabled, decision_id)` with insert-only history.
+- `set_tenant_operational_state(p_idempotency_key, p_state_code, p_app_enabled, p_web_enabled, p_decision_id)`:
+  - the caller is the CSM, or a ZSM while the brand has no CSM;
+  - a `DISTRIBUTION` decision is mandatory (a new decision subject);
+  - opting in requires the platform channel to be on.
+- The helpers `tenant_state_app_operational` and `tenant_state_web_operational` return platform AND tenant. Every enforcement point uses them.
+- `tenant_operational_states` joins the 049 guard (subject `DISTRIBUTION`).
+
+Tasks 6 and 7 call `tenant_state_app_operational` in `place_trade_order` and `request_monvelo_financing`.
 
 ### Task 6: `place_trade_order`
 

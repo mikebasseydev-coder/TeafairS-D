@@ -901,6 +901,7 @@ Warehouse managers named in `warehouses.manager_id` keep working as now.
   - **Monvelo settings** (enabled, opening limit, maximum limit, approval cap): subject `MONVELO_SETTINGS`.
   - **Teafair's fee terms:** recorded by the operator, subject `FEES`.
   - **Catalogue and stock movements:** subjects `CATALOGUE` and `STOCK`.
+  - **The states a brand distributes and lends in** (§18.4): subject `DISTRIBUTION`.
 
   A catalog test proves that every function writing these tables cites a decision or is on a named allowlist. **Exempt (Claude's calls, open to change):**
   - proposing brand terms (a draft);
@@ -1035,9 +1036,9 @@ backdoors"; user, 2026-10-29).
 
 - **Who switches:** a platform admin switches zones on, state by state, as Teafair becomes fully operational there.
 - **What it limits:** the Teafair app and Teafairweb take new orders only in operational states.
-- **Claude's calls (open to change, asked 2026-10-30):**
-  - platform-wide per state;
-  - separate app and web switches;
-  - off by default;
-  - switching off stops new work only, never anything already placed or funded.
+- **Confirmed by the user (2026-10-30):**
+  - **Separate channel switches:** Teafairweb (retail B2C) and the Teafair app (Monvelo B2B trade) are switched independently.
+  - **Platform master and brand opt-in:** the platform switch opens a state geographically. Each brand then chooses which platform-active states it distributes and lends in, through cited tenant settings: `set_tenant_operational_state`, citing a new `DISTRIBUTION` decision, by the CSM, or by a ZSM while the brand has no CSM. New work needs both switches on for its channel.
+  - **In-flight protection:** turning a state off blocks new orders and enrolments only. Existing orders still dispatch, deliver, refund and repay.
+- Off by default at both levels (Claude's call).
 - **Delivery:** plan Task 1f.
