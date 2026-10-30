@@ -1,7 +1,7 @@
 # Addendum A6 to Spec A: Monvelo, inventory financing for neighbourhood shops
 
 **Date:** 2026-10-28
-**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15) and 2026-10-29 (§16, §17)
+**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15), 2026-10-29 (§16, §17) and 2026-10-30 (§7.2, §18)
 **Authority:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) still governs. Its §9 rules hold without exception. Where this addendum changes an earlier decision, it says so.
 
 ## 1. Intent
@@ -996,3 +996,28 @@ backdoors"; user, 2026-10-29).
   - test fixtures updated.
 - **§17.3** is built in Task 3 (CSM approvals).
 - Nothing is pushed or deployed.
+
+## 18. Amendment 2026-10-30: stock tracking and the default freeze
+
+**Status:** user rulings 2026-10-30 (binding). Claude's calls are marked.
+
+### 18.1 Stock is tracked now
+
+- **Reserve:** stock is reserved when an order is placed (web and trade). A financed trade order is reserved at placement, so financing approval finds it already held.
+- **Deduct:** stock is deducted when the order is dispatched (`IN_TRANSIT`).
+- **Release:** a reservation is released if the order is cancelled, or refunded before dispatch.
+- Claude's calls (open to change):
+  - available stock is computed as batch quantity minus open reservations, first-expiry-first-out;
+  - an order that can't be reserved is refused (TF001);
+  - unpaid web orders expire after `web_reservation_hours` (24, set by migration) and are cancelled by a sweep;
+  - a trade order whose financing expires or is cancelled is cancelled too;
+  - goods that come back after dispatch are restored by `record_order_return`, citing the order.
+- **Every stock change has evidence:** a contact-report decision (receipts, transfers, adjustments) or the order itself (sale, return). The zero-backdoor guard (§16.4) checks both kinds.
+
+### 18.2 The default freeze is hybrid
+
+- **Platform hard freeze:** a shop with an unresolved Monvelo default with any brand can get no new Monvelo credit for any brand on the platform until it is cleared. No message names another tenant.
+- **The brand's recovery rules:** each tenant sets, through cited `MONVELO_SETTINGS` decisions:
+  - `default_cure_days`: how long after clearing before its brands lend again (default 0);
+  - `post_default_limit_bps`: the limit after a cure, as a share of the opening limit (default 10000, the earlier "back to the opening limit").
+- **Delivery:** plan Task 6b (stock) and Task 7 (freeze and cure rules).

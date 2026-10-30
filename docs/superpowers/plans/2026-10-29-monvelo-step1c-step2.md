@@ -721,6 +721,66 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
 - [ ] **Step 4: Run the file, then the green gate.** Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(db): place_trade_order for ZSA, ASA and TM at wholesale in whole packs (A6 §6.1)`
 
+### Task 6b: Stock reservation and deduction (user, 2026-10-30)
+
+**Ruling (user, binding):** inventory is tracked now, not in Spec C.
+- Stock is **reserved** when an order is placed.
+- Stock is **deducted** when the order is dispatched (`mark_order_dispatched`, status `IN_TRANSIT`).
+- A reservation is **released** if the order is cancelled or fails before delivery.
+
+**Files:**
+- Create:
+  - `supabase/migrations/20261029130150_stock_reservations.sql`
+  - `supabase/tests/database/058_stock_reservations.test.sql`
+- Modify:
+  - `001` (`tables_are`);
+  - `049` (the zero-backdoor guard gains the operational writers below);
+  - any pgTAP or integration fixture that places orders against warehouses with no stock (they now need stock).
+
+**Interfaces (Claude's calls, open to change):**
+- **Available stock** = `inventory_batches.quantity − Σ open reservations` on that batch. "Quantity available" is derived, never a second stored number that can drift.
+- **Table `stock_reservations`:**
+  - `id`, `tenant_id`, `order_id`, `order_item_id`, `warehouse_id`, `batch_id`, `sku_code`;
+  - `quantity numeric(14,3) check (> 0)`;
+  - `status text check in ('RESERVED','CONSUMED','RELEASED')`;
+  - `expires_at timestamptz null`, `created_at`, `closed_at`, `close_reason text`;
+  - composite FKs to orders, order_items, warehouses, inventory_batches and central_products;
+  - indexed on `(tenant_id, order_id)` and `(batch_id) where status = 'RESERVED'`.
+  - Rows are never deleted: one trigger allows only RESERVED → CONSUMED or RESERVED → RELEASED.
+  - SELECT for tenant staff via `my_tenant_ids()`; no API write grant.
+- **Reserve at placement:**
+  - `place_web_order` (the live web checkout RPC) and `place_trade_order` (Task 6) reserve every line from the order's `fulfilment_warehouse_id`, first-expiry-first-out across that warehouse's batches of the SKU, inside the placing transaction.
+  - Not enough available stock refuses the order with TF001 `'insufficient stock'`, with `detail` `{sku_code, available, requested}`, and writes nothing.
+  - **A financed trade order is reserved at placement too.** Financing approval (Task 7) does not reserve again; it finds the reservation in place.
+- **Deduct at dispatch:** `mark_order_dispatched`, recreated from its live body, then:
+  - moves the order's RESERVED rows to CONSUMED;
+  - subtracts each from `inventory_batches.quantity`;
+  - writes one `stock_movements` row per batch with `kind 'SALE_DISPATCH'`, `order_id` set and `decision_id` null.
+  - `stock_movements` gains `order_id uuid null` (composite FK) and the kinds `SALE_DISPATCH` and `ORDER_RETURN`, with `check ((kind in ('SALE_DISPATCH','ORDER_RETURN')) = (order_id is not null and decision_id is null))`. The CSM and LM kinds keep requiring `decision_id`.
+  - An order dispatched with no open reservation (one placed before this migration) is refused with P0001 `'this order has no stock reserved; reserve it first'`. There is no silent dispatch without stock.
+- **Release before delivery:**
+  - an order moving to `CANCELLED`, or to `REFUNDED` before dispatch, releases its RESERVED rows (`close_reason` = the new status). The hook is in `apply_paystack_refund` and the new cancel paths below;
+  - **unpaid web orders expire:** a reservation for a `ONLINE` order gets `expires_at` = placement + `web_reservation_hours` (new `tenant_settings` column, default 24, set by migration only). The new cron job `stock-reservation-sweep` (every 15 minutes, pure SQL, `p_source => 'CRON'`) cancels PENDING ONLINE orders whose reservations have expired, and releases them;
+  - **trade orders:** when a financing becomes EXPIRED or CANCELLED (Tasks 7–8), the same transaction cancels the PENDING trade order and releases its stock. The trade order then reads CANCELLED, which supersedes the earlier call 13. A cash trade order still PENDING at the end of its supply day is cancelled and released by the same sweep.
+- **Failed after dispatch:** goods that come back (failed delivery, or a Monvelo `REFUND_DUE` in Step 4) are restored by the LM or CSM with `record_order_return(p_idempotency_key uuid, p_order_id uuid, p_lines jsonb)`.
+  - The RPC writes an `ORDER_RETURN` movement that cites the order, not a decision, and adds the quantity back to the batch.
+  - The total returned per line can never exceed what was dispatched.
+- **Zero-backdoor guard (049):** the operational writers `place_web_order`, `place_trade_order`, `mark_order_dispatched`, `apply_paystack_refund`, `record_order_return` and the sweep function are allowlisted, because their evidence is the order. They may write only `inventory_batches.quantity`, `stock_reservations` and `stock_movements` rows of the two order kinds; the guard checks this. Every other writer still cites a decision.
+
+- [ ] **Step 1: Write the failing tests** in `058`:
+  - placing a web order and a trade order reserves FEFO across two batches, and available stock drops while `quantity` does not;
+  - placing beyond available stock is TF001 with detail, and no order or reservation row is written;
+  - dispatch consumes the reservations, reduces `quantity` and writes `SALE_DISPATCH` movements; dispatching an order with no reservation is P0001;
+  - a refund before dispatch releases the reservations; after dispatch it does not;
+  - the sweep cancels an expired unpaid ONLINE order and releases it, and leaves a paid one alone;
+  - `record_order_return` restores stock, refuses more than was dispatched, and is refused to a `TENANT_ADMIN` and a ZSM;
+  - reservation rows can't be deleted, and a CONSUMED row can't go back;
+  - the 049 guard still passes, and fails on a planted operational writer that touches `central_products`.
+- [ ] **Step 2: Run** `058`. Expected: FAIL.
+- [ ] **Step 3: Write the migration** (recreate `place_web_order`, `place_trade_order`, `mark_order_dispatched` and `apply_paystack_refund` from their live definitions) and update the fixtures.
+- [ ] **Step 4: Run** `049`, `058`, then the green gate. Expected: PASS.
+- [ ] **Step 5: Commit.** `feat(db): stock reserved at order placement, deducted at dispatch, released on cancel (user ruling 2026-10-30)`
+
 ### Task 7: Financings, lines, shop limits, request, TM approval and cancel
 
 **Files:**
@@ -804,7 +864,8 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
     9. Today's ISO weekday is an active supply day for the area: P0001 `'today is not a supply day for this area'`.
     10. For each brand in the order, in `brand_key` order:
         - `monvelo_terms_at(tenant, brand, today)` exists, else P0001 `'<Brand> has no approved Monvelo terms'`;
-        - no DEFAULTED financing of the shop carries the brand, and its limit is not FROZEN, else P0001 `'the shop cannot get new <Brand> credit until its overdue financing is cleared'`.
+        - **Platform hard freeze (user, 2026-10-30; binding):** if the shop has **any** financing in `DEFAULTED_WITH_LATE_CHARGE`, with any tenant and any brand, P0001 `'the shop has an overdue Monvelo financing; no new credit on the platform until it is cleared'`. The check reads across tenants inside this SECURITY DEFINER function, and the message names no other tenant;
+        - **the brand's cure rule:** after the shop clears its default (`REPAID_LATE`), each tenant's `default_cure_days` must have passed since the clearing date for that tenant's brands, else P0001 `'<Brand> credit resumes on <date>'`. Its limit restarts at `post_default_limit_bps` of `opening_limit`.
 
     Then, in one transaction:
     - insert the financing (`REQUESTED`, `principal = order.total_amount`, `supply_date = today`, `approval_required` = whether any brand's exposure + amount > `limit_amount`);
@@ -841,7 +902,11 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
   - Teafair is the platform provider and imposes no cash-order or trading-history threshold. There is no `min_cash_orders` and no `monvelo_cash_orders`.
   - A shop's credit is governed by the tenant's own configured settings: `opening_limit`, `max_limit`, `approval_cap`, and the new `limit_growth_bps`.
   - `limit_growth_bps` is a new `monvelo_tenant_settings` column: `integer not null default 0`, `check (0..10000)`. It is the rise after a financing is repaid within the window, capped by `max_limit`. Task 7 adds it to `set_monvelo_tenant_settings` as `p_limit_growth_bps integer default null` (null keeps the current value). As with every setting, it cites a `MONVELO_SETTINGS` decision.
-  - The platform keeps only integrity checks: enrolment with consent, a verified owner phone, a GPS pin, approved brand terms, a supply day, and the freeze after a default.
+  - The platform keeps only integrity checks: enrolment with consent, a verified owner phone, a GPS pin, approved brand terms, a supply day, and the **platform hard freeze**: an unresolved default with any brand blocks new credit for every brand (user, 2026-10-30).
+  - **The brand's recovery rules (user, 2026-10-30):** two more `monvelo_tenant_settings` columns, set like the others through `set_monvelo_tenant_settings` with a cited `MONVELO_SETTINGS` decision:
+    - `default_cure_days integer not null default 0 check (0..365)`: how long after a default is cleared before that brand's credit resumes;
+    - `post_default_limit_bps integer not null default 10000 check (0..10000)`: the limit after a cure, as a share of `opening_limit`. The default of 10000 is A6's "drops back to the opening limit".
+    - Task 7 adds `p_default_cure_days` and `p_post_default_limit_bps` (both `default null`, keeping the current value) next to `p_limit_growth_bps`.
 
 - [ ] **Step 1: Write the failing tests** in `052`.
   - **Fixtures:**
@@ -870,7 +935,8 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
     - an owner with no verified phone;
     - not a supply day;
     - an order with Purerigin + Tiger, refused naming `Tiger` and writing no financing row (Review Focus 4);
-    - a DEFAULTED Purerigin financing, inserted as postgres via the whitelist path.
+    - a DEFAULTED Purerigin financing, inserted as postgres via the whitelist path, blocks a request for **another tenant's brand** at the same shop (platform hard freeze), with a message that names no other tenant;
+    - after it is REPAID_LATE, a tenant with `default_cure_days` 7 refuses until 7 days have passed, and a tenant with 0 allows it at once, at `post_default_limit_bps` of the opening limit.
   - **The preferred window:**
     - with the shop's preferred agent ACTIVE and pledged 150000 for today: `preferred_window_ends_at` ≈ now() + 10 min;
     - with no pledge: null.
