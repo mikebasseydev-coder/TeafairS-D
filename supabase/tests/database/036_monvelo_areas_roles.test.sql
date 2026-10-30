@@ -31,9 +31,9 @@ update public.profiles set platform_role = 'MONVELO_OPERATOR'
 update public.profiles set platform_role = 'MONVELO_FINANCE'
  where id = '20000000-0000-0000-0000-000000000010';
 
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos'),
-  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA'),
+  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja'),
@@ -44,7 +44,7 @@ insert into public.territories (id, tenant_id, zone_id, territory_name) values
 
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE', true),
+   'ZSM', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
    'TM', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
@@ -55,6 +55,10 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
    'DSM', null, '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000002', 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000009',
    'TM', null, '40000000-0000-0000-0000-000000000002', null, 'ACTIVE', true);
+
+-- A6 §17: a ZSM's coverage is zones.zsm_id, not a zone on the membership
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
+ where id = '30000000-0000-0000-0000-000000000001';
 
 create function pg_temp.act_as(p_user uuid, p_tenant uuid) returns void language sql as $$
   select set_config('role', 'authenticated', true),

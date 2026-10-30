@@ -64,14 +64,14 @@ select ok(position('PLACEHOLDER' in (select content from public.refund_policies 
 -- ══ T2: WhatsApp verification and consent on web orders (§3.3, §3.5, §3.6) ═
 -- fixtures: a ZSM-held house code on the TEAFAIR tenant, deliverable in Ikeja
 insert into auth.users (id, phone) values ('a5000000-0000-0000-0000-000000000001', '2348000000091');
-insert into public.zones (id, tenant_id, zone_name)
-select 'a5000000-0000-0000-0000-000000000010', t.id, 'Lagos' from public.tenants t where t.code = 'TEAFAIR';
+insert into public.zones (id, tenant_id, zone_name, state_code)
+select 'a5000000-0000-0000-0000-000000000010', t.id, 'Lagos', 'LA' from public.tenants t where t.code = 'TEAFAIR';
 insert into public.territories (id, tenant_id, zone_id, territory_name)
 select 'a5000000-0000-0000-0000-000000000011', t.id, 'a5000000-0000-0000-0000-000000000010', 'Ikeja'
   from public.tenants t where t.code = 'TEAFAIR';
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, status, is_primary)
 select 'a5000000-0000-0000-0000-000000000012', t.id, 'a5000000-0000-0000-0000-000000000001',
-       'ZSM', 'a5000000-0000-0000-0000-000000000010', 'ACTIVE', true
+       'ZSM', null, 'ACTIVE', true
   from public.tenants t where t.code = 'TEAFAIR';
 insert into public.warehouses (id, tenant_id, name, kind, territory_id)
 select 'a5000000-0000-0000-0000-000000000013', t.id, 'REG-IKEJA', 'REGIONAL', 'a5000000-0000-0000-0000-000000000011'

@@ -20,10 +20,10 @@ insert into auth.users (id, phone, phone_confirmed_at) values
   ('20000000-0000-0000-0000-000000000007', '2348000000007', now()),
   ('20000000-0000-0000-0000-000000000008', '2348000000008', null);
 
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos'),
-  ('30000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000001', 'Kano'),
-  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA'),
+  ('30000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000001', 'Kano', 'KN'),
+  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja'),
@@ -34,7 +34,7 @@ insert into public.territories (id, tenant_id, zone_id, territory_name) values
 
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE', true),
+   'ZSM', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
    'TM', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000022', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
@@ -43,6 +43,10 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
    'DSM', null, '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000002', 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
    'DSA', null, '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000007', 'ACTIVE', true);
+
+-- A6 §17: a ZSM's coverage is zones.zsm_id, not a zone on the membership
+update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001'
+ where id = '30000000-0000-0000-0000-000000000001';
 
 create function pg_temp.act_as(p_user uuid, p_tenant uuid) returns void language sql as $$
   select set_config('role', 'authenticated', true),
@@ -91,11 +95,11 @@ select ok(not has_function_privilege('authenticated', 'public.escalate_stale_pic
 -- ── upsert_zone: actor and tenant come from the JWT ─────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select lives_ok(
-  $$select public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ibadan', null)$$,
+  $$select public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ondo', null)$$,
   'a ZSM can create a zone');
 reset role;
 select is(
-  (select tenant_id from public.zones where zone_name = 'Ibadan'),
+  (select tenant_id from public.zones where zone_name = 'Ondo'),
   '10000000-0000-0000-0000-000000000001'::uuid, 'the zone lands in the tenant from the claim');
 select is(
   (select count(*)::int from public.audit_logs
@@ -107,11 +111,11 @@ select is(
 -- ── idempotency (§3.3, §7.2) ────────────────────────────────────────────
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select is(
-  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ibadan', null),
-  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ibadan', null),
+  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ondo', null),
+  public.upsert_zone('aaaaaaaa-0000-0000-0000-000000000001', null, 'Ondo', null),
   'a replayed key returns the original response');
 reset role;
-select is((select count(*)::int from public.zones where zone_name = 'Ibadan'), 1,
+select is((select count(*)::int from public.zones where zone_name = 'Ondo'), 1,
   'a replayed key does not write twice');
 select is((select count(*)::int from public.audit_logs where idempotency_key = 'aaaaaaaa-0000-0000-0000-000000000001'), 1,
   'a replayed key does not audit twice');

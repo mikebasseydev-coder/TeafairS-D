@@ -29,8 +29,8 @@ insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000004', '2348000000004'),
   ('20000000-0000-0000-0000-000000000005', '2348000000005'),
   ('20000000-0000-0000-0000-000000000006', '2348000000006');
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja'),
@@ -41,7 +41,7 @@ insert into public.warehouses (id, tenant_id, name, kind, territory_id) values
    '40000000-0000-0000-0000-000000000001');
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE', true),
+   'ZSM', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000002', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000002',
    'TM', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000003', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000003',

@@ -31,9 +31,9 @@ insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000004', '2348000000004'),
   ('20000000-0000-0000-0000-000000000009', '2348000000009');
 
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos'),
-  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA'),
+  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja'),
@@ -45,11 +45,11 @@ insert into public.warehouses (id, tenant_id, name, kind, territory_id) values
 
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'ZSM', '30000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
+   'ZSM', null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
    'POS_AGENT', null, '40000000-0000-0000-0000-000000000001', 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000009',
-   'ZSM', '30000000-0000-0000-0000-000000000002', null, 'ACTIVE', true);
+   'ZSM', null, null, 'ACTIVE', true);
 
 insert into public.web_pos_partners (id, tenant_id, business_name, pos_network, contact_phone,
                                      paystack_subaccount_code, status, approved_by, approved_at) values

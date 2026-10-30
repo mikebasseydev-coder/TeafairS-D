@@ -14,14 +14,14 @@ insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000002', '2348000000002'),
   ('20000000-0000-0000-0000-000000000003', '2348000000003'),
   ('20000000-0000-0000-0000-000000000004', '2348000000004');
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000004', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000004', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000004',
    '30000000-0000-0000-0000-000000000004', 'Ikeja');
 insert into public.tenant_users (tenant_id, profile_id, role, zone_id, territory_id, status, is_primary) values
   ('10000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000001', 'ZSM',
-   '30000000-0000-0000-0000-000000000004', null, 'ACTIVE', true);
+   null, null, 'ACTIVE', true);
 insert into public.tenant_users (tenant_id, profile_id, role, territory_id, reports_to_id, status, is_primary)
 select '10000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000002', 'DSA',
        '40000000-0000-0000-0000-000000000004', tu.id, 'ACTIVE', true

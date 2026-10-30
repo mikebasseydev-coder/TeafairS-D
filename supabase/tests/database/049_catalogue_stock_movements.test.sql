@@ -15,9 +15,9 @@ insert into public.tenants (id, name, code) values
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '234800000' || lpad(n::text, 4, '0'), now()
   from generate_series(1, 8) n;
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos'),
-  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos', 'LA'),
+  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja');
@@ -25,7 +25,7 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000001',
    'CLIENT_SERVICE_MANAGER', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000002', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE', true),
+   'ZSM', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000003', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000003',
    'LOGISTICS_MANAGER', null, null, '50000000-0000-0000-0000-000000000001', 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000004', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000004',
@@ -35,7 +35,7 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000006', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000006',
    'DSA', null, '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000005', 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000007',
-   'ZSM', '30000000-0000-0000-0000-000000000002', null, null, 'ACTIVE', true),
+   'ZSM', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000008',
    'CLIENT_SERVICE_MANAGER', null, null, null, 'ACTIVE', true);
 insert into public.warehouses (id, tenant_id, name, kind, territory_id) values

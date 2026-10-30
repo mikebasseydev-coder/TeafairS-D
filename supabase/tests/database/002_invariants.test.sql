@@ -49,20 +49,20 @@ select throws_ok(
   'P0001', 'a phone number is required to create a Teafair account',
   'a phone in client-written user metadata is ignored (audit H1)');
 
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos'),
-  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA'),
+  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja');
 
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status) values
   ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001',
-   '20000000-0000-0000-0000-000000000001', 'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE'),
+   '20000000-0000-0000-0000-000000000001', 'ZSM', null, null, null, 'ACTIVE'),
   ('50000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000002', 'TM', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE'),
   ('50000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000002',
-   '20000000-0000-0000-0000-000000000004', 'ZSM', '30000000-0000-0000-0000-000000000002', null, null, 'ACTIVE');
+   '20000000-0000-0000-0000-000000000004', 'ZSM', null, null, null, 'ACTIVE');
 
 -- ── tenancy: tenants are never deleted (decision 6) ────────────────────
 select throws_ok(
@@ -75,12 +75,13 @@ select throws_ok(
 -- ── tenant_users scope shape (§5.2) ─────────────────────────────────────
 select throws_ok(
   $$insert into public.tenant_users (tenant_id, profile_id, role, zone_id)
-    values ('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002', 'ZSM', '30000000-0000-0000-0000-000000000001')$$,
+    values ('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002', 'ZSM', null)$$,
   '23505', null, 'one membership per (tenant, profile)');
 select throws_ok(
-  $$insert into public.tenant_users (tenant_id, profile_id, role)
-    values ('10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', 'ZSM')$$,
-  '23514', null, 'a ZSM must be anchored to a zone');
+  $$insert into public.tenant_users (tenant_id, profile_id, role, zone_id)
+    values ('10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', 'ZSM',
+            '30000000-0000-0000-0000-000000000002')$$,
+  '23514', null, 'a ZSM membership carries no zone (A6 §17: zones.zsm_id holds coverage)');
 select throws_ok(
   $$insert into public.tenant_users (tenant_id, profile_id, role, territory_id, reports_to_id)
     values ('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003', 'DSA',

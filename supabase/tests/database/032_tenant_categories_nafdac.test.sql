@@ -11,11 +11,11 @@ insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000003', 'Brand Co Cosmetics', 'BRANDCO');
 insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000001', '2348000000001');
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003', 'Lagos', 'LA');
 insert into public.tenant_users (tenant_id, profile_id, role, zone_id, status, is_primary) values
   ('10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'ZSM',
-   '30000000-0000-0000-0000-000000000003', 'ACTIVE', true);
+   null, 'ACTIVE', true);
 
 create function pg_temp.categories(p_code text) returns text[] language sql as $$
   select array_agg(a.category order by a.category)

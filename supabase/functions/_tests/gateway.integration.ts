@@ -203,7 +203,7 @@ Deno.test({
     await must(admin.from("tenants").insert({ id: ids.tenant, name: `IT ${run}`, code: `IT_${run.toUpperCase().replace(/[^A-Z0-9]/g, "")}`.slice(0, 16) }));
     // A6 15.5: the tenant rate drives every POS-link split (0 by default); set it once so no test is order-dependent
     await must(admin.from("tenant_settings").upsert({ tenant_id: ids.tenant, web_agent_commission_bps: 150 }));
-    await must(admin.from("zones").insert({ id: ids.zone, tenant_id: ids.tenant, zone_name: "Lagos" }));
+    await must(admin.from("zones").insert({ id: ids.zone, tenant_id: ids.tenant, zone_name: "Lagos", state_code: "LA" }));
     await must(admin.from("territories").insert({ id: ids.territory, tenant_id: ids.tenant, zone_id: ids.zone, territory_name: "Ikeja" }));
     await must(admin.from("tenant_users").insert([
       { id: ids.tm, tenant_id: ids.tenant, profile_id: users.tm.id, role: "TM", territory_id: ids.territory, status: "ACTIVE", is_primary: true },
@@ -242,7 +242,13 @@ Deno.test({
     // codeless orders go to TEAFAIR: a per-run territory with an ACTIVE TM and a
     // regional warehouse, a per-run product, and the Ikeja coverage (upserted:
     // the local database keeps it between runs, and it is unique per LGA)
-    await must(admin.from("zones").insert({ id: ids.tfZone, tenant_id: TEAFAIR, zone_name: `IT Lagos ${run}` }));
+    // A6 17: zones are states, one per state per tenant; the local database keeps
+    // TEAFAIR's zones between runs, so take a state TEAFAIR has no zone in yet
+    const tfTaken = new Set(((await must(admin.from("zones").select("state_code").eq("tenant_id", TEAFAIR))) as Array<{ state_code: string }>).map((z) => z.state_code));
+    const tfState = ((await must(admin.from("ng_states").select("code, name").order("code"))) as Array<{ code: string; name: string }>)
+      .find((st) => !tfTaken.has(st.code));
+    if (!tfState) throw new Error("TEAFAIR has a zone in every state: reset the local database");
+    await must(admin.from("zones").insert({ id: ids.tfZone, tenant_id: TEAFAIR, zone_name: tfState.name, state_code: tfState.code }));
     await must(admin.from("territories").insert({ id: ids.tfTerritory, tenant_id: TEAFAIR, zone_id: ids.tfZone, territory_name: `IT Ikeja ${run}` }));
     await must(admin.from("tenant_users").insert({
       tenant_id: TEAFAIR, profile_id: users.tfTm.id, role: "TM", territory_id: ids.tfTerritory, status: "ACTIVE", is_primary: true,
@@ -257,8 +263,10 @@ Deno.test({
     await must(admin.from("tenant_users").insert([
       { tenant_id: TEAFAIR, profile_id: users.tfDsa.id, role: "DSA", territory_id: ids.tfTerritory, reports_to_id: tfDsmRow.id, status: "ACTIVE", is_primary: true },
       { tenant_id: TEAFAIR, profile_id: users.tfWm.id, role: "ASM", territory_id: ids.tfTerritory, reports_to_id: tfTmRow.id, status: "ACTIVE", is_primary: true },
-      { tenant_id: TEAFAIR, profile_id: users.tfZsm.id, role: "ZSM", zone_id: ids.tfZone, status: "ACTIVE", is_primary: true },
+      { tenant_id: TEAFAIR, profile_id: users.tfZsm.id, role: "ZSM", status: "ACTIVE", is_primary: true },
     ]));
+    // A6 17: a ZSM's coverage is zones.zsm_id, not a zone on the membership
+    await must(admin.from("zones").update({ zsm_id: users.tfZsm.id }).eq("id", ids.tfZone));
     await must(admin.from("territories").update({ tm_id: users.tfTm.id, web_fulfilment_warehouse_id: ids.tfWarehouse }).eq("id", ids.tfTerritory));
     await must(admin.from("central_products").insert({
       tenant_id: TEAFAIR, sku_code: TF_SKU, product_name: `IT Tea ${run}`, brand: "Teafair", category: "Beverages", unit_price: 1500, wholesale_price: 1200, nafdac_number: "A1-0007",
@@ -1104,7 +1112,7 @@ Deno.test({
     const zsaUser = await createUser(14);
     await must(admin.from("monvelo_tenant_settings").upsert({ tenant_id: ids.tenant, enabled: true }));
     const [zsm] = (await must(admin.from("tenant_users").insert(
-      { tenant_id: ids.tenant, profile_id: zsmUser.id, role: "ZSM", zone_id: ids.zone, status: "ACTIVE", is_primary: true },
+      { tenant_id: ids.tenant, profile_id: zsmUser.id, role: "ZSM", status: "ACTIVE", is_primary: true },
     ).select("id"))) ?? [];
     await must(admin.from("tenant_users").insert(
       { tenant_id: ids.tenant, profile_id: zsaUser.id, role: "ZSA", zone_id: ids.zone, reports_to_id: zsm.id, status: "ACTIVE", is_primary: true },
@@ -1157,7 +1165,7 @@ Deno.test({
     const zsaUser = await createUser(16);
     await must(admin.from("monvelo_tenant_settings").upsert({ tenant_id: ids.tenant, enabled: true }));
     const [zsm] = (await must(admin.from("tenant_users").insert(
-      { tenant_id: ids.tenant, profile_id: zsmUser.id, role: "ZSM", zone_id: ids.zone, status: "ACTIVE", is_primary: true },
+      { tenant_id: ids.tenant, profile_id: zsmUser.id, role: "ZSM", status: "ACTIVE", is_primary: true },
     ).select("id"))) ?? [];
     await must(admin.from("tenant_users").insert(
       { tenant_id: ids.tenant, profile_id: zsaUser.id, role: "ZSA", zone_id: ids.zone, reports_to_id: zsm.id, status: "ACTIVE", is_primary: true },

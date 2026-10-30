@@ -12,11 +12,11 @@ insert into public.tenants (id, name, code) values
 insert into auth.users (id, phone, phone_confirmed_at) values
   ('20000000-0000-0000-0000-000000000001', '2348000000001', now()),
   ('20000000-0000-0000-0000-000000000002', '2348000000002', now());
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA');
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE', true),
+   'ZSM', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
    'ZSA', '30000000-0000-0000-0000-000000000001', null, '50000000-0000-0000-0000-000000000001', 'ACTIVE', true);
 insert into public.monvelo_tenant_settings (tenant_id, enabled) values

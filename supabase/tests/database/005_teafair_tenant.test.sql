@@ -19,15 +19,15 @@ insert into public.tenants (id, name, code) values
 insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000001', '2348000000001'),
   ('20000000-0000-0000-0000-000000000002', '2348000000002');
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos'),
-  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos', 'LA'),
+  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001',
    '30000000-0000-0000-0000-000000000002', 'Ikeja');
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status) values
   ('50000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001',
-   '20000000-0000-0000-0000-000000000001', 'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE'),
+   '20000000-0000-0000-0000-000000000001', 'ZSM', null, null, null, 'ACTIVE'),
   ('50000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001',
    '20000000-0000-0000-0000-000000000002', 'TM', null, '40000000-0000-0000-0000-000000000002', null, 'ACTIVE'),
   ('50000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001',
@@ -61,7 +61,7 @@ select lives_ok(
   $$select public.set_brand_approval_policy('bbbbbbbb-0000-0000-0000-000000000001', 'Teafair', 'ASM')$$,
   'a Teafair ZSM sets brand policy for Teafair house brands');
 select lives_ok(
-  $$select public.upsert_zone('bbbbbbbb-0000-0000-0000-000000000002', null, 'Abuja', null)$$,
+  $$select public.upsert_zone('bbbbbbbb-0000-0000-0000-000000000002', null, 'Ogun', null)$$,
   'a Teafair ZSM manages Teafair''s own zones');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
@@ -73,7 +73,7 @@ select is((select count(*)::int from public.audit_logs
 
 reset role;
 select is(
-  (select tenant_id from public.zones where zone_name = 'Abuja'),
+  (select tenant_id from public.zones where zone_name = 'Ogun'),
   '7eaf0000-0000-4000-8000-000000000001'::uuid, 'Teafair''s zone lands in the Teafair tenant');
 
 select * from finish();

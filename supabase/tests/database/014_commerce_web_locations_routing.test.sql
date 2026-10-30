@@ -72,8 +72,8 @@ insert into public.tenant_settings (tenant_id) values
 insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000001', '2348000000001'),
   ('20000000-0000-0000-0000-000000000002', '2348000000002');
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Ikeja'),
   ('40000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', 'Epe');
@@ -83,8 +83,8 @@ insert into public.warehouses (id, tenant_id, name, kind, territory_id) values
   ('70000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001', 'CENTRAL-1', 'CENTRAL', null),
   ('70000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000002', 'T2-CENTRAL', 'CENTRAL', null);
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, status, is_primary) values
-  ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'ZSM', '30000000-0000-0000-0000-000000000001', 'ACTIVE', true),
-  ('50000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002', 'ZSM', '30000000-0000-0000-0000-000000000001', 'DISABLED', false);
+  ('50000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'ZSM', null, 'ACTIVE', true),
+  ('50000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002', 'ZSM', null, 'DISABLED', false);
 
 -- coverage
 select lives_ok($$insert into public.territory_coverage (tenant_id, state_code, lga_id, territory_id)
@@ -302,8 +302,8 @@ select ok(has_function_privilege('authenticated', 'public.set_territory_coverage
 -- one active product. T1: an ACTIVE partner with a code on its terminal.
 insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000011', '2348000000011');
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000011', '7eaf0000-0000-4000-8000-000000000001', 'TF Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000011', '7eaf0000-0000-4000-8000-000000000001', 'TF Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000011', '7eaf0000-0000-4000-8000-000000000001',
    '30000000-0000-0000-0000-000000000011', 'TF Ikeja');

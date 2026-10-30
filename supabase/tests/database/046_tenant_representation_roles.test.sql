@@ -20,9 +20,9 @@ update public.profiles set platform_role = 'PLATFORM_SUPER_ADMIN'
 update public.profiles set platform_role = 'MONVELO_OPERATOR'
  where id = '20000000-0000-0000-0000-000000000007';
 
-insert into public.zones (id, tenant_id, zone_name) values
-  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos'),
-  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos');
+insert into public.zones (id, tenant_id, zone_name, state_code) values
+  ('30000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'Lagos', 'LA'),
+  ('30000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'Lagos', 'LA');
 insert into public.territories (id, tenant_id, zone_id, territory_name) values
   ('40000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001',
    '30000000-0000-0000-0000-000000000001', 'Ikeja'),
@@ -33,11 +33,11 @@ insert into public.areas (id, tenant_id, territory_id, area_name) values
   ('60000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000002', 'Allen');
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000002', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'ZSM', '30000000-0000-0000-0000-000000000001', null, null, 'ACTIVE', true),
+   'ZSM', null, null, null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000006', '7eaf0000-0000-4000-8000-000000000001', '20000000-0000-0000-0000-000000000006',
    'TM', null, '40000000-0000-0000-0000-000000000001', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000008',
-   'ZSM', '30000000-0000-0000-0000-000000000002', null, null, 'ACTIVE', true);
+   'ZSM', null, null, null, 'ACTIVE', true);
 insert into public.warehouses (id, tenant_id, name, kind, territory_id, manager_id) values
   ('70000000-0000-0000-0000-000000000001', '7eaf0000-0000-4000-8000-000000000001', 'REG-IKEJA', 'REGIONAL',
    '40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000006'),

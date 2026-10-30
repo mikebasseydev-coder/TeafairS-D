@@ -729,6 +729,49 @@ Migration `20261028120600_monvelo_shop_enrolment`, function `monvelo-shop-consen
   is dropped in the RPC and reaches the street agent through a notification
   (Step 6).
 
+### Teafair field structure (A6 §17)
+
+Migration `20261029125000_teafair_field_structure`, pgTAP 056, local only.
+User rulings 2026-10-29: the ZSM is a Teafair official overseeing several
+tenants; zones are states; one ZSM can cover several zones.
+
+- **Zones are states.** `zones.state_code` (NOT NULL, FK `ng_states`,
+  `unique (tenant_id, state_code)`); `zone_name` is a display name. The
+  migration backfills by exact state name (case-insensitive) through the
+  internal `zone_state_backfill()` and **fails, naming each zone, on any zone
+  it cannot match** (or two zones of one tenant on one state); it never
+  guesses. **Pre-push:** on the remote, rename every zone to its state's
+  `ng_states.name` first:
+  `select z.tenant_id, z.id, z.zone_name from zones z left join ng_states s on lower(s.name) = lower(btrim(z.zone_name)) where s.code is null;`
+  must return 0 rows. `upsert_zone` keeps its signature: a new zone's name
+  must be a state name (P0001 otherwise) and gives its `state_code`; an edit
+  renames freely and keeps the state.
+- **Coverage is `zones.zsm_id`.** A ZSM covers every zone where they are
+  `zsm_id`, in each tenant where they hold an ACTIVE ZSM membership. A ZSM's
+  `tenant_users` row carries no zone (CHECK `tenant_users_zsm_no_zone`, which
+  replaces `tenant_users_zsm_has_zone`). The backfill made each ACTIVE ZSM
+  the `zsm_id` of their old zone where it had none (earliest membership
+  first; others are listed in a NOTICE), then cleared `zone_id`. A platform
+  administrator sets `zones.zsm_id` (no RPC; the `zones_check_manager`
+  trigger still requires an ACTIVE ZSM of the tenant).
+- **Helpers.** `zsm_zone_ids(tenant, profile)` (internal, SECURITY DEFINER)
+  and `my_zsm_zone_ids()` (the caller's zones in the active tenant,
+  `authenticated`, for policies). `chat_staff_zone_ids(tenant, profile)`
+  (internal) gives a staff member's zones; `chat_staff_zone` now returns a
+  ZSM's zone only while they cover exactly one.
+- **Recreated (signatures and grants unchanged):** `invite_tenant_user` (the
+  territory must be in one of my zones; a ZSA takes the zone of the territory
+  named in the invite, or the ZSM's only zone; a ZSM covering several zones
+  must name a territory, P0001; the ZSA's manager must cover that zone),
+  `upsert_territory`, `upsert_area`, `upsert_zone`, `hide_chat_message`,
+  `my_chat_channel_ids` (a multi-zone ZSM is in every ZONE channel and
+  territory room of their zones) and `get_or_create_direct_channel` (zone
+  rules compare zone sets). `assign_ticket` and `web_route_try` already route
+  by the object's zone through `zones.zsm_id` and are unchanged.
+  `start_monvelo_consent` checks the ZSA's own `zone_id` and is unchanged.
+- **The field force is Teafair staff** (§17.2): only a platform administrator
+  appoints a ZSM; ZSMs invite TM, ASM, ZSA and ASA within their zones.
+
 ## Layout
 
 ```
