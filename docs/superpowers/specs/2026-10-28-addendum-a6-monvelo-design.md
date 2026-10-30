@@ -386,12 +386,14 @@ Scheduled work (pg_cron, Africa/Lagos dates):
    settled financing is refunded.
 5. A claim also checks the agent's `daily_cap` and `per_financing_cap`.
 
-### 7.2 Eligibility and limits (Claude's call; settings)
+### 7.2 Eligibility and limits (amended by the user, 2026-10-30)
 
-- **Who can get credit:** a shop that is enrolled, has a verified owner phone
-  and a GPS pin, and has at least 3 cash orders in 6 weeks for that brand.
+**Teafair is the platform provider. Credit rules are the tenant's.** There
+is no platform cash-order or trading-history threshold.
+
+- **Who can get credit:** a shop that is enrolled with the owner's consent, has a verified owner phone and a GPS pin, for a brand with approved terms, on a supply day.
 - **Opening limit:** the tenant's `opening_limit` per brand.
-- **Repaid within the window:** the limit rises by 25% (capped by the tenant).
+- **Repaid within the window:** the limit rises by the tenant's `limit_growth_bps` (default 0, so no rise until the tenant sets one), capped by the tenant's `max_limit`. Both are set with a cited `MONVELO_SETTINGS` decision (§16.4).
 - **Default:** the limit freezes until the financing is cleared, then drops back to the opening limit.
 - **Above the limit:** the TM approves.
 

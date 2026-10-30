@@ -173,6 +173,12 @@ Each commit message ends with a blank line, then `Co-Authored-By: Claude Opus 5.
   - **`fulfilment_delivery_path(p_me, p_order)`**, recreated: returns `'COURIER'` for an ACTIVE `LOGISTICS_MANAGER` of the order's tenant (the delivery-code path). The ZSM and field branches are unchanged.
   - **`my_monvelo_staff_tenant_ids()`**, recreated: its role list gains `'CLIENT_SERVICE_MANAGER','TENANT_ADMIN'`, so both read the tenant's enrolments.
 
+- **Credit rules are the tenant's (user, 2026-10-30; binding; A6 §7.2).**
+  - Teafair is the platform provider and imposes no cash-order or trading-history threshold. There is no `min_cash_orders` and no `monvelo_cash_orders`.
+  - A shop's credit is governed by the tenant's own configured settings: `opening_limit`, `max_limit`, `approval_cap`, and the new `limit_growth_bps`.
+  - `limit_growth_bps` is a new `monvelo_tenant_settings` column: `integer not null default 0`, `check (0..10000)`. It is the rise after a financing is repaid within the window, capped by `max_limit`. Task 7 adds it to `set_monvelo_tenant_settings` as `p_limit_growth_bps integer default null` (null keeps the current value). As with every setting, it cites a `MONVELO_SETTINGS` decision.
+  - The platform keeps only integrity checks: enrolment with consent, a verified owner phone, a GPS pin, approved brand terms, a supply day, and the freeze after a default.
+
 - [ ] **Step 1: Write the failing tests.**
   - In `001` and `042`: `enum_has_labels('public','tenant_role_enum', array['ZSM','TM','ASM','DSM','DSA','POS_AGENT','RETAIL_SHOP_OWNER','ZSA','ASA','CLIENT_SERVICE_MANAGER','TENANT_ADMIN','LOGISTICS_MANAGER'])`.
   - In `046` (fixtures in the `039` style: auth users with `phone_confirmed_at`, a `PLATFORM_SUPER_ADMIN` profile, tenants A and B):
@@ -359,6 +365,12 @@ Paths and URLs never reach an audit row.
     - uses `observe("contact-report-upload", …)`;
     - handler tests mirror `support-staff-attachment`.
   - **The deliveries of Task 2** are sent (Step 6) only once the hard copy is attached. Step 1c sends nothing.
+
+- **Credit rules are the tenant's (user, 2026-10-30; binding; A6 §7.2).**
+  - Teafair is the platform provider and imposes no cash-order or trading-history threshold. There is no `min_cash_orders` and no `monvelo_cash_orders`.
+  - A shop's credit is governed by the tenant's own configured settings: `opening_limit`, `max_limit`, `approval_cap`, and the new `limit_growth_bps`.
+  - `limit_growth_bps` is a new `monvelo_tenant_settings` column: `integer not null default 0`, `check (0..10000)`. It is the rise after a financing is repaid within the window, capped by `max_limit`. Task 7 adds it to `set_monvelo_tenant_settings` as `p_limit_growth_bps integer default null` (null keeps the current value). As with every setting, it cites a `MONVELO_SETTINGS` decision.
+  - The platform keeps only integrity checks: enrolment with consent, a verified owner phone, a GPS pin, approved brand terms, a supply day, and the freeze after a default.
 
 - [ ] **Step 1: Write the failing tests.**
   - In `055`:
@@ -611,8 +623,6 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
     - `offer_radius_m integer not null default 1000 check (offer_radius_m between 100 and 50000)`;
     - `preferred_window_minutes integer not null default 10`;
     - `claim_minutes integer not null default 15`;
-    - `min_cash_orders integer not null default 3`;
-    - `cash_order_window_days integer not null default 42`;
     - the row is seeded; there is no RPC (a migration changes it);
     - SELECT policy `using (true)` for `authenticated`;
     - internal getter `monvelo_settings() returns public.monvelo_platform_settings`.
@@ -789,7 +799,6 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
   - **Internal helpers** (no grants):
     - `monvelo_shop_limit_for(p_tenant_id uuid, p_shop_id uuid, p_brand_key text) returns public.monvelo_shop_limits`: creates the row at `opening_limit` with an `OPENED` event on first use.
     - `monvelo_brand_exposure(p_tenant_id uuid, p_shop_id uuid, p_brand_key text, p_exclude uuid) returns numeric`: Σ line `amount` over the shop's financings in `AWAITING_APPROVAL, OFFERED, CLAIMED, FUNDED, DELIVERED, DEFAULTED_WITH_LATE_CHARGE`. Step 4 replaces it with outstanding-based exposure.
-    - `monvelo_cash_orders(p_tenant_id uuid, p_shop_id uuid, p_brand_key text) returns integer`: orders of the shop and tenant with `channel in ('FIELD_SALES','RETAIL')`, `status in ('PAID','IN_TRANSIT','DELIVERED')`, `created_at >= now() − cash_order_window_days`, at least one item of the brand, and no live financing.
     - `monvelo_draw_reference() returns text`.
     - `monvelo_offer(p_id uuid) returns public.monvelo_financings`: moves the row to OFFERED and sets `offered_at`. It sets `preferred_agent_id` and `preferred_window_ends_at = now() + preferred_window_minutes` only when all of these hold; otherwise both stay null:
       - the shop's `preferred_agent_id` is ACTIVE;
@@ -807,7 +816,6 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
     9. Today's ISO weekday is an active supply day for the area: P0001 `'today is not a supply day for this area'`.
     10. For each brand in the order, in `brand_key` order:
         - `monvelo_terms_at(tenant, brand, today)` exists, else P0001 `'<Brand> has no approved Monvelo terms'`;
-        - `monvelo_cash_orders ≥ min_cash_orders`, else P0001 `'the shop needs <n> cash orders of <Brand> in the last <d> days'`;
         - no DEFAULTED financing of the shop carries the brand, and its limit is not FROZEN, else P0001 `'the shop cannot get new <Brand> credit until its overdue financing is cleared'`.
 
     Then, in one transaction:
@@ -868,7 +876,6 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
     - an owner with no verified phone;
     - not a supply day;
     - an order with Purerigin + Tiger, refused naming `Tiger` and writing no financing row (Review Focus 4);
-    - 2 cash orders only;
     - a DEFAULTED Purerigin financing, inserted as postgres via the whitelist path.
   - **The preferred window:**
     - with the shop's preferred agent ACTIVE and pledged 150000 for today: `preferred_window_ends_at` ≈ now() + 10 min;
@@ -1046,7 +1053,6 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
     - settings enabled;
     - Purerigin terms APPROVED;
     - a supply day for today's ISO weekday;
-    - 3 PAID cash orders;
     - an ACTIVE agent with a member profile, caps and a pledge;
     - reuse the shop enrolled by the `monvelo-shop-consent` test.
   - **As the users:**
@@ -1057,7 +1063,7 @@ Runs after Task 4 and before Task 5. The user approved the rulings on 2026-10-29
 - [ ] **Step 3: Update the docs.**
   - **`supabase/CLAUDE.md`:**
     - status rows for "Monvelo (A6) Step 1c: tenant representation" and "Monvelo (A6) Step 2: financing ledger and allocation", both "done (local)";
-    - a section listing the tables, RPCs, the `monvelo-offer-sweep` cron job, the bridging rule, the contact-report send deferral (deliveries stay PENDING until Step 6), the `min_cash_orders` launch note (Calls, item 6) and the decision subjects.
+    - a section listing the tables, RPCs, the `monvelo-offer-sweep` cron job, the bridging rule, the contact-report send deferral (deliveries stay PENDING until Step 6), the tenant-governed credit rule (A6 §7.2, 2026-10-30) and the decision subjects.
   - **`CLAUDE.md`:** the counts, plus "Step 1c and Step 2 built locally, not pushed".
 - [ ] **Step 4: Commit.** `docs: Monvelo Step 1c and Step 2`. Do not merge into `main`. Do not push.
 
@@ -1078,7 +1084,7 @@ Each call says what it costs if it is wrong.
    - **Cost if wrong:** the TENANT_ADMIN cannot see full contact addresses in the app; a column grant fixes it.
 5. **"Platform staff" who read contact reports** means any profile with a `platform_role` (`is_platform_staff()`), including `MONVELO_FINANCE`.
    - **Cost if wrong:** finance can read client meeting notes; narrowing the role list is one function.
-6. **The §7.2 thresholds live in a migration-only `monvelo_platform_settings` row:** radius 1000 m, windows of 10 and 15 minutes, 3 cash orders, 42 days. The cash-order count needs `FIELD_SALES`/`RETAIL` orders that are `PAID`, `IN_TRANSIT` or `DELIVERED`, and nothing marks a trade order PAID until Spec C.
+6. **The §7.2 thresholds live in a migration-only `monvelo_platform_settings` row:** radius 1000 m, windows of 10 and 15 minutes. (The cash-order threshold was removed by the user on 2026-10-30.) The cash-order count needs `FIELD_SALES`/`RETAIL` orders that are `PAID`, `IN_TRANSIT` or `DELIVERED`, and nothing marks a trade order PAID until Spec C.
    - **Cost if wrong:** at launch, no shop qualifies. Either Spec C lands first, or a migration sets `min_cash_orders = 0`. This is flagged in the docs.
 7. **`max_limit` (the tenant's cap on limit growth) is added to `monvelo_tenant_settings` in Task 3,** so the settings RPC is recreated once; Step 4 reads it.
    - **Cost if wrong:** one unused column until Step 4.
