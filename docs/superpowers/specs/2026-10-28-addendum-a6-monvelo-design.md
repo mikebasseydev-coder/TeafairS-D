@@ -1041,4 +1041,8 @@ backdoors"; user, 2026-10-29).
   - **Platform master and brand opt-in:** the platform switch opens a state geographically. Each brand then chooses which platform-active states it distributes and lends in, through cited tenant settings: `set_tenant_operational_state`, citing a new `DISTRIBUTION` decision, by the CSM, or by a ZSM while the brand has no CSM. New work needs both switches on for its channel.
   - **In-flight protection:** turning a state off blocks new orders and enrolments only. Existing orders still dispatch, deliver, refund and repay.
 - Off by default at both levels (Claude's call).
+- **Behaviour notes (Claude's calls):**
+  - A brand's opt-in persists while the platform switch is off. When the platform switches a state back on, brands that had opted in are live again at once.
+  - `set_tenant_operational_state` sets both channel flags in one call, so a brand changing one channel passes the other as it should be. A channel the platform has switched off must be passed as off.
+  - Winding down is always allowed in an off state: deactivating a supply day, reducing or cancelling a pledge, and opting out. Only new or increased commitments are refused.
 - **Delivery:** plan Task 1f.
