@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(56);
+select plan(58);
 
 -- ── fixtures (as postgres) ──────────────────────────────────────────────
 -- 1 CSM (A) · 2 ZSM (A) · 3 TENANT_ADMIN (A) · 4 TM (A) · 6 MONVELO_FINANCE
@@ -165,6 +165,12 @@ select throws_ok($$select public.attach_contact_report_hard_copy(pg_temp.k(26), 
 reset role;
 insert into storage.objects (bucket_id, name) select 'contact-reports', h.storage_path
   from public.contact_report_hard_copies h where h.id = (select (r ->> 'hard_copy_id')::uuid from slot);
+select pg_temp.act_as(pg_temp.u(1), '7eaf0000-0000-4000-8000-000000000001');
+select throws_ok($$select public.attach_contact_report_hard_copy(pg_temp.k(35), (select (r ->> 'hard_copy_id')::uuid from slot))$$,
+  'P0001', 'the hard copy has not been uploaded yet', 'an object with no size or mimetype metadata is refused');
+reset role;
+update storage.objects set metadata = jsonb_build_object('size', '204800', 'mimetype', 'application/pdf')
+ where bucket_id = 'contact-reports';
 select pg_temp.act_as(pg_temp.u(3), '7eaf0000-0000-4000-8000-000000000001');
 select is((select count(*)::int from storage.objects where bucket_id = 'contact-reports'), 0,
   'nobody reads a pending (unattached) object');
@@ -188,6 +194,12 @@ select throws_ok(format($$select public.assert_citable_decision('7eaf0000-0000-4
   'P0001', 'a ZSM must approve this contact report before it is cited', 'R5 is unreviewed');
 select throws_ok(format($$select public.assert_citable_decision('7eaf0000-0000-4000-8000-000000000001', %L, 'BRAND_TERMS')$$, pg_temp.did('R4')),
   'P0001', 'this contact report has been superseded; cite the decision in its correction', 'R4 is superseded');
+
+-- B: no slot for a superseded report (R4 is corrected by R5)
+select pg_temp.act_as(pg_temp.u(1), '7eaf0000-0000-4000-8000-000000000001');
+select throws_ok($$select public.request_contact_report_hard_copy(pg_temp.k(36), pg_temp.rid('R4'), 'application/pdf', 1000)$$,
+  'P0001', 'this contact report has been superseded; upload the hard copy of its correction', 'no slot for a superseded report');
+reset role;
 
 -- ── a hard copy is never changed ────────────────────────────────────────
 select throws_ok($$update public.contact_report_hard_copies set storage_path = storage_path || 'x'$$,
@@ -226,7 +238,8 @@ create temp table slot2 (r jsonb);
 grant all on slot2 to authenticated;
 insert into slot2 select public.request_contact_report_hard_copy(pg_temp.k(31), pg_temp.rid('R6'), 'image/png', 5000);
 reset role;
-insert into storage.objects (bucket_id, name) select 'contact-reports', h.storage_path
+insert into storage.objects (bucket_id, name, metadata) select 'contact-reports', h.storage_path,
+         jsonb_build_object('size', '5000', 'mimetype', 'image/png')
   from public.contact_report_hard_copies h where h.id = (select (r ->> 'hard_copy_id')::uuid from slot2);
 select pg_temp.act_as(pg_temp.u(10), '10000000-0000-0000-0000-000000000003');
 select lives_ok($$select public.attach_contact_report_hard_copy(pg_temp.k(32), (select (r ->> 'hard_copy_id')::uuid from slot2))$$, 'the operator-approved report gets its hard copy');
@@ -243,7 +256,8 @@ grant all on slot3 to authenticated;
 -- R3 is approved but has no copy yet
 insert into slot3 select public.request_contact_report_hard_copy(pg_temp.k(33), pg_temp.rid('R3'), 'image/jpeg', 9000);
 reset role;
-insert into storage.objects (bucket_id, name) select 'contact-reports', h.storage_path
+insert into storage.objects (bucket_id, name, metadata) select 'contact-reports', h.storage_path,
+         jsonb_build_object('size', '9000', 'mimetype', 'image/jpeg')
   from public.contact_report_hard_copies h where h.id = (select (r ->> 'hard_copy_id')::uuid from slot3);
 alter table public.contact_report_hard_copies disable trigger contact_report_hard_copies_guard_row;
 update public.contact_report_hard_copies set created_at = now() - interval '25 hours'
