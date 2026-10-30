@@ -59,8 +59,10 @@ insert into public.tenant_shop_coverage (tenant_id, retail_shop_id, territory_id
   ('10000000-0000-0000-0000-000000000002', '90000000-0000-0000-0000-000000000001',
    '40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000004');
 
+-- A6 §18.3 (user ruling 2026-10-30): a TM reads audit rows of their own
+-- territory only, so the row is about the TM's territory
 insert into public.audit_logs (tenant_id, operation, entity_type, entity_id, source) values
-  ('10000000-0000-0000-0000-000000000001', 'TEST', 'tenants', 'x', 'SYSTEM');
+  ('10000000-0000-0000-0000-000000000001', 'TEST', 'territories', '40000000-0000-0000-0000-000000000001', 'SYSTEM');
 insert into public.notifications (tenant_id, user_id, kind, title) values
   ('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003', 'TEST', 'for the DSA');
 insert into public.otp_challenges (tenant_id, subject_id, purpose, code_hash, destination_phone, issued_by, expires_at) values
@@ -179,7 +181,7 @@ select throws_ok(
 -- ── audit_logs: ZSM and TM only ─────────────────────────────────────────
 select is((select count(*)::int from public.audit_logs), 0, 'a DSA cannot read the audit log');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
-select is((select count(*)::int from public.audit_logs), 1, 'a TM can read their tenant''s audit log');
+select is((select count(*)::int from public.audit_logs), 1, 'a TM can read their territory''s audit rows');
 select throws_ok(
   $$delete from public.audit_logs$$,
   '42501', null, 'a TM cannot delete audit rows');

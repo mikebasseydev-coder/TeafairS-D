@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(54);
+select plan(80);
 
 -- A5: ONLINE orders created from 2026-10-23 must carry refund-policy consent.
 create function pg_temp.a5_stamp_consent() returns trigger language plpgsql as $f$
@@ -24,12 +24,15 @@ create trigger a5_stamp_consent before insert on public.orders
 -- Tenant A (Nestle). Zones: Lagos (Z) and Oyo (Z2).
 -- Territories: Ikeja, Lekki (Lagos); Ibadan (Oyo). No territory has a TM.
 -- 01 Z · 02 Z2 · 03 LM (logistics manager) · 04 DSA Ikeja · 05 DSA Ibadan
--- 06 POS agent Ikeja · 07 POS agent Ibadan
+-- 06 POS agent Ikeja · 07 POS agent Ibadan · 08 platform administrator
+-- 09 TM of Ikeja (a membership only: territories.tm_id stays empty, so routing
+--    still falls back to the zone's ZSM)
 insert into public.tenants (id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Nestle Nigeria', 'NESTLE');
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-0000000000' || lpad(n::text, 2, '0'))::uuid, '23480000000' || lpad(n::text, 2, '0'), now()
-from generate_series(1, 7) n;
+from generate_series(1, 9) n;
+update public.profiles set platform_role = 'PLATFORM_SUPER_ADMIN' where id = '20000000-0000-0000-0000-000000000008';
 
 insert into public.zones (id, tenant_id, zone_name, state_code) values
   ('30000000-0000-0000-0000-000000000031', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA'),
@@ -53,7 +56,9 @@ insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, terri
   ('50000000-0000-0000-0000-000000000056', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000006',
    'POS_AGENT', null, '40000000-0000-0000-0000-000000000041', null, 'ACTIVE', true),
   ('50000000-0000-0000-0000-000000000057', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000007',
-   'POS_AGENT', null, '40000000-0000-0000-0000-000000000043', null, 'ACTIVE', true);
+   'POS_AGENT', null, '40000000-0000-0000-0000-000000000043', null, 'ACTIVE', true),
+  ('50000000-0000-0000-0000-000000000059', '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000009',
+   'TM', null, '40000000-0000-0000-0000-000000000041', null, 'ACTIVE', true);
 update public.zones set zsm_id = '20000000-0000-0000-0000-000000000001' where id = '30000000-0000-0000-0000-000000000031';
 update public.zones set zsm_id = '20000000-0000-0000-0000-000000000002' where id = '30000000-0000-0000-0000-000000000033';
 
@@ -73,7 +78,12 @@ insert into public.web_pos_venues (id, tenant_id, partner_id, agent_id, network_
   ('61000000-0000-0000-0000-000000000061', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000061',
    '20000000-0000-0000-0000-000000000006', 'MP-5901', '40000000-0000-0000-0000-000000000041'),
   ('61000000-0000-0000-0000-000000000063', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000061',
-   '20000000-0000-0000-0000-000000000007', 'MP-5903', '40000000-0000-0000-0000-000000000043');
+   '20000000-0000-0000-0000-000000000007', 'MP-5903', '40000000-0000-0000-0000-000000000043'),
+  -- terminals with no territory: zoned by their POS agent's territory
+  ('61000000-0000-0000-0000-000000000064', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000061',
+   '20000000-0000-0000-0000-000000000006', 'MP-5904', null),
+  ('61000000-0000-0000-0000-000000000065', '10000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000061',
+   '20000000-0000-0000-0000-000000000007', 'MP-5905', null);
 
 -- orders: O1 Lagos (Ikeja) and O2 Oyo (Ibadan) PAID web orders; O3 a field
 -- order with no territory
@@ -128,6 +138,55 @@ insert into public.notification_logs (tenant_id, purpose, channel, status, phone
   ('10000000-0000-0000-0000-000000000001', 'DELIVERY_CODE', 'WHATSAPP', 'SENT', '0002', '90000000-0000-0000-0000-000000000002'),
   ('10000000-0000-0000-0000-000000000001', 'DELIVERY_CODE', 'WHATSAPP', 'SENT', '0003', '90000000-0000-0000-0000-000000000003'),
   ('10000000-0000-0000-0000-000000000001', 'OTP',           'WHATSAPP', 'SENT', '0004', null);
+
+-- fix round 1: O4, another PAID Oyo web order; T4, an ORDER ticket on O2;
+-- a payment and commission on O2; a buyer photo slot on T2
+insert into public.orders (id, tenant_id, channel, teafair_agent_id, total_amount, status, payment_route,
+                           public_reference, delivery_lga_id, territory_id, fulfilment_warehouse_id) values
+  ('90000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001', 'ONLINE',
+   '20000000-0000-0000-0000-000000000005', 2500, 'PAID', 'PAYSTACK_WEB', 'TF-ZAAAA4',
+   (select id from public.ng_lgas where state_code = 'OY' order by name limit 1),
+   '40000000-0000-0000-0000-000000000043', '70000000-0000-0000-0000-000000000001');
+insert into public.support_tickets (id, tenant_id, public_reference, kind, category, order_id, territory_id, status) values
+  ('62000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001', 'TK-ZSCAB4', 'ORDER', 'DELIVERY',
+   '90000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000043', 'OPEN');
+insert into public.payments (id, tenant_id, order_id, teafair_agent_id, amount, paystack_reference) values
+  ('91000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000002',
+   '20000000-0000-0000-0000-000000000005', 2500, 'TFW-00000000-0000-0000-0000-000000000592');
+insert into public.web_commissions (id, tenant_id, order_id, payment_id, web_pos_partner_id, teafair_agent_id,
+                                    amount, bps_applied, paystack_subaccount_code) values
+  ('92000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000002',
+   '91000000-0000-0000-0000-000000000002', '60000000-0000-0000-0000-000000000061',
+   '20000000-0000-0000-0000-000000000005', 25, 100, 'ACCT_grace59');
+insert into public.upload_slots (id, tenant_id, purpose, ticket_id, storage_path, mime_type, size_bytes,
+                                 uploaded_by_type) values
+  ('93000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001', 'SUPPORT_TICKET',
+   '62000000-0000-0000-0000-000000000002',
+   'tickets/62000000-0000-0000-0000-000000000002/93000000-0000-0000-0000-000000000002.jpg', 'image/jpeg', 900,
+   'CUSTOMER');
+-- audit rows of those types: a live Oyo slot, a purged slot of an Oyo ticket
+-- (only its payload names the ticket), an Oyo commission, a message hidden in
+-- the Oyo ZONE room; and a Lagos room moderation for contrast
+insert into public.audit_logs (tenant_id, operation, entity_type, entity_id, after, source)
+select '10000000-0000-0000-0000-000000000001', 'zsm_scope_fixture2', e.t, e.id, e.a, 'USER'
+  from (values
+    ('upload_slots', '93000000-0000-0000-0000-000000000002',
+     jsonb_build_object('ticket_id', '62000000-0000-0000-0000-000000000002')),
+    ('upload_slots', '93000000-0000-0000-0000-000000000009',
+     jsonb_build_object('ticket_id', '62000000-0000-0000-0000-000000000002')),
+    ('web_commissions', '92000000-0000-0000-0000-000000000002', null::jsonb),
+    ('chat_messages', '94000000-0000-0000-0000-000000000033',
+     jsonb_build_object('channel_id', (select c.id from public.chat_channels c
+                                        where c.channel_type = 'ZONE' and c.zone_id = '30000000-0000-0000-0000-000000000033'))),
+    ('chat_messages', '94000000-0000-0000-0000-000000000031',
+     jsonb_build_object('channel_id', (select c.id from public.chat_channels c
+                                        where c.channel_type = 'ZONE' and c.zone_id = '30000000-0000-0000-0000-000000000031')))
+  ) as e (t, id, a);
+
+-- audit rows about the Ikeja and Lekki territories (both Lagos)
+insert into public.audit_logs (tenant_id, operation, entity_type, entity_id, source) values
+  ('10000000-0000-0000-0000-000000000001', 'zsm_scope_fixture3', 'territories', '40000000-0000-0000-0000-000000000041', 'USER'),
+  ('10000000-0000-0000-0000-000000000001', 'zsm_scope_fixture3', 'territories', '40000000-0000-0000-0000-000000000042', 'USER');
 
 -- web routing: Lagos and Oyo state coverage
 insert into public.territory_coverage (tenant_id, state_code, territory_id) values
@@ -263,6 +322,27 @@ select lives_ok(
   $$select public.upsert_web_referral_code(pg_temp.k(21), 'IBADAN-DSA', '20000000-0000-0000-0000-000000000005',
       null, null, null, null, null, true)$$,
   'Z2 issues the code for the Ibadan DSA');
+select pg_temp.act_as(1);
+select lives_ok(
+  $$select public.set_web_pos_venue(pg_temp.k(22), '61000000-0000-0000-0000-000000000064', 'OTHER', 'Grace Two',
+      '2 Allen Avenue', 'Lagos', 'Ikeja', 6.6, 3.35, null)$$,
+  'Z sets a terminal with no territory whose agent is in Ikeja');
+select throws_ok(
+  $$select public.set_web_pos_venue(pg_temp.k(23), '61000000-0000-0000-0000-000000000065', 'OTHER', 'Grace Three',
+      '2 Ring Road', 'Oyo', 'Ibadan North', 7.4, 3.9, null)$$,
+  '42501', null, 'Z cannot set a terminal with no territory whose agent is in Ibadan');
+select lives_ok(
+  $$select public.upsert_web_referral_code(pg_temp.k(24), 'Z-HOUSE', '20000000-0000-0000-0000-000000000001',
+      null, null, null, null, null, true)$$,
+  'Z issues a code for itself');
+select throws_ok(
+  $$select public.upsert_web_referral_code(pg_temp.k(25), 'Z2-HOUSE', '20000000-0000-0000-0000-000000000002',
+      null, null, null, null, null, true)$$,
+  '42501', 'this agent is not in your zones', 'Z cannot issue a code for a ZSM with no shared zone');
+select throws_ok(
+  $$select public.upsert_web_referral_code(pg_temp.k(26), 'LM-HOUSE', '20000000-0000-0000-0000-000000000003',
+      null, null, null, null, null, true)$$,
+  '42501', 'this agent is not in your zones', 'Z cannot issue a code for a zone-less logistics manager');
 
 -- ── reads: buyer contacts, ticket contacts and messages, audit, notifications
 select pg_temp.act_as(1);
@@ -287,7 +367,8 @@ select is(pg_temp.ids($$select public.my_support_message_ticket_ids()::text$$),
   array['62000000-0000-0000-0000-000000000001', '62000000-0000-0000-0000-000000000003'],
   'Z''s ticket attachments reach Lagos and zone-less tickets only');
 select is((select count(*)::int from public.audit_logs
-            where entity_type = 'territories' and entity_id = '40000000-0000-0000-0000-000000000041'), 1,
+            where entity_type = 'territories' and entity_id = '40000000-0000-0000-0000-000000000041'
+              and operation = 'set_territory_web_warehouse'), 1,
   'Z reads the audit row of the Lagos web-warehouse change');
 
 select pg_temp.act_as(2);
@@ -309,8 +390,44 @@ select is(pg_temp.ids($$select phone_last4 from public.notification_logs$$),
   array['0002', '0003', '0004'],
   'Z2 reads the notification rows of Oyo and zone-less orders, and of no order');
 select is((select count(*)::int from public.audit_logs
-            where entity_type = 'territories' and entity_id = '40000000-0000-0000-0000-000000000041'), 0,
+            where entity_type = 'territories' and entity_id = '40000000-0000-0000-0000-000000000041'
+              and operation = 'set_territory_web_warehouse'), 0,
   'Z2 does not read the audit row of the Lagos web-warehouse change');
+select is(pg_temp.ids($$select entity_id from public.audit_logs where operation = 'zsm_scope_fixture2'$$),
+  array['92000000-0000-0000-0000-000000000002', '93000000-0000-0000-0000-000000000002',
+        '93000000-0000-0000-0000-000000000009', '94000000-0000-0000-0000-000000000033'],
+  'Z2 reads the audit rows of Oyo slots, commissions and room moderation');
+select pg_temp.act_as(1);
+select is((select count(*)::int from public.audit_logs
+            where operation = 'zsm_scope_fixture2' and entity_type = 'upload_slots'), 0,
+  'Z reads no audit row of an Oyo photo slot, live or purged');
+select is((select count(*)::int from public.audit_logs
+            where operation = 'zsm_scope_fixture2' and entity_type = 'web_commissions'), 0,
+  'Z reads no audit row of an Oyo commission');
+select is(pg_temp.ids($$select entity_id from public.audit_logs
+                         where operation = 'zsm_scope_fixture2' and entity_type = 'chat_messages'$$),
+  array['94000000-0000-0000-0000-000000000031'], 'Z reads the moderation audit of the Lagos room only');
+select is(pg_temp.ids($$select entity_id from public.audit_logs where operation = 'zsm_scope_fixture3'$$),
+  array['40000000-0000-0000-0000-000000000041', '40000000-0000-0000-0000-000000000042'],
+  'Z reads the audit rows of both Lagos territories');
+
+-- a TM reads audit rows of their own territory only (user ruling 2026-10-30)
+select pg_temp.act_as(9);
+select is(pg_temp.ids($$select distinct entity_id from public.audit_logs where operation = 'zsm_scope_fixture'$$),
+  array['62000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000001'],
+  'the Ikeja TM reads the audit rows of the Ikeja order and ticket only');
+select is(pg_temp.ids($$select entity_id from public.audit_logs where operation = 'zsm_scope_fixture3'$$),
+  array['40000000-0000-0000-0000-000000000041'],
+  'the Ikeja TM reads no audit row of Lekki, another territory of the zone');
+select is((select count(*)::int from public.audit_logs where operation = 'zsm_scope_fixture2'), 0,
+  'the Ikeja TM reads no Oyo audit row');
+select is((select count(*)::int from public.audit_logs where entity_type = 'tenant_settings'), 0,
+  'the Ikeja TM no longer reads zone-less tenant-wide audit rows');
+select is((select count(*)::int from public.audit_logs
+            where entity_type = 'territories' and entity_id = '40000000-0000-0000-0000-000000000041'
+              and operation = 'set_territory_web_warehouse'), 1,
+  'the Ikeja TM reads the audit of a change to Ikeja itself');
+select pg_temp.act_as(1);
 
 -- ── dispute evidence ────────────────────────────────────────────────────
 select pg_temp.act_as(1);
@@ -354,6 +471,46 @@ select is((select count(*)::int from public.chat_messages m join public.chat_cha
 select throws_ok(
   $$select public.get_or_create_direct_channel(pg_temp.k(42), '20000000-0000-0000-0000-000000000004')$$,
   '42501', null, 'Z2 still cannot open a direct channel with a Lagos DSA');
+
+-- ── no orphaned zones (fix round 1) ─────────────────────────────────────
+-- Oyo's ZSM is DISABLED: the zone is uncovered, so any ACTIVE ZSM reaches it
+reset role;
+update public.tenant_users set status = 'DISABLED' where id = '50000000-0000-0000-0000-000000000052';
+select pg_temp.act_as(1);
+select is(pg_temp.ids($$select order_id::text from public.order_contacts$$),
+  array['90000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000002',
+        '90000000-0000-0000-0000-000000000003'],
+  'with Oyo''s ZSM disabled, Z reads Oyo buyer contacts');
+select lives_ok($$select public.set_ticket_priority(pg_temp.k(50), '62000000-0000-0000-0000-000000000004', 'HIGH')$$,
+  'with Oyo''s ZSM disabled, Z acts on an Oyo ORDER ticket');
+select is((select count(*)::int from public.audit_logs where operation = 'zsm_scope_fixture2'), 5,
+  'with Oyo''s ZSM disabled, Z reads every Oyo audit row');
+-- Oyo has no zsm_id at all (Z2 back to ACTIVE, but not covering)
+reset role;
+update public.tenant_users set status = 'ACTIVE' where id = '50000000-0000-0000-0000-000000000052';
+update public.zones set zsm_id = null where id = '30000000-0000-0000-0000-000000000033';
+select pg_temp.act_as(1);
+select lives_ok($$select pg_temp.dispatch(51, 4)$$, 'with Oyo uncovered, Z dispatches an Oyo order');
+select is(pg_temp.ids($$select order_id::text from public.order_fulfilments$$),
+  array['90000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000002',
+        '90000000-0000-0000-0000-000000000004'],
+  'with Oyo uncovered, Z reads Oyo fulfilments');
+select pg_temp.act_as(2);
+select lives_ok($$select pg_temp.resend(52, 4)$$, 'with Oyo uncovered, Z2 reaches it too');
+-- a platform administrator gives Oyo back to Z2: Z is refused again
+select pg_temp.act_as(8);
+select lives_ok(
+  $$select public.set_zone_zsm(pg_temp.k(53), '30000000-0000-0000-0000-000000000033', '20000000-0000-0000-0000-000000000002')$$,
+  'the platform administrator sets Z2 on Oyo');
+select pg_temp.act_as(1);
+select throws_ok($$select public.set_ticket_priority(pg_temp.k(54), '62000000-0000-0000-0000-000000000004', 'LOW')$$,
+  '42501', null, 'with Oyo covered by Z2, Z cannot act on the Oyo ORDER ticket');
+select throws_ok($$select pg_temp.resend(55, 4)$$, '42501', null, 'nor re-send the Oyo order''s code');
+select is(pg_temp.ids($$select order_id::text from public.order_contacts$$),
+  array['90000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000003'],
+  'nor read Oyo buyer contacts');
+select is((select count(*)::int from public.audit_logs where operation = 'zsm_scope_fixture2'), 1,
+  'nor Oyo audit rows');
 
 -- ── web routing ─────────────────────────────────────────────────────────
 reset role;
