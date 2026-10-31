@@ -212,7 +212,8 @@ select is(public.claim_monvelo_financing(pg_temp.k(112), pg_temp.f('A'), pg_temp
   'P''s replay returns the same response');
 reset role;
 select is((select count(*)::int from public.audit_logs where operation = 'claim_monvelo_financing'
-            and idempotency_key = pg_temp.k(112) and tenant_id = pg_temp.t1()), 1, 'the claim is audited to the financing''s tenant');
+            and idempotency_key = pg_temp.k(112) and tenant_id is null), 1,
+  'the claim is audited with no tenant: the row names the agent (A6 §16.2.2, Step 3 R15)');
 
 -- ── one at a time ───────────────────────────────────────────────────────
 select pg_temp.act_as(pg_temp.u(22), null);

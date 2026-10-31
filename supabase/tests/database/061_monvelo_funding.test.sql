@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(123);
+select plan(156);
 
 -- A6 Task 6b: placing an order reserves stock. This file is not about stock,
 -- so every ordered line finds ample stock in its order's fulfilment warehouse.
@@ -237,6 +237,9 @@ select ok(not pg_temp.pm('ADE, BISI O.', 'BISI ADE', 'XXXXXX0011', 'card'), 'a c
 select ok(pg_temp.pm('ADE, BISI O.', 'BISI ADE', 'XXXXXX0011', 'dedicated_nuban'), 'a dedicated NUBAN transfer matches');
 select ok(not pg_temp.pm('ADE, BISI O.', 'TUNDE ADE'), 'another holder does not match');
 select ok(not pg_temp.pm('ADE, BISI O.', null), 'no sender name does not match');
+-- R18: initials do not count toward the 2-token minimum
+select ok(not pg_temp.pm('ADE B. O.', 'B O'), '"B O" does not match "ADE B. O." (two initials)');
+select ok(pg_temp.pm('BISI ADE', 'BISI ADE STORES LTD'), 'reverse containment is allowed: "BISI ADE STORES LTD" matches "BISI ADE"');
 
 -- ── start_monvelo_funding ───────────────────────────────────────────────
 select pg_temp.raise('A', 100);                        -- S1: P's preferred window
@@ -459,6 +462,122 @@ update public.monvelo_agents set per_financing_cap = 200000, daily_cap = 500000 
 select is((select remaining from public.monvelo_pledges where id = pg_temp.pl(21)), 54000.00::numeric(15,2),
   'none of them touched P''s pledge');
 
+-- ── the refusals that gate money (R8, R17, review round 1) ──────────────
+-- Each refusal leaves the financing, P's pledge and the trade order as they were.
+-- P gets room for the open claims this section leaves behind.
+update public.monvelo_pledges set amount = amount + 1000000, remaining = remaining + 1000000 where id = pg_temp.pl(21);
+update public.monvelo_agents set daily_cap = 2000000 where id = pg_temp.ag(21);
+create temp table st (n text primary key, s text);
+create function pg_temp.state(p_fin text) returns text language sql as $$
+  select f.status || ':' || o.status || ':' || (select remaining from public.monvelo_pledges where id = pg_temp.pl(21))
+    from public.monvelo_financings f join public.orders o on o.id = f.order_id where f.id = pg_temp.f(p_fin) $$;
+create function pg_temp.keep(p_fin text) returns void language sql as
+  $$ insert into st values (p_fin, pg_temp.state(p_fin)) $$;
+-- P claims and starts the funding of a fresh S1 request p_fin
+create function pg_temp.ready(p_fin text, p_key integer) returns void language plpgsql as $$
+begin
+  perform pg_temp.raise(p_fin, p_key);
+  perform pg_temp.claim(p_key + 2, 21, p_fin);
+  perform pg_temp.start(p_fin || '1', p_key + 3, 21, p_fin);
+end; $$;
+create function pg_temp.flags(p_fin text) returns integer language sql as
+  $$ select count(*)::int from public.monvelo_flags where financing_id = pg_temp.f(p_fin) $$;
+
+-- the trade order is no longer PENDING
+select pg_temp.ready('K1', 500);
+update public.orders set status = 'CANCELLED' where id = pg_temp.o('K1');
+select pg_temp.keep('K1');
+select is(pg_temp.settle('SK1', 'charge.success', 'K11', 'success', 4800000, pg_temp.v('BISI ADE', 'XXXXXX0011')) ->> 'outcome',
+  'late_payment', 'ORDER_NOT_PENDING: late_payment');
+select is(pg_temp.flags('K1') || ':' || pg_temp.reason('K1'), '1:ORDER_NOT_PENDING', 'one flag, ORDER_NOT_PENDING');
+select is(pg_temp.state('K1'), (select s from st where n = 'K1'), 'financing, pledge and order unchanged');
+
+-- the terms were withdrawn between the claim and the payment
+select pg_temp.ready('K2', 510);
+set local session_replication_role = replica;
+update public.monvelo_brand_terms set status = 'WITHDRAWN' where tenant_id = pg_temp.t1() and brand = 'Purerigin';
+set local session_replication_role = origin;
+select pg_temp.keep('K2');
+select is(pg_temp.settle('SK2', 'charge.success', 'K21', 'success', 4800000, pg_temp.v('BISI ADE', 'XXXXXX0011')) ->> 'outcome',
+  'late_payment', 'NO_TERMS: late_payment');
+select is(pg_temp.flags('K2') || ':' || pg_temp.reason('K2'), '1:NO_TERMS', 'one flag, NO_TERMS');
+select is(pg_temp.state('K2'), (select s from st where n = 'K2'), 'financing, pledge and order unchanged');
+select is((select count(*)::int from public.monvelo_financing_lines where financing_id = pg_temp.f('K2') and terms_locked_at is not null),
+  0, 'and no line locked terms');
+set local session_replication_role = replica;
+update public.monvelo_brand_terms set status = 'APPROVED' where tenant_id = pg_temp.t1() and brand = 'Purerigin';
+set local session_replication_role = origin;
+
+-- the currency is not the tenant's
+select pg_temp.ready('K3', 520);
+select pg_temp.keep('K3');
+select is(public.settle_monvelo_funding('charge.success', pg_temp.r('K31') ->> 'reference', 'success', 4800000, 'USD',
+            pg_temp.v('BISI ADE', 'XXXXXX0011'), 'T-K3') ->> 'outcome', 'mismatch', 'USD: mismatch');
+select is((select count(*)::int || ':' || min(kind) from public.monvelo_flags where financing_id = pg_temp.f('K3')),
+  '1:AMOUNT_MISMATCH', 'one AMOUNT_MISMATCH flag');
+select is(pg_temp.state('K3'), (select s from st where n = 'K3'), 'financing, pledge and order unchanged');
+
+-- R17: the CLAIMED route re-checks the agent and the member who started the payment
+select pg_temp.ready('K4', 530);
+update public.monvelo_agents set status = 'SUSPENDED' where id = pg_temp.ag(21);
+select pg_temp.keep('K4');
+select is(pg_temp.settle('SK4', 'charge.success', 'K41', 'success', 4800000, pg_temp.v('BISI ADE', 'XXXXXX0011')) ->> 'outcome',
+  'late_payment', 'a suspended agent''s payment on its own claim is a late payment');
+select is(pg_temp.flags('K4') || ':' || pg_temp.reason('K4'), '1:the agent is not active', 'one flag: the agent is not active');
+select is(pg_temp.state('K4'), (select s from st where n = 'K4'), 'financing, pledge and order unchanged');
+update public.monvelo_agents set status = 'ACTIVE' where id = pg_temp.ag(21);
+
+select pg_temp.ready('K5', 540);
+update public.monvelo_agent_members set status = 'REVOKED' where agent_id = pg_temp.ag(21) and profile_id = pg_temp.u(21);
+select pg_temp.keep('K5');
+select is(pg_temp.settle('SK5', 'charge.success', 'K51', 'success', 4800000, pg_temp.v('BISI ADE', 'XXXXXX0011')) ->> 'outcome',
+  'late_payment', 'a payment whose starting member was revoked is a late payment, on the claim too');
+select is(pg_temp.flags('K5') || ':' || pg_temp.reason('K5'), '1:not an active member of this agent',
+  'one flag: not an active member');
+select is(pg_temp.state('K5'), (select s from st where n = 'K5'), 'financing, pledge and order unchanged');
+update public.monvelo_agent_members set status = 'ACTIVE' where agent_id = pg_temp.ag(21) and profile_id = pg_temp.u(21);
+
+-- R16: an unfunded Monvelo payment does not hold the stock
+select pg_temp.ready('K6', 550);
+select is(pg_temp.settle('SK6', 'charge.success', 'K61', 'success', 4800000, pg_temp.v('BISI ADE', 'XXXXXX9999')) ->> 'outcome',
+  'payer_mismatch', 'fixture: a payer mismatch leaves a SUCCESS payment on a PENDING order');
+set local session_replication_role = replica;
+update public.stock_reservations set expires_at = now() - interval '1 second' where order_id = pg_temp.o('K6');
+set local session_replication_role = origin;
+select is(public.stock_reservation_sweep(), 1, 'the stock sweep still cancels the expired trade order');
+select is((select status from public.orders where id = pg_temp.o('K6')), 'CANCELLED', 'the order is CANCELLED');
+select is((select count(*)::int from public.stock_reservations where order_id = pg_temp.o('K6') and status = 'RESERVED'), 0,
+  'and its stock released');
+
+-- the pledge no longer covers the principal on the CLAIMED route
+select pg_temp.ready('K7', 560);
+update public.monvelo_pledges set remaining = 47999 where id = pg_temp.pl(21);
+select pg_temp.keep('K7');
+select is(pg_temp.settle('SK7', 'charge.success', 'K71', 'success', 4800000, pg_temp.v('BISI ADE', 'XXXXXX0011')) ->> 'outcome',
+  'late_payment', 'PLEDGE_EXHAUSTED: late_payment');
+select is(pg_temp.flags('K7') || ':' || pg_temp.reason('K7'), '1:PLEDGE_EXHAUSTED', 'one flag, PLEDGE_EXHAUSTED');
+select is(pg_temp.state('K7'), (select s from st where n = 'K7'), 'financing, pledge and order unchanged');
+update public.monvelo_pledges set remaining = 1054000 where id = pg_temp.pl(21);
+
+-- the late route: remaining covers the principal only before P's other open claims
+select pg_temp.ready('G', 570);
+select pg_temp.lapse('G');
+select pg_temp.raise('H', 580);
+select pg_temp.claim(582, 21, 'H');
+update public.monvelo_pledges
+   set remaining = (select sum(principal) from public.monvelo_financings where pledge_id = pg_temp.pl(21) and status = 'CLAIMED') + 47999
+ where id = pg_temp.pl(21);
+select ok((select remaining >= 48000 from public.monvelo_pledges where id = pg_temp.pl(21)),
+  'fixture: remaining alone covers the principal');
+select pg_temp.keep('G');
+select is(pg_temp.settle('SG', 'charge.success', 'G1', 'success', 4800000, pg_temp.v('BISI ADE', 'XXXXXX0011')) ->> 'outcome',
+  'late_payment', 'net of P''s other open claims it does not: late_payment');
+select is(pg_temp.flags('G') || ':' || pg_temp.reason('G'), '1:pledge enough funds for this area and day first',
+  'one flag: the pledge check');
+select is(pg_temp.state('G'), (select s from st where n = 'G'), 'financing, pledge and order unchanged');
+update public.monvelo_pledges set remaining = 1054000 where id = pg_temp.pl(21);
+update public.monvelo_agents set daily_cap = 500000 where id = pg_temp.ag(21);
+
 -- ── settle_paystack_payment leaves MV- payments to Monvelo (R3) ─────────
 select pg_temp.start('E4', 316, 22, 'E');
 select is((public.settle_paystack_payment('charge.success', pg_temp.r('E4') ->> 'reference', 'success', 4800000, 'NGN',
@@ -496,6 +615,21 @@ select ok((select bool_and(not has_column_privilege('authenticated', 'public.mon
              from unnest(array['preferred_agent_id', 'claimed_by_agent_id', 'claimed_by', 'pledge_id', 'funder_agent_id',
                                'paystack_reference']) c),
   'no lender column of monvelo_financings is granted to the API');
+-- R15: after claims, lapses, pledges and fundings, the tenant's ZSM reads no audit row naming a lender
+select pg_temp.act_as(pg_temp.u(1), pg_temp.t1());
+select ok((select count(*) > 0 from public.audit_logs where operation = 'request_monvelo_financing'),
+  'fixture: the ZSM reads the tenant''s Monvelo audit rows');
+select is((select count(*)::int from public.audit_logs a
+            where coalesce(a.before::text, '') || coalesce(a.after::text, '')
+                  ~ (pg_temp.ag(21)::text || '|' || pg_temp.ag(22)::text || '|' || pg_temp.pl(21)::text || '|' || pg_temp.pl(22)::text)),
+  0, 'the ZSM reads no audit row naming an agent or a pledge');
+select is((select count(*)::int from public.audit_logs where actor_id in (pg_temp.u(21), pg_temp.u(22))), 0,
+  'nor any row whose actor is an agent''s member');
+reset role;
+select ok((select count(*) >= 3 from public.audit_logs
+            where operation in ('claim_monvelo_financing', 'monvelo_sweep_offers') and tenant_id is null
+              and coalesce(before::text, '') || coalesce(after::text, '') ~ pg_temp.ag(21)::text),
+  'the claim and lapse rows exist, with no tenant');
 select pg_temp.act_as(pg_temp.u(21), null);
 select is((select count(*)::int from public.monvelo_rebate_payables), 2, 'P''s member reads P''s payables (A and L)');
 select is((select count(*)::int from public.monvelo_rebate_payable_lines), 2, 'and their lines');
@@ -503,12 +637,12 @@ select is((select count(*)::int from public.monvelo_flags), 0, 'but no flags');
 select pg_temp.act_as(pg_temp.u(28), null);
 select is((select count(*)::int from public.monvelo_rebate_payables), 0, 'a stranger reads no payables');
 select pg_temp.act_as(pg_temp.u(9), null);
-select is((select count(*)::int from public.monvelo_flags), 8, 'the operator reads every flag');
+select is((select count(*)::int from public.monvelo_flags), 16, 'the operator reads every flag');
 select is((select count(*)::int from public.monvelo_rebate_payables), 3, 'and every payable');
 
 -- ── review_monvelo_flag ─────────────────────────────────────────────────
 reset role;
-create temp table flag as select id from public.monvelo_flags where kind = 'AMOUNT_MISMATCH';
+create temp table flag as select id from public.monvelo_flags where kind = 'AMOUNT_MISMATCH' and financing_id = pg_temp.f('D');
 grant select on flag to authenticated;
 select pg_temp.act_as(pg_temp.u(6), null);
 select throws_ok($$select public.review_monvelo_flag(pg_temp.k(900), (select id from flag), 'refunded in Paystack')$$,
