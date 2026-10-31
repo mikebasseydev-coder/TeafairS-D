@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(77);
+select plan(82);
 
 -- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
 update public.operational_states set app_enabled = true, web_enabled = true;
@@ -375,6 +375,27 @@ select is((select count(*)::int from public.audit_logs
 select ok((select count(*) > 0 from public.audit_logs
             where entity_type like 'monvelo_agent%' and (after::text like '%"6789"%' or after::text like '%"3210"%')),
   'the audit rows do carry the last four digits');
+
+-- ── R19: registration and settlement-change audit rows name no agent to the tenant (A6 §16.2.2) ──
+reset role;
+select set_config('test.agents', (select string_agg(id::text, '|') from public.monvelo_agents), true);
+select ok((select count(*) > 0 and bool_and(tenant_id is null) from public.audit_logs where operation in ('register_monvelo_agent', 'request_monvelo_settlement_change')),
+  'the registration and settlement-change rows exist, all with no tenant');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.audit_logs where operation in ('register_monvelo_agent', 'request_monvelo_settlement_change')), 0,
+  'the ZSM reads none of the registration and settlement-change rows');
+select is((select count(*)::int from public.audit_logs a
+            where coalesce(a.entity_id, '') || coalesce(a.before::text, '') || coalesce(a.after::text, '')
+                  ~ current_setting('test.agents')), 0,
+  'the ZSM reads no audit row naming an agent');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.audit_logs where operation in ('register_monvelo_agent', 'request_monvelo_settlement_change')), 0,
+  'the TM reads none of the registration and settlement-change rows');
+select is((select count(*)::int from public.audit_logs a
+            where coalesce(a.entity_id, '') || coalesce(a.before::text, '') || coalesce(a.after::text, '')
+                  ~ current_setting('test.agents')), 0,
+  'the TM reads no audit row naming an agent');
+reset role;
 
 select * from finish();
 rollback;

@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(79);
+select plan(85);
 
 -- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
 update public.operational_states set app_enabled = true, web_enabled = true;
@@ -403,6 +403,30 @@ select ok((select status = 'ACTIVE' and withdrawn_at is null
 select is((select count(*)::int from public.monvelo_shop_enrolments
             where shop_id = '70000000-0000-0000-0000-000000000001' and tenant_id = '10000000-0000-0000-0000-000000000001'), 1,
   'still one enrolment row for the tenant');
+
+-- ── R19: nomination audit rows name no agent to the tenant (A6 §16.2.2) ──
+reset role;
+select set_config('test.agents', (select string_agg(id::text, '|') from public.monvelo_agents), true);
+select ok((select count(*) > 0 and bool_and(tenant_id is null) from public.audit_logs where operation in ('nominate_monvelo_agent', 'close_monvelo_nomination')),
+  'the nomination rows exist, all with no tenant');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.audit_logs where operation in ('nominate_monvelo_agent', 'close_monvelo_nomination')), 0,
+  'the ZSM reads none of the nomination rows');
+select is((select count(*)::int from public.audit_logs a
+            where coalesce(a.entity_id, '') || coalesce(a.before::text, '') || coalesce(a.after::text, '')
+                  ~ current_setting('test.agents')), 0,
+  'the ZSM reads no audit row naming an agent');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000001');
+select is((select count(*)::int from public.audit_logs where operation in ('nominate_monvelo_agent', 'close_monvelo_nomination')), 0,
+  'the TM reads none of the nomination rows');
+select is((select count(*)::int from public.audit_logs a
+            where coalesce(a.entity_id, '') || coalesce(a.before::text, '') || coalesce(a.after::text, '')
+                  ~ current_setting('test.agents')), 0,
+  'the TM reads no audit row naming an agent');
+select pg_temp.act_as('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001');
+select ok((select count(*) > 0 from public.audit_logs where operation in ('start_monvelo_consent', 'enrol_monvelo_shop')),
+  'the ZSM still reads the tenant''s own non-lender rows (start_monvelo_consent, enrol_monvelo_shop)');
+reset role;
 
 select * from finish();
 rollback;
