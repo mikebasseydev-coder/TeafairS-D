@@ -68,7 +68,8 @@ export type InitializeRequest = {
   amountMinor: number;
   currency: string;
   email: string;
-  callbackUrl: string;
+  callbackUrl?: string;
+  channels?: string[];
   metadata: Record<string, unknown>;
   split?: { subaccount: string; transactionChargeMinor: number };
 };
@@ -99,9 +100,10 @@ export function paystackInitializer(opts: {
       amount: req.amountMinor,
       currency: req.currency,
       email: req.email,
-      callback_url: req.callbackUrl,
       metadata: req.metadata,
     };
+    if (req.callbackUrl) body.callback_url = req.callbackUrl;
+    if (req.channels) body.channels = req.channels;
     if (req.split) {
       body.subaccount = req.split.subaccount;
       body.transaction_charge = req.split.transactionChargeMinor;

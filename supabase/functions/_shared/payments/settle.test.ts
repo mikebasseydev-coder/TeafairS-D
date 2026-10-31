@@ -1,8 +1,8 @@
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import type { Rpc } from "../core/db.ts";
 import type { PaystackRefund } from "./paystack-refunds.ts";
 import type { VerifiedTransaction } from "./paystack.ts";
-import { applyRefunds, settleVerified } from "./settle.ts";
+import { applyRefunds, isMonveloReference, settleVerified } from "./settle.ts";
 
 function fakeRpc(results: Record<string, unknown> = {}) {
   const calls: Array<[string, Record<string, unknown>]> = [];
@@ -68,4 +68,30 @@ Deno.test("applyRefunds skips non-processed and unreadable", async () => {
   assertEquals(calls.length, 1);
   assertEquals(calls[0][1].p_refund_id, "1");
   assertEquals(calls[0][1].p_reason, "REFUND");
+});
+
+const mv: VerifiedTransaction = { ...tx, reference: "MV-ABCDEFGH-1", split: null };
+
+Deno.test("an MV- reference settles through Monvelo and never the web RPC", async () => {
+  const { rpc, calls } = fakeRpc({ settle_monvelo_funding: { outcome: "funded" } });
+  const r = await settleVerified(rpc, "charge.success", mv);
+  assertEquals(r.outcome, "funded");
+  assertEquals(calls, [["settle_monvelo_funding", {
+    p_event: "charge.success", p_reference: "MV-ABCDEFGH-1", p_status: "success", p_amount_minor: 250000,
+    p_currency: "NGN", p_verified: { id: 9 }, p_transaction_id: "9",
+  }]]);
+});
+
+Deno.test("an MV- reversal throws until Task 5 routes it", async () => {
+  const { rpc, calls } = fakeRpc();
+  await assertRejects(() => settleVerified(rpc, "sweep", { ...mv, status: "reversed" }), Error, "monvelo reversals are applied as refunds");
+  assertEquals(calls, []);
+});
+
+Deno.test("isMonveloReference matches only the MV format", () => {
+  assertEquals(
+    ["MV-ABCDEFGH-1", "MV-A2B3C4D5-12", "MV-abcdefgh-1", "MV-ABCDEFG-1", "TFW-ABCDEFGH-1", "xMV-ABCDEFGH-1", "MV-ABCDEFGH-1x", "MV-ABCDEFG1-1"]
+      .map(isMonveloReference),
+    [true, true, false, false, false, false, false, false],
+  );
 });

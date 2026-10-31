@@ -3,7 +3,24 @@ import type { Rpc } from "../core/db.ts";
 import type { PaystackRefund } from "./paystack-refunds.ts";
 import type { VerifiedTransaction } from "./paystack.ts";
 
+// A6 ง6.3: an agent's Monvelo funding charge. These settle through the Monvelo
+// RPC; the web RPC never sees them.
+export const isMonveloReference = (ref: string): boolean => /^MV-[A-Z2-7]{8}-\d+$/.test(ref);
+
 export async function settleVerified(rpc: Rpc, event: string, tx: VerifiedTransaction): Promise<{ outcome: string }> {
+  if (isMonveloReference(tx.reference)) {
+    // Task 5 routes reversals to the Monvelo refund path.
+    if (tx.status === "reversed") throw new Error("monvelo reversals are applied as refunds");
+    return await rpc<{ outcome: string }>("settle_monvelo_funding", {
+      p_event: event,
+      p_reference: tx.reference,
+      p_status: tx.status,
+      p_amount_minor: tx.amountMinor,
+      p_currency: tx.currency,
+      p_verified: tx.raw,
+      p_transaction_id: tx.transactionId,
+    });
+  }
   if (tx.status === "reversed") {
     // One transaction (ยง9): apply_paystack_refund moves a payment not yet
     // confirmed straight to REFUNDED, so the order is never marked PAID.

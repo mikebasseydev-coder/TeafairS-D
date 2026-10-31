@@ -532,3 +532,6 @@ verify_jwt = false
 
 [functions.monvelo-shop-consent]
 verify_jwt = false
+
+[functions.monvelo-fund]
+verify_jwt = false

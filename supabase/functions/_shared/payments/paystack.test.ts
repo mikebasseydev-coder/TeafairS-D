@@ -129,3 +129,21 @@ Deno.test("a hung Verify call is aborted by the timeout", async () => {
   await assertRejects(() => verify("TFW-1"));
   assertEquals(aborted, true);
 });
+
+Deno.test("Initialize sends channels when set and omits callback_url when unset", async () => {
+  const seen: Request[] = [];
+  await paystackInitializer({ secretKey: "k", fetchFn: fakeFetch(initialized, 200, seen) })({
+    reference: "MV-1", amountMinor: 100, currency: "NGN", email: "e@x.com", channels: ["bank_transfer"], metadata: {},
+  });
+  const sent = await seen[0].json();
+  assertEquals(sent.channels, ["bank_transfer"]);
+  assertEquals("callback_url" in sent, false);
+});
+
+Deno.test("Initialize omits channels when unset", async () => {
+  const seen: Request[] = [];
+  await paystackInitializer({ secretKey: "k", fetchFn: fakeFetch(initialized, 200, seen) })({
+    reference: "TFW-1", amountMinor: 100, currency: "NGN", email: "e@x.com", callbackUrl: "https://t/c", metadata: {},
+  });
+  assertEquals("channels" in await seen[0].json(), false);
+});
