@@ -90,8 +90,8 @@ Deno.test("an MV- reversal throws until Task 5 routes it", async () => {
 
 Deno.test("isMonveloReference matches only the MV format", () => {
   assertEquals(
-    ["MV-ABCDEFGH-1", "MV-A2B3C4D5-12", "MV-abcdefgh-1", "MV-ABCDEFG-1", "TFW-ABCDEFGH-1", "xMV-ABCDEFGH-1", "MV-ABCDEFGH-1x", "MV-ABCDEFG1-1"]
+    ["MV-ABCDEFGH-1", "MV-A2B3C4D5-12", "MV-abcdefgh-1", "MV-ABCDEFG-1", "TFW-ABCDEFGH-1", "xMV-ABCDEFGH-1", "MV-ABCDEFGH-1x", "MV-ABCDEFGH-0", "MV-ABCDEFGH-01", "MV-ABCDEFG1-1"]
       .map(isMonveloReference),
-    [true, true, false, false, false, false, false, false],
+    [true, true, false, false, false, false, false, false, false, false],
   );
 });

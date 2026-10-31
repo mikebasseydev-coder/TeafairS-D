@@ -3,9 +3,9 @@ import type { Rpc } from "../core/db.ts";
 import type { PaystackRefund } from "./paystack-refunds.ts";
 import type { VerifiedTransaction } from "./paystack.ts";
 
-// A6 ง6.3: an agent's Monvelo funding charge. These settle through the Monvelo
+// A6 ยง6.3: an agent's Monvelo funding charge. These settle through the Monvelo
 // RPC; the web RPC never sees them.
-export const isMonveloReference = (ref: string): boolean => /^MV-[A-Z2-7]{8}-\d+$/.test(ref);
+export const isMonveloReference = (ref: string): boolean => /^MV-[A-Z2-7]{8}-[1-9]\d*$/.test(ref);
 
 export async function settleVerified(rpc: Rpc, event: string, tx: VerifiedTransaction): Promise<{ outcome: string }> {
   if (isMonveloReference(tx.reference)) {
