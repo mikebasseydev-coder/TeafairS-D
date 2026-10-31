@@ -426,8 +426,8 @@ select is((select count(*)::int from public.monvelo_shop_limit_events
 -- ── the guard (as postgres) ─────────────────────────────────────────────
 select throws_ok($$update public.monvelo_financings set principal = 1 where id = pg_temp.f('F2')$$,
   'P0001', null, 'the principal is immutable');
-select throws_ok($$update public.monvelo_financings set status = 'FUNDED' where id = pg_temp.f('F2')$$,
-  'P0001', 'a financing cannot move from OFFERED to FUNDED', 'OFFERED cannot jump to FUNDED');
+select throws_ok($$update public.monvelo_financings set status = 'DELIVERED' where id = pg_temp.f('F2')$$,
+  'P0001', 'a financing cannot move from OFFERED to DELIVERED', 'OFFERED cannot jump to DELIVERED (OFFERED -> FUNDED is the late route, A6 Step 3 R1)');
 select throws_ok($$update public.monvelo_financings set status = 'OFFERED' where id = pg_temp.f('F1')$$,
   'P0001', 'a financing cannot move from CANCELLED to OFFERED', 'a cancelled financing stays cancelled');
 select throws_ok($$delete from public.monvelo_financing_lines where financing_id = pg_temp.f('F2')$$,

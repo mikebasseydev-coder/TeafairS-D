@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(33);
+select plan(36);
 
 create function pg_temp.bodies_matching(p_pattern text) returns text[]
 language sql stable as $$
@@ -80,6 +80,24 @@ select is((select count(*)::int from pg_constraint
 -- Task 6: the release job moved to web-commission-release
 select is((select count(*)::int from cron.job where jobname = 'fintech-commission-release' or command like '%fintech-commission-release%'), 0, 'no job calls the old function');
 select is((select command from cron.job where jobname = 'web-commission-release'), $$select public.invoke_system_function('web-commission-release', '{}'::jsonb)$$, 'the release job calls web-commission-release');
+
+-- Monvelo Step 3, Task 1: payments is shared (A6 §15.3). Monvelo adds only
+-- monvelo_-named columns, and grants none of them to the API.
+select is((select array_agg(column_name::text order by column_name) from information_schema.columns
+            where table_schema = 'public' and table_name = 'payments' and column_name !~ '^monvelo_'),
+          array['amount', 'created_at', 'customer_id', 'gateway_provider', 'gateway_response_payload', 'id',
+                'last_swept_at', 'order_id', 'otp_challenge_id', 'payment_status', 'paystack_reference',
+                'split_amount', 'split_bps', 'split_subaccount_code', 'teafair_agent_id', 'tenant_id',
+                'updated_at', 'web_pos_partner_id', 'web_pos_venue_id'],
+  'every payments column added since the web split is monvelo_-named');
+select is((select array_agg(column_name::text order by column_name) from information_schema.columns
+            where table_schema = 'public' and table_name = 'payments' and column_name ~ '^monvelo_'),
+          array['monvelo_agent_id', 'monvelo_financing_id', 'monvelo_started_by'], 'the Monvelo payments columns');
+select is((select count(*)::int from information_schema.columns c
+            where c.table_schema = 'public' and c.table_name = 'payments' and c.column_name ~ '^monvelo_'
+              and (has_column_privilege('authenticated', 'public.payments', c.column_name, 'select')
+                or has_column_privilege('anon', 'public.payments', c.column_name, 'select'))),
+          0, 'no Monvelo payments column is granted to the API');
 
 select * from finish();
 rollback;
