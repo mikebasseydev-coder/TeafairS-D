@@ -6,7 +6,7 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { publicGateway, type PublicGatewayDeps } from "../_shared/core/public-gateway.ts";
 import { clientIp } from "../_shared/commerce/client-ip.ts";
-import { normalizePhone } from "../_shared/commerce/phone.ts";
+import { normalizePhone } from "../_shared/core/phone.ts";
 import type { VerifyTurnstile } from "../_shared/commerce/turnstile.ts";
 import { type MessageSender, otpTemplate } from "../_shared/messaging/router.ts";
 

@@ -24,6 +24,8 @@ the authority; this file is the working summary.
 | Auth hardening (audit H1, H2, M1, L1) and the Send SMS / Send Email hooks | done (local) |
 | Domain separation and renames (A6 §15) | done (local) |
 | Monvelo (A6) Step 1 | done (local) |
+| Monvelo (A6) Step 1c: tenant representation | done (local) |
+| Monvelo (A6) Step 2: financing ledger and allocation | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -680,8 +682,8 @@ names.
 ### Monvelo (A6), Step 1
 
 Migrations `20261028120000`-`20261028120600` (plus the §15 renames above),
-pgTAP 036-041 and 045, local only. Nothing of A6 §16 (CSM, TENANT_ADMIN,
-LOGISTICS_MANAGER, contact reports, tenant ledger) is built.
+pgTAP 036-041 and 045, local only. A6 §16 (Step 1c) and Step 2 are under
+"Monvelo (A6) Step 1c and Step 2" below.
 
 - **Tables:** `areas`; `monvelo_agents` and `monvelo_agent_members`;
   `monvelo_shop_enrolments` and `monvelo_consent_challenges` (enrolments and
@@ -796,6 +798,120 @@ tenants; zones are states; one ZSM can cover several zones.
   appoints a ZSM (`appoint_zone_manager`); ZSMs invite TM, ASM, ZSA and ASA
   within their zones.
 
+### Monvelo (A6) Step 1c and Step 2
+
+Migrations `20261029120000`-`20261029130600`, pgTAP 046-060 (`051`-`054` and
+`058` are Step 2), the function `contact-report-upload`, local only. The plan
+is `docs/superpowers/plans/2026-10-29-monvelo-step1c-step2.md`; its ledger of
+rulings is in `.superpowers/sdd/` (git-ignored).
+
+**Step 1c: tenant representation (A6 §16).**
+
+- **Roles.** `CLIENT_SERVICE_MANAGER` (Teafair staff representing a tenant in
+  house; appointed by a `PLATFORM_SUPER_ADMIN` with
+  `appoint_client_service_manager`, one membership per tenant served),
+  `TENANT_ADMIN` (the tenant's read-only login; every write RPC refuses it with
+  42501), `LOGISTICS_MANAGER` (Teafair staff under the CSM; dispatches and
+  reads FUNDED financings).
+- **Contact reports are the source of truth.** The CSM files an insert-only
+  report (`file_contact_report`) with attendees, decisions and recipients;
+  corrections supersede it. A ZSM reviews it (`review_contact_report`; a
+  `MONVELO_OPERATOR` only while the tenant has no ACTIVE ZSM), then the CSM
+  uploads the signed hard copy (`request_contact_report_hard_copy`, the
+  `contact-report-upload` gateway, `attach_contact_report_hard_copy`; bucket
+  `contact-reports`, PDF/JPEG/PNG up to 10 MB). Only then is a decision
+  citable (`assert_citable_decision`).
+- **Decision subjects:** `BRAND_TERMS`, `MONVELO_SETTINGS`, `FEES`,
+  `CATALOGUE`, `STOCK`, `DISTRIBUTION`, `OTHER`. A citation must match its
+  subject and cite the current report of a correction chain.
+- **Every tenant agreement cites a decision (zero backdoors):** brand terms
+  approval and withdrawal, `set_monvelo_tenant_settings`,
+  `record_monvelo_fee_terms`, `upsert_catalogue_product`, the stock RPCs
+  (`record_stock_receipt`, `record_stock_transfer`, `record_stock_adjustment`)
+  and `set_tenant_operational_state`. `049` scans every function body for
+  writes to the guarded tables and fails on any writer that does not cite the
+  right subject, unless it is on a named allowlist with a reason.
+- **The bridging rule.** The CSM approves brand terms and settings. While a
+  tenant has no CSM, a ZSM other than the proposer approves, still citing a
+  ZSM-approved, hard-copied decision.
+- **Sending is deferred.** Each recipient gets a PENDING
+  `contact_report_deliveries` row (the send log); nothing is sent until Step 6
+  adds a Meta-approved utility template and a drain through the router.
+
+**Operations (A6 §18).**
+
+- **ZSM scope (§18.3).** ZSM admin and approval powers, and their reads, are
+  limited to the zones they cover; an uncovered zone stays open to every
+  ACTIVE ZSM of the tenant until one is assigned. Tenant-wide objects (terms,
+  settings, contact-report review, web defaults) stay with any ZSM. ZSM-to-ZSM
+  direct chat is open.
+- **Operational states (§18.4).** `set_state_operational` (platform admin,
+  with a reason) switches a state on for the app and the web separately; a
+  brand opts in with `set_tenant_operational_state` citing a `DISTRIBUTION`
+  decision. New work (web orders, trade orders, enrolment, supply days,
+  pledges, financing requests) needs both; placed orders, dispatch, delivery,
+  refunds and winding down never do. Opt-ins persist across platform toggles.
+- **Stock (§18.1).** Orders reserve stock at placement, first expiry first out
+  (`stock_reservations`; `inventory_batches.quantity_reserved` is the stored
+  sum, TF001 `insufficient stock` with `{sku_code, available, requested}`);
+  dispatch consumes it into `SALE_DISPATCH` movements; a cancel or a refund
+  before dispatch releases it; `record_order_return` (LM or CSM) restores goods
+  after dispatch, citing the order. Cron `stock-reservation-sweep` (every 15
+  min) cancels unpaid web orders after `tenant_settings.web_reservation_hours`
+  (24) and cash trade orders still PENDING at the end of their Lagos supply day.
+
+**Step 2: the financing ledger and allocation.**
+
+- **Tables:** `monvelo_platform_settings` (radius 1000 m, preferred window 10
+  min, claim 15 min; migration only), `monvelo_supply_days`, `monvelo_pledges`,
+  `monvelo_financings` (every §4.4 column; status machine enforced by trigger),
+  `monvelo_financing_lines` (one per brand; terms locked once at funding),
+  `monvelo_shop_limits` and `monvelo_shop_limit_events` (per-brand limit and
+  its insert-only history), `monvelo_financing_claims`,
+  `monvelo_tenant_ledger_entries` (insert-only; FUNDED_GROSS positive, every
+  other entry negative; no writer until Steps 3 and 5). Monvelo records are
+  never deleted, and `service_role` holds no write on the Step 2 tables.
+  Tenants never see lenders (§16.2.2): claims are read only by the agent's own
+  members and Monvelo staff.
+- **RPCs:** `set_monvelo_supply_day`, `pledge_monvelo_funds`,
+  `monvelo_supply_days_near`, `monvelo_agents_near`, `place_trade_order` (ZSA,
+  ASA or TM; wholesale, whole packs, the territory's oldest REGIONAL
+  warehouse), `request_monvelo_financing`, `approve_monvelo_financing` (the
+  territory's TM, above the limit), `cancel_monvelo_financing` (the raiser or
+  the TM; cancels the trade order and releases its stock),
+  `claim_monvelo_financing`, `monvelo_open_offers` (never the owner),
+  `monvelo_order_financing_status` (at most 200 orders).
+- **Cron `monvelo-offer-sweep`** (every minute, pure SQL): lapsed claims go back
+  to OFFERED with no new window; then a request still OFFERED or
+  AWAITING_APPROVAL at the end of its Lagos supply day, or whose trade order is
+  no longer PENDING (the stock sweep cancels unpaid trade orders), is EXPIRED
+  and its trade order cancelled. Rows are audited as `CRON` on the raiser.
+- **Allocation (§7.1).** The shop's preferred agent alone may claim during its
+  window (only when its pledge covers the request); then any ACTIVE agent
+  within the radius (the preferred agent is exempt) whose pledge, less its
+  other open claims, covers the principal, within its per-financing and daily
+  caps. One open claim per financing; an agent whose claim lapsed cannot claim
+  that request again.
+- **Credit is the tenant's (§7.2, user 2026-10-30).** Teafair imposes no
+  cash-order or trading-history threshold. A shop's per-brand limit opens at
+  the tenant's `opening_limit`; above it the TM approves. The tenant sets
+  `limit_growth_bps`, `max_limit`, `default_cure_days` and
+  `post_default_limit_bps` through `set_monvelo_tenant_settings`, citing a
+  `MONVELO_SETTINGS` decision. The platform keeps only integrity checks:
+  consent, a verified owner phone, approved terms for every brand of the order
+  (all or nothing), a supply day, the operational state.
+- **The hybrid default freeze (§18.2).** A shop with an unresolved default
+  with any tenant gets no new request or claim for any brand; the message names
+  no tenant or brand. After it is cleared, each tenant waits its
+  `default_cure_days` ("<Brand> credit resumes on <date>"), and the shop's limit
+  for each of its brands restarts once at `post_default_limit_bps` of the
+  opening limit.
+- **The raiser's overdue share (§7.3).** A ZSA, ASA or TM whose PAR30 (outstanding
+  more than 30 days past due, over the outstanding of what they raised that was
+  delivered, with every tenant) passes 10% cannot request until it drops.
+- **For Step 3:** funding must require a PENDING trade order and debit the
+  pledge once; the tenant ledger's writers arrive with funding and payouts.
+
 ## Layout
 
 ```
@@ -804,7 +920,7 @@ supabase/
 ├── migrations/        hand-written, ordered — Supabase CLI owns all DDL
 ├── tests/database/    pgTAP, run by `supabase test db`
 └── functions/         Edge Functions — one flat directory per function
-    └── _shared/       core/ (gateway kernel, public-gateway) · auth/ · commerce/ · payments/ · monvelo/ · messaging/ · storage/ · support/ · fulfilment/
+    └── _shared/       core/ (gateway kernel, public-gateway, phone) · auth/ · commerce/ · payments/ · monvelo/ · messaging/ · storage/ · support/ · fulfilment/
 ```
 
 Code is grouped by domain: `auth`, `rtm-core`, `commerce` (the web

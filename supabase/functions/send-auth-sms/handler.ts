@@ -10,7 +10,7 @@
 // own profile phone, and a platform role or an ACTIVE or INVITED membership).
 // Phone changes are refused: profiles.phone_number would not follow them.
 import { hookError, type HookVerifier } from "../_shared/auth/hook.ts";
-import { normalizePhone } from "../_shared/commerce/phone.ts";
+import { normalizePhone } from "../_shared/core/phone.ts";
 import { z } from "../_shared/core/deps.ts";
 import { json } from "../_shared/core/http.ts";
 import { GatewayError } from "../_shared/core/errors.ts";

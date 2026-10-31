@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(60);
+select plan(61);
 
 -- A6 Task 6b: placing an order reserves stock. This file is not about stock,
 -- so every ordered line finds ample stock in its order's fulfilment warehouse.
@@ -219,7 +219,8 @@ select pg_temp.act_as(pg_temp.u(22), null);
 select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(120), pg_temp.f('A'), pg_temp.ag(22))$$,
   'P0001', 'this request is no longer open', 'N cannot claim a claimed request');
 reset role;
-select is((select count(*)::int from public.monvelo_financing_claims where outcome is null), 1, 'one open claim row');
+select is((select count(*)::int from public.monvelo_financing_claims where outcome is null and financing_id in (select id from fin)), 1,
+  'one open claim row');
 select throws_ok($$insert into public.monvelo_financing_claims (tenant_id, financing_id, agent_id, claimed_by, pledge_id, expires_at)
                    values (pg_temp.t1(), pg_temp.f('A'), pg_temp.ag(22), pg_temp.u(22), '82000000-0000-0000-0000-000000000022', now())$$,
   '23505', null, 'a second open claim on one financing is refused by the index');
@@ -287,12 +288,15 @@ select is((select count(*)::int from public.monvelo_open_offers(pg_temp.ag(22)) 
   'N does not see W during P''s window');
 
 -- ── readers ─────────────────────────────────────────────────────────────
-select is((select count(*)::int from public.monvelo_financing_claims), 2,
-  'N''s member reads the claims on A, the financing it holds (its own and P''s lapsed one)');
+select is((select count(*)::int from public.monvelo_financing_claims), 1,
+  'N''s member reads only N''s own claim, not P''s lapsed one on the same financing');
 select pg_temp.act_as(pg_temp.u(28), null);
 select is((select count(*)::int from public.monvelo_financing_claims), 0, 'a stranger reads no claims');
 select pg_temp.act_as(pg_temp.u(3), pg_temp.t1());
-select is((select count(*)::int from public.monvelo_financing_claims), 4, 'the territory''s TM reads every claim on its financings');
+select is((select count(*)::int from public.monvelo_financing_claims), 0,
+  'the territory''s TM reads no claims: tenants never see lenders (A6 §16.2.2)');
+select pg_temp.act_as(pg_temp.u(1), pg_temp.t1());
+select is((select count(*)::int from public.monvelo_financing_claims), 0, 'nor does the ZSM');
 reset role;
 
 -- ── expiry at the end of the supply day ─────────────────────────────────

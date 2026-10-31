@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(21);
+select plan(22);
 
 -- fixtures (as postgres): one tenant with Monvelo on, a ZSM and a ZSA
 insert into public.tenants (id, name, code) values
@@ -90,6 +90,11 @@ select is((select array_agg(proname::text order by proname) from pg_proc
 select is((select count(*)::int > 0 from pg_proc
             where pronamespace = 'public'::regnamespace and proname = 'register_monvelo_agent'
               and prosrc ~ '(^|[^a-z_])monvelo_[a-z]'), true, 'the boundary pattern matches a known Monvelo body');
+
+-- A6 §15: the lenders are Monvelo agents; no function still calls them fintech (Ruling 2, Task 10)
+select is((select string_agg(p.proname, ', ' order by p.proname) from pg_proc p
+            where p.pronamespace = 'public'::regnamespace and p.prosrc ~* 'fintech'), null,
+  'no public function body says fintech');
 
 select * from finish();
 rollback;

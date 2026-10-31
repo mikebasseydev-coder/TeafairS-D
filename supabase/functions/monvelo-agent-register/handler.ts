@@ -7,7 +7,7 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { userGateway, type UserGatewayDeps } from "../_shared/core/gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
-import { normalizePhone } from "../_shared/commerce/phone.ts";
+import { normalizePhone } from "../_shared/core/phone.ts";
 
 export type MonveloAgentRegisterDeps = UserGatewayDeps & {
   resolve: (accountNumber: string, bankCode: string) => Promise<{ accountName: string }>;

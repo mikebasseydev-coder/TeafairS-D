@@ -187,6 +187,9 @@ const cron = (fn: string, body: unknown, secret = CRON_SECRET) =>
 
 let users: Record<"tm" | "dsm" | "dsa" | "owner" | "agent" | "tfTm" | "tfWm" | "tfDsm" | "tfDsa" | "tfZsm", { id: string; email: string }>;
 let IKEJA: string;
+// the test tenant's CSM and ZSM (fixtures), and the shop the consent test enrols (A6 Step 2 reuses them)
+let reps: { csm: { id: string; email: string }; zsm: { id: string; email: string } };
+let consented: { zsa: { id: string; email: string }; area: string; shop: string } | undefined;
 
 // A6 18.4: a platform administrator switches Lagos on; a brand then opts in to it,
 // citing a DISTRIBUTION decision (filed by its CSM, approved by its ZSM, hard copy attached)
@@ -197,30 +200,38 @@ async function switchOnLagos(csmTenants: Array<{ tenant: string; csm: { id: stri
   await must(root.db.rpc("set_state_operational", {
     p_idempotency_key: crypto.randomUUID(), p_state_code: "LA", p_app_enabled: true, p_web_enabled: true, p_reason: "integration run",
   }));
-  for (const { tenant, csm, zsm } of csmTenants) {
+  for (const { csm, zsm } of csmTenants) {
+    const decision = await citableDecision(csm, zsm, "DISTRIBUTION", "Distribute in Lagos");
     const c = await asUser(csm.email);
-    const z = await asUser(zsm.email);
-    const filed = await must(c.db.rpc("file_contact_report", {
-      p_idempotency_key: crypto.randomUUID(),
-      p_report: {
-        met_at: new Date(Date.now() - 3600_000).toISOString(), channel: "MEETING",
-        attendees: [{ name: "Ada", side: "TEAFAIR" }], summary: "Agreed the states the brand distributes in.",
-        decisions: [{ subject: "DISTRIBUTION", text: "Distribute in Lagos" }],
-        recipients: [{ name: "Chidi", channel: "WHATSAPP", address: "+2348031112222" }],
-      },
-    })) as { report_id: string };
-    await must(z.db.rpc("review_contact_report", { p_idempotency_key: crypto.randomUUID(), p_report_id: filed.report_id, p_outcome: "APPROVED" }));
-    const slot = await must(c.db.rpc("request_contact_report_hard_copy", {
-      p_idempotency_key: crypto.randomUUID(), p_report_id: filed.report_id, p_mime_type: "application/pdf", p_size_bytes: 1000,
-    })) as { storage_path: string; hard_copy_id: string };
-    const up = await admin.storage.from("contact-reports").upload(slot.storage_path, new Uint8Array(1000).fill(7), { contentType: "application/pdf" });
-    if (up.error) throw up.error;
-    await must(c.db.rpc("attach_contact_report_hard_copy", { p_idempotency_key: crypto.randomUUID(), p_hard_copy_id: slot.hard_copy_id }));
-    const [decision] = (await must(c.db.from("contact_report_decisions").select("id").eq("report_id", filed.report_id))) as Array<{ id: string }>;
     await must(c.db.rpc("set_tenant_operational_state", {
-      p_idempotency_key: crypto.randomUUID(), p_state_code: "LA", p_app_enabled: true, p_web_enabled: true, p_decision_id: decision.id,
+      p_idempotency_key: crypto.randomUUID(), p_state_code: "LA", p_app_enabled: true, p_web_enabled: true, p_decision_id: decision,
     }));
   }
+}
+
+// A6 16.4: a decision is citable once its report is filed (CSM), approved (ZSM)
+// and its signed hard copy attached; returns the decision's id
+async function citableDecision(csm: { email: string }, zsm: { email: string }, subject: string, text: string): Promise<string> {
+  const c = await asUser(csm.email);
+  const z = await asUser(zsm.email);
+  const filed = await must(c.db.rpc("file_contact_report", {
+    p_idempotency_key: crypto.randomUUID(),
+    p_report: {
+      met_at: new Date(Date.now() - 3600_000).toISOString(), channel: "MEETING",
+      attendees: [{ name: "Ada", side: "TEAFAIR" }], summary: `Agreed: ${text}.`,
+      decisions: [{ subject, text }],
+      recipients: [{ name: "Chidi", channel: "WHATSAPP", address: "+2348031112222" }],
+    },
+  })) as { report_id: string };
+  await must(z.db.rpc("review_contact_report", { p_idempotency_key: crypto.randomUUID(), p_report_id: filed.report_id, p_outcome: "APPROVED" }));
+  const slot = await must(c.db.rpc("request_contact_report_hard_copy", {
+    p_idempotency_key: crypto.randomUUID(), p_report_id: filed.report_id, p_mime_type: "application/pdf", p_size_bytes: 1000,
+  })) as { storage_path: string; hard_copy_id: string };
+  const up = await admin.storage.from("contact-reports").upload(slot.storage_path, new Uint8Array(1000).fill(7), { contentType: "application/pdf" });
+  if (up.error) throw up.error;
+  await must(c.db.rpc("attach_contact_report_hard_copy", { p_idempotency_key: crypto.randomUUID(), p_hard_copy_id: slot.hard_copy_id }));
+  const [decision] = (await must(c.db.from("contact_report_decisions").select("id").eq("report_id", filed.report_id))) as Array<{ id: string }>;
+  return decision.id;
 }
 
 Deno.test({
@@ -235,6 +246,7 @@ Deno.test({
     };
     const itCsm = await createUser(72);
     const itZsm = await createUser(73);
+    reps = { csm: itCsm, zsm: itZsm };
     const tfCsm = await createUser(74);
     const [lga] = (await must(admin.from("ng_lgas").select("id").eq("state_code", "LA").eq("name", "Ikeja"))) ?? [];
     IKEJA = lga.id;
@@ -1262,6 +1274,78 @@ Deno.test({
     const enrolledBody = await enrolled.json();
     assertEquals(enrolled.status, 200, JSON.stringify(enrolledBody));
     assert(/^SH-[A-Z2-7]{6}$/.test(enrolledBody.shop_code), enrolledBody.shop_code);
+    consented = { zsa: zsaUser, area: area.id, shop: shop.id };
+  },
+});
+
+Deno.test({
+  name: "monvelo step 2 over PostgREST: a ZSA's trade order is requested, offered and claimed",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    assert(consented, "runs after the monvelo-shop-consent test, on the shop it enrolled");
+    // Lagos is UTC+1: today's date and ISO weekday there
+    const lagos = new Date(Date.now() + 3600_000);
+    const today = lagos.toISOString().slice(0, 10);
+    const isodow = ((lagos.getUTCDay() + 6) % 7) + 1;
+
+    await must(admin.from("monvelo_tenant_settings").upsert({ tenant_id: ids.tenant, enabled: true, opening_limit: 1000000 }));
+    // Milo terms: the ZSM proposes; the CSM approves citing a BRAND_TERMS decision through
+    // PostgREST, which resolves the 3-argument function (no overload remains)
+    const zsm = await asUser(reps.zsm.email);
+    const csm = await asUser(reps.csm.email);
+    const proposed = await must(zsm.db.rpc("propose_monvelo_brand_terms", {
+      p_idempotency_key: crypto.randomUUID(), p_brand: "Milo", p_rebate_bps: 200, p_interest_free_days: 14,
+      p_late_charge_bps: 300, p_valid_from: today, p_valid_to: null,
+    })) as { terms_id: string };
+    const decision = await citableDecision(reps.csm, reps.zsm, "BRAND_TERMS", "Milo terms");
+    const approved = await must(csm.db.rpc("approve_monvelo_brand_terms", {
+      p_idempotency_key: crypto.randomUUID(), p_terms_id: proposed.terms_id, p_decision_id: decision,
+    })) as { status: string };
+    assertEquals(approved.status, "APPROVED");
+
+    // today is a supply day in the shop's area; an ACTIVE agent ~400 m away pledges for it
+    await must(admin.from("monvelo_supply_days").upsert({
+      tenant_id: ids.tenant, area_id: consented.area, day_of_week: isodow, active: true, set_by: reps.zsm.id,
+    }));
+    const member = await createUser(80);
+    const [agent] = (await must(admin.from("monvelo_agents").insert({
+      business_name: `IT lender ${run}`, pos_network: "OPAY", network_agent_id: `IT-MV-${run}`.toUpperCase(),
+      contact_phone: phone(80), location: "SRID=4326;POINT(3.35 6.6036)", address_text: "Allen Avenue",
+      settlement_account_number: String(Date.now()).slice(-10), settlement_account_last4: "0000", settlement_bank_code: "058",
+      settlement_account_name: `IT lender ${run}`, network_kyc_reference: `KYC-${run}`, recruited_by: consented.zsa.id,
+      status: "ACTIVE", daily_cap: 1000000, per_financing_cap: 500000,
+    }).select("id"))) as Array<{ id: string }>;
+    await must(admin.from("monvelo_agent_members").insert({ agent_id: agent.id, profile_id: member.id }));
+    await must(admin.from("monvelo_pledges").insert({
+      tenant_id: ids.tenant, agent_id: agent.id, area_id: consented.area, supply_date: today,
+      amount: 100000, remaining: 100000, pledged_by: member.id,
+    }));
+
+    // the ZSA places a trade order for the shop and requests its financing
+    const zsa = await asUser(consented.zsa.email);
+    const order = await must(zsa.db.rpc("place_trade_order", {
+      p_idempotency_key: crypto.randomUUID(), p_shop_id: consented.shop,
+      p_lines: [{ sku_code: "MILO-400", qty: 2 }], p_territory_id: ids.territory,
+    })) as { order_id: string; total_amount: number };
+    const requested = await must(zsa.db.rpc("request_monvelo_financing", {
+      p_idempotency_key: crypto.randomUUID(), p_order_id: order.order_id,
+    })) as { financing_id: string; reference: string; status: string; approval_required: boolean };
+    assertEquals([requested.status, requested.approval_required], ["OFFERED", false]);
+    assert(/^MV-[A-Z2-7]{8}$/.test(requested.reference), requested.reference);
+    const status = await must(zsa.db.rpc("monvelo_order_financing_status", { p_order_ids: [order.order_id] })) as Array<{ financing_state: string }>;
+    assertEquals(status.map((s) => s.financing_state), ["OFFERED"]);
+
+    // the agent's member sees the offer, without the owner, and claims it
+    const lender = await asUser(member.email);
+    const offers = await must(lender.db.rpc("monvelo_open_offers", { p_agent_id: agent.id })) as Array<Record<string, unknown>>;
+    const offer = offers.find((o) => o.financing_id === requested.financing_id);
+    assert(offer, JSON.stringify(offers));
+    assert(!/owner|phone/i.test(Object.keys(offer).join(",")), "no owner details in an offer");
+    const claimed = await must(lender.db.rpc("claim_monvelo_financing", {
+      p_idempotency_key: crypto.randomUUID(), p_financing_id: requested.financing_id, p_agent_id: agent.id,
+    })) as { status: string; principal: number };
+    assertEquals([claimed.status, Number(claimed.principal)], ["CLAIMED", Number(order.total_amount)]);
   },
 });
 

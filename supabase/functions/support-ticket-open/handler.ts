@@ -7,7 +7,7 @@ import { GatewayError } from "../_shared/core/errors.ts";
 import { publicGateway, type PublicGatewayDeps } from "../_shared/core/public-gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
 import { clientIp } from "../_shared/commerce/client-ip.ts";
-import { normalizePhone } from "../_shared/commerce/phone.ts";
+import { normalizePhone } from "../_shared/core/phone.ts";
 import type { VerifyTurnstile } from "../_shared/commerce/turnstile.ts";
 import { mapNotFound } from "../_shared/support/not-found.ts";
 import { sha256Hex } from "../_shared/support/secret.ts";
