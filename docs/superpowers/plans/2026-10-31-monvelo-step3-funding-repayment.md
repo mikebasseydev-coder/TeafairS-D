@@ -197,7 +197,7 @@ There is no line-coverage tool for SQL, so nothing is claimed beyond that list.
   - `monvelo_owner_challenges(id, tenant_id, financing_id, repayment_id null, purpose, code_hash, expires_at, attempts, consumed_at, created_by, created_at)`:
     - `purpose` ∈ `DELIVERY`, `REPAYMENT`;
     - no reader (RLS on, no policy), like `monvelo_consent_challenges`.
-  - `dispatch_monvelo_financing(p_idempotency_key uuid, p_financing_id uuid, p_tracking_reference text) returns jsonb`. Callers pass `fulfilment_can_dispatch` (the LM, a ZSM, the warehouse manager). FUNDED and order PAID → order IN_TRANSIT, stock consumed. Refused after the funding day.
+  - `dispatch_monvelo_financing(p_idempotency_key uuid, p_financing_id uuid, p_tracking_reference text) returns jsonb`. Callers pass `fulfilment_can_dispatch` (the LM, a ZSM, the warehouse manager). FUNDED and order PAID → order IN_TRANSIT, stock consumed. Refused 23 hours after funding.
   - `start_monvelo_delivery(p_idempotency_key uuid, p_gateway_proof text, p_financing_id uuid) returns jsonb`. Callers have a non-null `fulfilment_delivery_path`. FUNDED and order IN_TRANSIT. Returns `{challenge_id, expires_at, destination_phone, code?}`, exactly as `start_monvelo_consent`.
   - `confirm_monvelo_delivery(p_idempotency_key uuid, p_challenge_id uuid, p_code text) returns jsonb`. Returns `{confirmed: true, due_at}` or `{confirmed: false, reason: 'INVALID'|'EXPIRED'|'LOCKED'}`.
   - `monvelo_fee_bps_at(p_tenant_id uuid, p_date date) returns integer`: the fee terms valid that day, 0 if none.
@@ -277,7 +277,7 @@ There is no line-coverage tool for SQL, so nothing is claimed beyond that list.
 ### Task 5: The money sweep and Monvelo refunds
 
 **Files:**
-- Create: `supabase/migrations/20261031120300_monvelo_money_sweep.sql`, `supabase/tests/database/064_monvelo_money_sweep.test.sql`
+- Create: `supabase/migrations/20261031120400_monvelo_money_sweep.sql`, `supabase/tests/database/064_monvelo_money_sweep.test.sql`
 - Modify: `supabase/functions/_shared/payments/settle.ts` (`applyRefunds` and the `reversed` branch route `MV-` references), `settle.test.ts`
 
 **Interfaces:**
@@ -292,7 +292,7 @@ There is no line-coverage tool for SQL, so nothing is claimed beyond that list.
   - `apply_monvelo_refund(p_source text, p_refund_id text, p_transaction_reference text, p_amount_minor bigint, p_currency text, p_reason text, p_verified jsonb) returns jsonb` (service_role). At most once per refund id. The payment becomes REFUNDED. If the financing is REFUND_DUE and this is its funding payment, `closed_at` is set.
 
 **The sweep, in order:**
-1. **Refund due:** FUNDED and `now() ≥ ((funded_at Lagos date + 1)::timestamp at time zone 'Africa/Lagos')` → REFUND_DUE.
+1. **Refund due:** FUNDED and `now() ≥ funded_at + interval '23 hours'` (user, 2026-11-01) → REFUND_DUE.
    - The order becomes CANCELLED: reserved stock is released (`stock_release_order`); consumed stock comes back through `record_order_return`.
    - The payable goes DUE → CANCELLED.
    - `raise_system_ticket('monvelo-refund:' || id, order_id, 'Refund the funding of <reference> in Paystack.', 'HIGH')`.
@@ -303,7 +303,7 @@ Each loop uses `for update skip locked`, as `monvelo_sweep_offers` does.
 
 - [ ] **Step 1: Write the failing tests:**
   - `064` (plan ≈ 40):
-    - funded yesterday and undelivered → REFUND_DUE, order CANCELLED, reservations released, payable CANCELLED, one ticket; funded today → untouched;
+    - funded 23 hours ago and undelivered → REFUND_DUE, order CANCELLED, reservations released, payable CANCELLED, one ticket; funded 22h59 ago → untouched;
     - 30 days, ₦48,000 outstanding, 1000 bps → late charge 4800.00 and outstanding 52800.00; with 28000 outstanding → 2800.00; a second sweep adds nothing;
     - two lines (30000 at 1000 bps, 18000 at 500 bps), all outstanding → 3000 + 900 = 3900.00;
     - a pending repayment at 25 h → EXPIRED, a flag and a ticket; at 23 h → untouched;

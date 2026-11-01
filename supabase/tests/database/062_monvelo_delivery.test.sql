@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(85);
+select plan(86);
 
 -- A6 Task 6b: placing an order reserves stock. Every ordered line finds ample
 -- stock in its order's fulfilment warehouse (one FIXTURE batch per SKU).
@@ -272,16 +272,18 @@ select throws_ok($$select public.dispatch_monvelo_financing(pg_temp.k(204), pg_t
 select throws_ok($$select public.dispatch_monvelo_financing(pg_temp.k(205), pg_temp.f('A'), repeat('x', 101))$$,
   'P0001', 'the tracking reference must be at most 100 characters', 'a tracking reference over 100 characters is refused');
 reset role;
--- D was funded yesterday (Lagos): its day has passed
-update public.monvelo_financings set funded_at = now() - interval '1 day' where id = pg_temp.f('D');
+-- D was funded exactly 23 hours ago: the window is closed (now >= funded_at + 23 hours)
+update public.monvelo_financings set funded_at = now() - interval '23 hours' where id = pg_temp.f('D');
 select pg_temp.act_as(pg_temp.u(8), pg_temp.t1());
 select throws_ok($$select public.dispatch_monvelo_financing(pg_temp.k(206), pg_temp.f('D'), null)$$,
-  'P0001', 'the funding day has passed; this financing is due a refund', 'dispatch is refused after the funding day');
+  'P0001', 'the 23-hour delivery window has passed; this financing is due a refund', 'dispatch is refused 23 hours after funding');
 reset role;
 select is((select count(*)::int from public.stock_movements where order_id = pg_temp.o('A')), 0,
   'nothing was consumed by the refusals');
 
-select lives_ok($$select pg_temp.dispatch('DA', 8, 210, 'A')$$, 'the LM dispatches A');
+-- A was funded 22h59 ago (usually the previous Lagos calendar day): the calendar day no longer matters
+update public.monvelo_financings set funded_at = now() - interval '22 hours 59 minutes' where id = pg_temp.f('A');
+select lives_ok($$select pg_temp.dispatch('DA', 8, 210, 'A')$$, 'the LM dispatches A, funded 22h59 ago (allowed)');
 select is(pg_temp.r('DA'), jsonb_build_object('financing_id', pg_temp.f('A'), 'order_id', pg_temp.o('A'), 'order_status', 'IN_TRANSIT'),
   'the reply names the financing, the order and IN_TRANSIT');
 select is((select status from public.orders where id = pg_temp.o('A')), 'IN_TRANSIT', 'A''s order is IN_TRANSIT');
@@ -388,21 +390,21 @@ select is((select status from public.monvelo_financings where id = pg_temp.f('A'
 select is((select count(*)::int from public.monvelo_tenant_ledger_entries where financing_id = pg_temp.f('A')), 0,
   'and nothing is booked');
 
--- ── the delivery day, on B ──────────────────────────────────────────────
-update public.monvelo_financings set funded_at = now() - interval '1 day' where id = pg_temp.f('B');
+-- ── the 23-hour window, on B ────────────────────────────────────────────
+update public.monvelo_financings set funded_at = now() - interval '23 hours' where id = pg_temp.f('B');
 select pg_temp.act_as(pg_temp.u(9), pg_temp.t1());
 select throws_ok($$select public.start_monvelo_delivery(pg_temp.k(429), 'test-gw-secret', pg_temp.f('B'))$$,
-  'P0001', 'the funding day has passed; this financing is due a refund', 'no code once the funding day has passed');
+  'P0001', 'the 23-hour delivery window has passed; this financing is due a refund', 'no code 23 hours after funding');
 reset role;
-update public.monvelo_financings set funded_at = now() where id = pg_temp.f('B');
-select pg_temp.start('SB', 9, 430, 'B');
-update public.monvelo_financings set funded_at = now() - interval '1 day' where id = pg_temp.f('B');
+update public.monvelo_financings set funded_at = now() - interval '22 hours 59 minutes' where id = pg_temp.f('B');
+select lives_ok($$select pg_temp.start('SB', 9, 430, 'B')$$, 'a code is allowed 22h59 after funding');
+update public.monvelo_financings set funded_at = now() - interval '23 hours' where id = pg_temp.f('B');
 select pg_temp.act_as(pg_temp.u(9), pg_temp.t1());
 select throws_ok(format($$select public.confirm_monvelo_delivery(pg_temp.k(432), %L, %L)$$,
                         pg_temp.r('SB') ->> 'challenge_id', pg_temp.r('SB') ->> 'code'),
-  'P0001', 'the funding day has passed; this financing is due a refund', 'no confirmation once the funding day has passed');
+  'P0001', 'the 23-hour delivery window has passed; this financing is due a refund', 'no confirmation 23 hours after funding');
 reset role;
-update public.monvelo_financings set funded_at = now() where id = pg_temp.f('B');
+update public.monvelo_financings set funded_at = now() - interval '22 hours 59 minutes' where id = pg_temp.f('B');
 
 -- ── B delivered at 0 bps ────────────────────────────────────────────────
 select is(pg_temp.confirm('CB', 9, 431, 'SB') ->> 'confirmed', 'true', 'a DSA of the territory confirms B with the code');

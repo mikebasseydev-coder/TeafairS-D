@@ -325,9 +325,9 @@ reset role;
 select ok(exists (select 1 from public.orders where total_amount = 850.00 and status = 'DELIVERED'), 'the order is DELIVERED');
 
 -- ── app: enrolment, supply days, pledges ────────────────────────────────
-create function pg_temp.enrol() returns jsonb language sql as
-  $$ select public.enrol_monvelo_shop(pg_temp.k(80 + (random() * 1000)::int), 'c0000000-0000-0000-0000-000000000001', '123456') $$;
-grant execute on function pg_temp.enrol() to authenticated;
+create function pg_temp.enrol(p_n integer) returns jsonb language sql as
+  $$ select public.enrol_monvelo_shop(pg_temp.k(p_n), 'c0000000-0000-0000-0000-000000000001', '123456') $$;
+grant execute on function pg_temp.enrol(integer) to authenticated;
 select set_config('test.day', (public.monvelo_today() + 1)::text, true);
 create function pg_temp.supply(p_n integer) returns jsonb language sql as
   $$ select public.set_monvelo_supply_day(pg_temp.k(p_n), '60000000-0000-0000-0000-000000000001',
@@ -340,7 +340,7 @@ grant execute on function pg_temp.pledge(integer) to authenticated;
 
 -- the platform app switch is off (Lagos was switched off above)
 select pg_temp.act_as(pg_temp.u(9), '7eaf0000-0000-4000-8000-000000000001');
-select throws_ok($$select pg_temp.enrol()$$, 'P0001', 'Teafair is not operating in Lagos yet', 'enrolment is refused in an app-off state');
+select throws_ok($$select pg_temp.enrol(80)$$, 'P0001', 'Teafair is not operating in Lagos yet', 'enrolment is refused in an app-off state');
 select pg_temp.act_as(pg_temp.u(10), '7eaf0000-0000-4000-8000-000000000001');
 select throws_ok($$select pg_temp.supply(90)$$, 'P0001', 'Teafair is not operating in Lagos yet', 'a supply day is refused in an app-off state');
 select pg_temp.act_as(pg_temp.u(12), null);
@@ -372,7 +372,7 @@ select is((select count(*)::int from public.tenant_operational_state_events
 select pg_temp.act_as(pg_temp.u(10), '7eaf0000-0000-4000-8000-000000000001');
 select is(pg_temp.supply(93) ->> 'active', 'true', 'with both on, the TM sets a supply day');
 select pg_temp.act_as(pg_temp.u(9), '7eaf0000-0000-4000-8000-000000000001');
-select is(pg_temp.enrol() ->> 'enrolled', 'true', 'with both on, the ZSA enrols the shop');
+select is(pg_temp.enrol(81) ->> 'enrolled', 'true', 'with both on, the ZSA enrols the shop');
 select pg_temp.act_as(pg_temp.u(12), null);
 select is(pg_temp.pledge(94) ->> 'amount', '5000.00', 'with both on, the agent pledges');
 reset role;

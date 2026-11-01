@@ -194,7 +194,7 @@ REQUESTED / AWAITING_APPROVAL / OFFERED ──raiser or TM cancels──▶ CANC
 ```
 
 Supply is same day (user, 2026-10-28). A financing FUNDED but not
-DELIVERED by 23:59 Africa/Lagos on its funding day becomes `REFUND_DUE`
+DELIVERED within 23 hours of `funded_at` (user, 2026-11-01; was 23:59 Lagos on the funding day) becomes `REFUND_DUE`
 (the cron sweep), as does stock refused or lost.
 Teafair refunds the agent through Paystack (D1's refund path) and no rebate
 is owed. If the rebate was already paid, it is offset against the agent's
@@ -265,7 +265,7 @@ days and 10%.
    tomorrow."
 7. **The stock reaches the shop the same day.** The shop owner confirms
    receipt with the shop-owner OTP, so the financing is DELIVERED and due 30
-   days after delivery. Not delivered by 23:59 means REFUND_DUE.
+   days after delivery. Not delivered within 23 hours of funding means REFUND_DUE.
 8. **Before Friday 10:14,** the finance officer pays ₦4,800 from Teafair's
    OPay account and records the transfer reference. Bisi gets "Paid, ref …".
    ₦4,800 goes into TEAFAIR's settlement for the day as rebates (Purerigin is Teafair's own brand).
@@ -517,12 +517,12 @@ This addendum deploys after the auth hardening (local main `db13f55`).
 - the `FIELD_SALES` rename;
 - the `monvelo_` prefix for extraction;
 - tenant reports on WhatsApp to the ZSMs (email later);
-- the 23:59 same-day refund cut-off;
+- the 23-hour refund cut-off after funding (user, 2026-11-01; was 23:59 same day);
 - the fee as basis points on gross.
 
 ## 14. Questions answered (2026-10-28)
 
-- **Q1, stock:** supply is same day. The clock starts at the owner's delivery confirmation; not delivered by 23:59 Lagos time means REFUND_DUE.
+- **Q1, stock:** supply is same day. The clock starts at the owner's delivery confirmation; not delivered within 23 hours of funding (amended 2026-11-01; was 23:59 Lagos time) means REFUND_DUE.
 - **Q2, terms:** brands must approve before any sale. The brand's approval is the gate, with no Monvelo countersignature.
 - **The tenant is Teafair's client:** Teafair deducts all its fees and the rebates paid before remitting to the tenant. Daily and weekly reports go to each tenant.
 
@@ -863,7 +863,7 @@ the tenant's behalf. The `TENANT_ADMIN` reads the results.
 | Dispatch | `mark_order_dispatched` (A5): a ZSM or the warehouse's `manager_id` | Also any `LOGISTICS_MANAGER` of the tenant, for every warehouse |
 | Delivery receipts | `mark_order_delivered` (A5, courier path with the delivery code) | Also `LOGISTICS_MANAGER`. **A Monvelo financing still becomes DELIVERED only on the shop owner's OTP (§4.4).** |
 | Stock movements | `inventory_batches` changes only by migration | New stock-movement RPCs (receipt, transfer, adjustment), each citing the contact report that agreed it, with a movement record |
-| Same-day supply | — | Reads FUNDED financings awaiting delivery, so stock leaves before the 23:59 REFUND_DUE sweep |
+| Same-day supply | — | Reads FUNDED financings awaiting delivery, so stock leaves before the 23-hour REFUND_DUE sweep |
 
 Warehouse managers named in `warehouses.manager_id` keep working as now.
 
