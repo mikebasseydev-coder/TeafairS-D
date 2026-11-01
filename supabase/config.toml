@@ -538,3 +538,6 @@ verify_jwt = false
 
 [functions.monvelo-confirm-delivery]
 verify_jwt = false
+
+[functions.monvelo-confirm-repayment]
+verify_jwt = false

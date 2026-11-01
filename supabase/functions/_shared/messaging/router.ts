@@ -22,7 +22,8 @@ export type Purpose =
   | "PHONE_VERIFY"
   | "AUTH_OTP"
   | "MONVELO_CONSENT"
-  | "MONVELO_DELIVERY";
+  | "MONVELO_DELIVERY"
+  | "MONVELO_REPAYMENT";
 
 export type OutboundMessage = {
   purpose: Purpose;
