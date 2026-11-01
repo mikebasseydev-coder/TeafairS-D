@@ -76,15 +76,17 @@ select tables_are('public', array[
   -- the insert-only tenant ledger (1, addendum A6 §16.5)
   'monvelo_tenant_ledger_entries',
   -- Monvelo funding: the rebate payables, their per-brand lines and the operator's flags (3, addendum A6 §4.4, §7.4)
-  'monvelo_rebate_payables', 'monvelo_rebate_payable_lines', 'monvelo_flags'
-], 'public holds exactly the 84 tables');
+  'monvelo_rebate_payables', 'monvelo_rebate_payable_lines', 'monvelo_flags',
+  -- the shop owner's one-time codes for delivery and repayment (1, addendum A6 §4.4)
+  'monvelo_owner_challenges'
+], 'public holds exactly the 85 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  84, 'RLS is enabled on all 84 tables');
+  85, 'RLS is enabled on all 85 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN','MONVELO_OPERATOR','MONVELO_FINANCE']);

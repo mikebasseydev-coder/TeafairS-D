@@ -15,7 +15,14 @@ import {
   type WhatsAppTemplate,
 } from "./whatsapp.ts";
 
-export type Purpose = "OTP" | "DELIVERY_CODE" | "DELIVERY_CODE_RESEND" | "PHONE_VERIFY" | "AUTH_OTP" | "MONVELO_CONSENT";
+export type Purpose =
+  | "OTP"
+  | "DELIVERY_CODE"
+  | "DELIVERY_CODE_RESEND"
+  | "PHONE_VERIFY"
+  | "AUTH_OTP"
+  | "MONVELO_CONSENT"
+  | "MONVELO_DELIVERY";
 
 export type OutboundMessage = {
   purpose: Purpose;

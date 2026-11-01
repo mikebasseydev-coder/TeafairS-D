@@ -385,6 +385,7 @@ insert into order_callers values
   ('place_web_order', 'web placement reserves'),
   ('place_trade_order', 'trade placement reserves'),
   ('mark_order_dispatched', 'dispatch consumes'),
+  ('dispatch_monvelo_financing', 'Monvelo dispatch of a FUNDED financing consumes, citing the order (A6 §5 step 7)'),
   ('apply_paystack_refund', 'a refund before dispatch releases'),
   ('stock_reservation_sweep', 'an expired PENDING order is cancelled and released'),
   ('monvelo_cancel_trade_order', 'a trade order is cancelled with its financing (A6 §18.1; Tasks 7 and 8)');

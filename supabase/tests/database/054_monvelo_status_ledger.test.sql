@@ -146,9 +146,9 @@ select ok(not has_table_privilege('service_role', 'public.monvelo_tenant_ledger_
       and not has_table_privilege('authenticated', 'public.monvelo_tenant_ledger_entries', 'INSERT')
       and not has_table_privilege('anon', 'public.monvelo_tenant_ledger_entries', 'SELECT'),
   'no API role writes the ledger; anon reads nothing');
-select is((select count(*)::int from pg_proc p where p.pronamespace = 'public'::regnamespace
-            and p.prosrc ~* 'insert\s+into\s+(public\.)?monvelo_tenant_ledger_entries'), 0,
-  'no function writes the ledger yet (Steps 3 and 5 add the writers)');
+select is((select string_agg(p.proname, ',' order by p.proname) from pg_proc p where p.pronamespace = 'public'::regnamespace
+            and p.prosrc ~* 'insert\s+into\s+(public\.)?monvelo_tenant_ledger_entries'), 'confirm_monvelo_delivery',
+  'only the delivery confirmation writes the ledger so far (Step 3 Task 3; Task 5 and Step 5 add the others)');
 
 -- ── ledger readers ──────────────────────────────────────────────────────
 select pg_temp.act_as(pg_temp.u(7), pg_temp.t1());
