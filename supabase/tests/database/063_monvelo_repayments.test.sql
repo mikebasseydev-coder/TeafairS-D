@@ -7,7 +7,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(93);
+select plan(94);
 
 -- A6 Task 6b: placing an order reserves stock. Every ordered line finds ample
 -- stock in its order's fulfilment warehouse (one FIXTURE batch per SKU).
@@ -390,7 +390,8 @@ select is(pg_temp.conf('G3C', 21, 421, 'G3b') ->> 'status', 'REPAID_WITHIN_WINDO
 select is(pg_temp.lim(2), 55000.00::numeric, 'at 0 bps the limit stays 55000');
 select is((select count(*)::int from public.monvelo_shop_limit_events where financing_id = pg_temp.f('G3')), 0,
   'and no event names G3');
-select is((select count(*)::int from public.audit_logs where operation = 'MONVELO_REPAYMENT_CODE_FAILED'), 6,
+select is((select count(*)::int from public.audit_logs where operation = 'MONVELO_REPAYMENT_CODE_FAILED'
+              and entity_id in ((pg_temp.r('R1') ->> 'challenge_id'), (pg_temp.r('G3a') ->> 'challenge_id'))), 6,
   'each wrong code is audited (one on R1, five on G3a)');
 
 -- ── R32: a recorder no longer ACTIVE cannot confirm (J) ─────────────────
@@ -452,16 +453,23 @@ select is(pg_temp.conf('L1C', 21, 601, 'L1'),
   jsonb_build_object('confirmed', true, 'outstanding', 4800.00, 'status', 'DEFAULTED_WITH_LATE_CHARGE'),
   'paying 48000 after due_at: the 4800 charge is applied first, 4800 left, DEFAULTED_WITH_LATE_CHARGE');
 select is(pg_temp.fin_state('L'), '(DEFAULTED_WITH_LATE_CHARGE,4800.00,4800.00,f)', 'L carries the one late charge');
-select ok((select tenant_id = pg_temp.t1() and actor_id is null and (after ->> 'late_charge_amount')::numeric = 4800
+select ok((select a.tenant_id = pg_temp.t1() and a.actor_id is null and (a.after ->> 'late_charge_amount')::numeric = 4800
+                  and a.source = 'SYSTEM' and a.teafair_agent_id = f.raised_by
+             from public.audit_logs a join public.monvelo_financings f on f.id = pg_temp.f('L')
+            where a.operation = 'monvelo_apply_late_charge' and a.entity_id = pg_temp.f('L')::text),
+  'the late charge is audited for the tenant as SYSTEM, with no actor, on the raiser');
+select ok((select bool_and(coalesce(before::text, '') || coalesce(after::text, '')
+                           !~ ('80000000-|82000000-|20000000-0000-0000-0000-00000000002'))
              from public.audit_logs where operation = 'monvelo_apply_late_charge' and entity_id = pg_temp.f('L')::text),
-  'the late charge is audited for the tenant, with no actor');
+  'its before and after name no agent, pledge or agent member');
 select pg_temp.rec('L2', 21, 610, 'L', 4800);
 select is(pg_temp.conf('L2C', 21, 611, 'L2'),
   jsonb_build_object('confirmed', true, 'outstanding', 0.00, 'status', 'REPAID_LATE'), 'paying 4800 repays L late');
 select is(pg_temp.fin_state('L'), '(REPAID_LATE,0.00,4800.00,t)', 'L is REPAID_LATE, closed, the charge once');
 select is((select count(*)::int from public.monvelo_shop_limit_events where financing_id = pg_temp.f('L')), 0,
   'no growth on a late repayment');
-select is((select count(*)::int from public.audit_logs where operation = 'monvelo_apply_late_charge'), 1,
+select is((select count(*)::int from public.audit_logs where operation = 'monvelo_apply_late_charge'
+              and entity_id = pg_temp.f('L')::text), 1,
   'the charge was applied once');
 
 -- ── readers and audit ───────────────────────────────────────────────────

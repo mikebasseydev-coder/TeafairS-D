@@ -9,7 +9,9 @@ const AGENT = "a0000000-0000-0000-0000-000000000001";
 const REPAYMENT = "d0000000-0000-0000-0000-000000000001";
 const CHALLENGE = "c0000000-0000-0000-0000-000000000001";
 
-function setup(opts: { replayed?: boolean; sendFails?: boolean; confirm?: Record<string, unknown> } = {}) {
+function setup(
+  opts: { replayed?: boolean; sendFails?: boolean; confirm?: Record<string, unknown>; activeTenant?: string } = {},
+) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
   const sent: Array<[string, OutboundMessage]> = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
@@ -28,7 +30,12 @@ function setup(opts: { replayed?: boolean; sendFails?: boolean; confirm?: Record
   };
   const handler = createMonveloConfirmRepaymentHandler({
     // an agent member: no active tenant
-    verifyToken: () => Promise.resolve({ sub: "u21", role: "authenticated", app_metadata: {} }),
+    verifyToken: () =>
+      Promise.resolve({
+        sub: "u21",
+        role: "authenticated",
+        app_metadata: opts.activeTenant ? { active_tenant_id: opts.activeTenant } : {},
+      }),
     rpcFor: () => rpc,
     gatewaySecret: "gw-secret",
     sendMessage: (to, message) => {
@@ -74,6 +81,14 @@ Deno.test("record sends exactly one WhatsApp-only message with the code, and the
   assertEquals(sent[0][1].smsText.includes("042917"), false);
   assertEquals(sent[0][1].relatedId, CHALLENGE);
   // an agent member has no tenant: the log is platform-level
+  assertEquals(sent[0][1].tenantId, undefined);
+});
+
+Deno.test("an agent member whose JWT names a tenant still logs no tenant", async () => {
+  const { handler, sent } = setup({ activeTenant: "e0000000-0000-0000-0000-000000000009" });
+  const res = await call(handler, record);
+  assertEquals(res.status, 200);
+  assertEquals(sent.length, 1);
   assertEquals(sent[0][1].tenantId, undefined);
 });
 

@@ -69,7 +69,7 @@ const REFUSALS: Record<string, [string, string]> = {
 export function createMonveloConfirmRepaymentHandler(
   deps: MonveloConfirmRepaymentDeps,
 ): (req: Request) => Promise<Response> {
-  return userGateway(schema, async ({ caller, body, rpc }) => {
+  return userGateway(schema, async ({ body, rpc }) => {
     if (body.action === "confirm") {
       const r = await rpc<Confirmed>("confirm_monvelo_repayment", {
         p_idempotency_key: body.idempotency_key,
@@ -98,8 +98,10 @@ export function createMonveloConfirmRepaymentHandler(
           // never sent: whatsappOnly. Deliberately free of the code.
           smsText: "Teafair WhatsApp repayment code.",
           relatedId: recorded.challenge_id,
-          // an agent member has no active tenant: the log is platform-level
-          tenantId: caller.activeTenantId ?? undefined,
+          // Platform-level, always: the caller is an agent member, and the RPC
+          // proves nothing about any tenant the JWT may name. A tenant id here
+          // would let that tenant's ZSMs read a lender's log row (§16.2.2).
+          tenantId: undefined,
           whatsappOnly: true,
         });
       } catch {
