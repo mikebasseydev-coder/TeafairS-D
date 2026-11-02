@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../core/db.ts";
 import type { PaystackRefund } from "./paystack-refunds.ts";
 import type { VerifiedTransaction } from "./paystack.ts";
@@ -82,10 +82,47 @@ Deno.test("an MV- reference settles through Monvelo and never the web RPC", asyn
   }]]);
 });
 
-Deno.test("an MV- reversal throws until Task 5 routes it", async () => {
-  const { rpc, calls } = fakeRpc();
-  await assertRejects(() => settleVerified(rpc, "sweep", { ...mv, status: "reversed" }), Error, "monvelo reversals are applied as refunds");
-  assertEquals(calls, []);
+Deno.test("an MV- reversal is applied as a Monvelo refund with p_reason REVERSAL", async () => {
+  const { rpc, calls } = fakeRpc({ apply_monvelo_refund: { outcome: "refunded" } });
+  const r = await settleVerified(rpc, "sweep", { ...mv, status: "reversed" });
+  assertEquals(r.outcome, "refunded");
+  assertEquals(calls, [["apply_monvelo_refund", {
+    p_source: "sweep", p_refund_id: "reversal:MV-ABCDEFGH-1", p_transaction_reference: "MV-ABCDEFGH-1",
+    p_amount_minor: 250000, p_currency: "NGN", p_reason: "REVERSAL", p_verified: { id: 9 },
+  }]]);
+});
+
+Deno.test("a webhook MV- reversal is applied with source webhook", async () => {
+  const { rpc, calls } = fakeRpc({ apply_monvelo_refund: { outcome: "refunded" } });
+  await settleVerified(rpc, "charge.success", { ...mv, status: "reversed" });
+  assertEquals(calls.map((c) => [c[0], c[1].p_source]), [["apply_monvelo_refund", "webhook"]]);
+});
+
+Deno.test("applyRefunds sends an MV- refund to apply_monvelo_refund and a web refund to apply_paystack_refund", async () => {
+  const { rpc, calls } = fakeRpc({ apply_monvelo_refund: { outcome: "refunded" }, apply_paystack_refund: { outcome: "refunded" } });
+  const mk = (id: string, ref: string): PaystackRefund =>
+    ({ id, transactionReference: ref, amountMinor: 100, currency: "NGN", status: "processed", raw: { id } });
+  const counts = await applyRefunds(rpc, "sweep", [mk("1", "MV-ABCDEFGH-2"), mk("2", "ref_1")]);
+  assertEquals(counts, { refunded: 2 });
+  assertEquals(calls, [
+    ["apply_monvelo_refund", {
+      p_source: "sweep", p_refund_id: "1", p_transaction_reference: "MV-ABCDEFGH-2", p_amount_minor: 100,
+      p_currency: "NGN", p_reason: "REFUND", p_verified: { id: "1" },
+    }],
+    ["apply_paystack_refund", {
+      p_source: "sweep", p_refund_id: "2", p_transaction_reference: "ref_1", p_amount_minor: 100,
+      p_currency: "NGN", p_reason: "REFUND", p_verified: { id: "2" },
+    }],
+  ]);
+});
+
+Deno.test("a webhook MV- refund uses the webhook's reference when the refund has none", async () => {
+  const { rpc, calls } = fakeRpc({ apply_monvelo_refund: { outcome: "refunded" } });
+  const refund: PaystackRefund =
+    { id: "7", transactionReference: null, amountMinor: 100, currency: "NGN", status: "processed", raw: {} };
+  await applyRefunds(rpc, "webhook", [refund], "MV-ABCDEFGH-3");
+  assertEquals(calls.map((c) => [c[0], c[1].p_transaction_reference, c[1].p_source]),
+    [["apply_monvelo_refund", "MV-ABCDEFGH-3", "webhook"]]);
 });
 
 Deno.test("isMonveloReference matches only the MV format", () => {

@@ -7,10 +7,24 @@ import type { VerifiedTransaction } from "./paystack.ts";
 // RPC; the web RPC never sees them.
 export const isMonveloReference = (ref: string): boolean => /^MV-[A-Z2-7]{8}-[1-9]\d*$/.test(ref);
 
+// A refund or reversal goes to the RPC of the reference's domain.
+const refundRpc = (ref: string): string => isMonveloReference(ref) ? "apply_monvelo_refund" : "apply_paystack_refund";
+
 export async function settleVerified(rpc: Rpc, event: string, tx: VerifiedTransaction): Promise<{ outcome: string }> {
+  if (tx.status === "reversed") {
+    // One transaction (§9): the refund RPC moves a payment not yet confirmed
+    // straight to REFUNDED, so the order is never marked PAID.
+    return await rpc<{ outcome: string }>(refundRpc(tx.reference), {
+      p_source: event === "sweep" ? "sweep" : "webhook",
+      p_refund_id: "reversal:" + tx.reference,
+      p_transaction_reference: tx.reference,
+      p_amount_minor: tx.amountMinor,
+      p_currency: tx.currency,
+      p_reason: "REVERSAL",
+      p_verified: tx.raw,
+    });
+  }
   if (isMonveloReference(tx.reference)) {
-    // Task 5 routes reversals to the Monvelo refund path.
-    if (tx.status === "reversed") throw new Error("monvelo reversals are applied as refunds");
     return await rpc<{ outcome: string }>("settle_monvelo_funding", {
       p_event: event,
       p_reference: tx.reference,
@@ -19,19 +33,6 @@ export async function settleVerified(rpc: Rpc, event: string, tx: VerifiedTransa
       p_currency: tx.currency,
       p_verified: tx.raw,
       p_transaction_id: tx.transactionId,
-    });
-  }
-  if (tx.status === "reversed") {
-    // One transaction (§9): apply_paystack_refund moves a payment not yet
-    // confirmed straight to REFUNDED, so the order is never marked PAID.
-    return await rpc<{ outcome: string }>("apply_paystack_refund", {
-      p_source: event === "sweep" ? "sweep" : "webhook",
-      p_refund_id: "reversal:" + tx.reference,
-      p_transaction_reference: tx.reference,
-      p_amount_minor: tx.amountMinor,
-      p_currency: tx.currency,
-      p_reason: "REVERSAL",
-      p_verified: tx.raw,
     });
   }
   return await rpc<{ outcome: string }>("settle_paystack_payment", {
@@ -62,8 +63,9 @@ export async function applyRefunds(
       bump("unreadable");
       continue;
     }
+    const fn = refundRpc(txRef);
     try {
-      const r = await rpc<{ outcome: string }>("apply_paystack_refund", {
+      const r = await rpc<{ outcome: string }>(fn, {
         p_source: source,
         p_refund_id: refund.id,
         p_transaction_reference: txRef,
@@ -74,7 +76,7 @@ export async function applyRefunds(
       });
       bump(r.outcome);
     } catch (e) {
-      console.error("apply_paystack_refund failed", refund.id, e instanceof Error ? e.name : "error");
+      console.error(fn + " failed", refund.id, e instanceof Error ? e.name : "error");
       bump("error");
     }
   }
