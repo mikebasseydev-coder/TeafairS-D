@@ -1053,8 +1053,8 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     REFUND_DUE financing, and by the sweep for a funding already refunded (R62).
     The exposure and the daily cap free at REFUND_DUE (R63).
 - **The market-maker allowance (A6 §20, user 2026-11-02):** migrations
-  `20261031120800` (the hold) and `20261031120900` (the market makers),
-  pgTAP 066. Read §20 before touching `monvelo_claim_refusal`,
+  `20261031120800` (the hold), `20261031120900` (the market makers) and
+  `20261031121000` (R78: never a member of the held agent), pgTAP 066. Read §20 before touching `monvelo_claim_refusal`,
   `claim_monvelo_financing`, `monvelo_sweep_offers` or the LATE route of
   `settle_monvelo_funding`.
   - **The hold.** A claim refused only by the ₦100,000 cap
@@ -1125,6 +1125,12 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     - R76: a second ASA of the same area is a market maker for a request the
       first ASA raised.
     - R77: `p_allow` null is 22023; a reason over 1000 characters is 22023.
+    - R78 (final review 2026-11-02): anyone with a membership row in the
+      held agent, ACTIVE or REVOKED, is not a market maker for that hold:
+      not told, not listed, 42501 on get and decide. `add_monvelo_member`
+      accepts any verified profile, tenant staff included, so without this
+      an ASA in the agent could allow its own claim. If wrong: a member of
+      the agent decides its hold.
 - **Integration.** `gateway.integration.ts` continues the Step 2 test's
   CLAIMED financing: funding, a lapsed claim that still funds, a payer
   mismatch, dispatch, the delivery code, a part repayment, the late charge and

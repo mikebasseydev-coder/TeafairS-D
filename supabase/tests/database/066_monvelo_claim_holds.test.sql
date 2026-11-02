@@ -11,7 +11,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(127);
+select plan(134);
 
 -- A6 Task 6b: placing an order reserves stock. This file is not about stock,
 -- so every ordered line finds ample stock in its order's fulfilment warehouse.
@@ -775,6 +775,44 @@ select is(public.settle_monvelo_funding('charge.success', pg_temp.r('PQ') ->> 'r
 select is(pg_temp.status('MR') || ':' || pg_temp.hold_status('MR') || ':' || pg_temp.notices('MONVELO_HOLD_DECIDED', 'MR'),
   'OFFERED:LAPSED:43', 'nobody else could decide MR: it lapsed at 15 minutes and the agent is told');
 select is(pg_temp.status('T1'), 'OFFERED', 'a HELD request left with no HELD hold goes back to OFFERED at the sweep');
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- R78 (final review 2026-11-02): a market maker who belongs to the held agent
+-- (any membership, ACTIVE or REVOKED) is not a market maker for that hold.
+-- 56 O: members 56 and 06 (ACTIVE) · 57 I: members 57 and 06 (REVOKED); 90000 open each
+-- ═════════════════════════════════════════════════════════════════════════
+insert into auth.users (id, phone, phone_confirmed_at)
+select pg_temp.u(n), '234800000' || lpad(n::text, 4, '0'), now() from unnest(array[56, 57]) n;
+insert into public.monvelo_agents (id, business_name, pos_network, network_agent_id, contact_phone, location, address_text,
+  settlement_account_number, settlement_account_last4, settlement_bank_code, settlement_account_name, network_kyc_reference,
+  recruited_by, status, daily_cap, per_financing_cap)
+select pg_temp.ag(n), 'POS ' || n, 'OPAY', 'OP-' || n, '+23480311100' || lpad(n::text, 2, '0'),
+       extensions.st_setsrid(extensions.st_makepoint(3.35, 6.6036), 4326)::extensions.geography, 'a',
+       '012345' || lpad(n::text, 4, '0'), lpad(n::text, 4, '0'), '058', 'ADA OKAFOR', 'K' || n,
+       pg_temp.u(4), 'ACTIVE', 5000000, 200000
+  from unnest(array[56, 57]) n;
+insert into public.monvelo_agent_members (agent_id, profile_id, status) values
+  (pg_temp.ag(56), pg_temp.u(56), 'ACTIVE'), (pg_temp.ag(56), pg_temp.u(6), 'ACTIVE'),
+  (pg_temp.ag(57), pg_temp.u(57), 'ACTIVE'), (pg_temp.ag(57), pg_temp.u(6), 'REVOKED');
+insert into public.monvelo_pledges (tenant_id, agent_id, area_id, supply_date, amount, remaining, pledged_by)
+select pg_temp.t1(), pg_temp.ag(n), '60000000-0000-0000-0000-000000000001', public.monvelo_today(), 1000000, 1000000, pg_temp.u(n)
+  from unnest(array[56, 57]) n;
+set local session_replication_role = replica;
+select pg_temp.syn('O0', 'FUNDED', 56, 90000), pg_temp.syn('I0', 'FUNDED', 57, 90000);
+set local session_replication_role = origin;
+
+select pg_temp.raise('XO', 500, 8, 20);
+select is(pg_temp.claim(502, 56, 'XO') ->> 'held', 'true', 'fixture: O at 90000 claiming 20000 is held');
+select is(pg_temp.notices('MONVELO_HOLD', 'XO'), '01', 'the ASA who belongs to the held agent is not told');
+select is(pg_temp.listed(6, 'XO'), 0, 'nor lists it');
+select is(pg_temp.refusals(6, pg_temp.t1(), 'XO'), 'ok,42501,42501', 'nor may get or decide it (42501)');
+select is(pg_temp.decide(504, 1, 'XO', true, 'shop of long standing') ->> 'status', 'ALLOWED',
+  'the ZSM, who does not belong to the agent, still decides it');
+
+select pg_temp.raise('XI', 510, 1, 20);
+select is(pg_temp.claim(512, 57, 'XI') ->> 'held', 'true', 'fixture: I at 90000 claiming 20000 is held');
+select is(pg_temp.notices('MONVELO_HOLD', 'XI') || ':' || pg_temp.refusals(6, pg_temp.t1(), 'XI'), '01:ok,42501,42501',
+  'a revoked membership bars the market maker too');
 
 select * from finish();
 rollback;

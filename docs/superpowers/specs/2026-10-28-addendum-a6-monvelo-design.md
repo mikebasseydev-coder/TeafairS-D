@@ -1183,7 +1183,7 @@ backdoors"; user, 2026-10-29).
 
 ## 20. Amendment 2026-11-02: the market-maker allowance
 
-**Status:** design written 2026-11-02 from the user's answers; the builder-check questions answered by the user the same day (1A, 2A, 3A: decisions 5–7 below); approved by the user 2026-11-02. **Built locally, not pushed:** migrations `20261031120800` (the hold) and `20261031120900` (the market makers), pgTAP 066. The builder's rulings are in `supabase/CLAUDE.md` (R64–R77).
+**Status:** design written 2026-11-02 from the user's answers; the builder-check questions answered by the user the same day (1A, 2A, 3A: decisions 5–7 below); approved by the user 2026-11-02. **Built locally, not pushed:** migrations `20261031120800` (the hold), `20261031120900` (the market makers) and `20261031121000` (R78), pgTAP 066. The builder's rulings are in `supabase/CLAUDE.md` (R64–R78).
 
 ### 20.1 Intent
 
@@ -1198,7 +1198,7 @@ The principle of §19.4 still governs: **the central truth is funded order fulfi
 3. **The ZSM never sees which agent is funding** (the user's "no"). The market maker sees whether the funding side is ready, what blocks it and the figures, never the agent's name, id, phone, network or location. §16.2.2 and R19 stand.
 4. **An allowance may take the agent's open exposure, including this financing, up to ₦300,000** ("any amount up to ₦300,000"). Above that, nobody can allow.
 5. **The hold is exclusive (1A).** A blocked claim is held, not refused, for 15 minutes, the same as a claim's payment window. While it is held, no other agent can claim the financing. The user accepts the timing cost: the preferred window (10 min), the hold (15 min) and the payment window (15 min) can keep a request from being paid for about 40 minutes.
-6. **Four eyes (2A).** The person who raised the request (`monvelo_financings.raised_by`) can never allow or decline its hold. An ASA who raised it cannot decide; the decision falls to a ZSM whose zone covers the area. If no other market maker is in scope, the hold lapses at 15 minutes. *Claude's call: the rule binds any raiser, not only an ASA, so a ZSM who raised a request cannot decide it either.*
+6. **Four eyes (2A).** The person who raised the request (`monvelo_financings.raised_by`) can never allow or decline its hold. An ASA who raised it cannot decide; the decision falls to a ZSM whose zone covers the area. If no other market maker is in scope, the hold lapses at 15 minutes. *Claude's call: the rule binds any raiser, not only an ASA, so a ZSM who raised a request cannot decide it either.* *Final review 2026-11-02 (R78): nor can anyone who belongs to the held agent (a membership row, ACTIVE or REVOKED); such a person is not told, does not see the hold, and gets 42501.*
 7. **Only the ₦100,000 exposure cap can be lifted (3A).** The agent's own `daily_cap`, set by Monvelo staff, is never overridden. A claim blocked by the daily cap (alone or together with the exposure cap) is refused exactly as today.
 
 ### 20.3 Claude's calls (open to change)
