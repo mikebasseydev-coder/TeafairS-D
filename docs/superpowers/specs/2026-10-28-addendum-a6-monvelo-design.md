@@ -1109,4 +1109,74 @@ backdoors"; user, 2026-10-29).
 
 - Step 5 must not pay a rebate payable whose funding was refunded: `FUNDING_REFUNDED` leaves the payable DUE.
 - Partial refunds are not summed (as on the web): two partial refunds that add up to the payment change no status.
-- REFUND_DUE does not restore the agent's pledge `remaining` or its daily-cap headroom. Whether pledges recycle is a business question.
+- ~~REFUND_DUE does not restore the agent's pledge `remaining` or its daily-cap headroom.~~ **Answered (user, 2026-11-02):** the pledge is restored when the refund is confirmed; the exposure and the daily cap free at REFUND_DUE (R63, §19.4).
+- ~~A live financing whose funding was refunded and which the sweep closes at once does not restore its pledge.~~ **Answered (R62, 2026-11-02):** the sweep restores it (§19.4.2).
+
+### 19.4 Amendment 2026-11-02: open exposure cap, pledge restoration, lender reconciliation
+
+**Status:** approved by the user on 2026-11-02 (build plan reply "APPROVED").
+
+**The principle (user, 2026-11-02; binding): "the central truth is funded order fulfilment."** An agent's room follows what is being fulfilled. Once fulfilment has failed (REFUND_DUE), the financing no longer holds the agent's exposure or daily cap (R63). Its pledge stays debited until Paystack confirms the refund. Built locally in migration `20261031120700_monvelo_exposure_cap_and_reconciliation.sql` and pgTAP `065`, not pushed. No RLS policy changes.
+
+#### 19.4.1 The open exposure cap
+
+- **`monvelo_open_exposure_ceiling()`** is one platform constant, `100000.00` (naira), IMMUTABLE and ungranted. A migration changes it.
+- **`monvelo_agent_open_exposure(agent)`** (STABLE, ungranted) sums what the agent has open across every tenant:
+  - CLAIMED (by `claimed_by_agent_id`) and FUNDED (by `funder_agent_id`) count their `principal`;
+  - REFUND_DUE counts nothing, closed or not (R63);
+  - DELIVERED and DEFAULTED_WITH_LATE_CHARGE count `least(outstanding, principal)`. A part repayment frees room, and the late charge never consumes room.
+- **`monvelo_claim_refusal` refuses** a request that would take the open exposure plus the principal above the ceiling: "this request would take your open exposure above ₦100,000". The check sits after the daily cap (check 8). It covers `claim_monvelo_financing` (P0001) and the late route of `settle_monvelo_funding` (`late_payment`, a LATE_PAYMENT flag with that reason, and a staff refund, as for every late-route refusal). Both already hold the agent's advisory lock (R13). `start_monvelo_funding` and settle's CLAIM route act on a financing that is already CLAIMED, and so already counted; they do not check.
+- **The daily cap's "funded today"** no longer counts any REFUND_DUE financing (R63), so both the cap and the exposure free at the sweep.
+
+#### 19.4.2 The pledge restored on refund confirmation
+
+- When `apply_monvelo_refund` closes a REFUND_DUE financing on the full refund of its funding payment, the same transaction locks the financing's own pledge (`pledge_id`; lock order payment, financing, pledge) and adds the principal back to `remaining`, even if the pledge's supply day has passed. One audit row, tenant-null (R15), names the agent, the pledge and the amount. The exposure and the daily cap freed earlier, at REFUND_DUE (R63).
+- It restores once: the refund id is the idempotency key, a second refund id on a refunded payment is a conflict, and the restoration runs only while `closed_at` was still null.
+- **R62: the sweep restores too, when the refund was already confirmed.** The financing's funding may have been refunded while it was still FUNDED (a `FUNDING_REFUNDED` flag). The sweep then moves it to REFUND_DUE and closes it at once, with no ticket (R48 D4). Because Paystack has already confirmed that refund, `monvelo_sweep_money` restores the pledge the same way:
+  - it takes the pledge lock after the financing and order locks it already holds;
+  - it writes one tenant-null CRON audit row (`monvelo_pledges`) naming the agent, the pledge and the amount;
+  - it restores only while `closed_at` was null, so a second sweep restores nothing.
+- Nothing is restored for a REFUND_DUE financing still waiting for its refund. Nothing is restored at the moment a live financing's funding is refunded; the restoration waits for the sweep to close it.
+- **Cost if wrong (R62):** a refunded funding the operator meant to re-fund by hand would already have its pledge back. The fix is one block in the sweep.
+- The pledge has no guard trigger on `remaining`. Its check `remaining <= amount` holds, because `amount - remaining` is what the pledge has funded, which includes this principal.
+
+#### 19.4.3 The lender reconciliation summary
+
+`get_lender_reconciliation_summary(p_weeks integer default 12)` (SECURITY DEFINER, STABLE, read-only, EXECUTE for `authenticated` only) returns one row per agent and Lagos week of `funded_at`, from this week back `p_weeks - 1` weeks. A `p_weeks` outside 1–52 is 22023. Only financings with `funded_at` and `funder_agent_id` count. Every figure belongs to the funding week:
+
+- `capital_funded`: the principal funded;
+- `outstanding`: the outstanding of DELIVERED and DEFAULTED_WITH_LATE_CHARGE;
+- `repaid`: CONFIRMED repayments;
+- `refunded`: the principal of REFUND_DUE financings closed by their refund;
+- `rebates_owed` and `rebates_paid`: rebate payables DUE and PAID (PAID arrives with Step 5, so it reads 0 until then);
+- `mv_references`: the funding references, sorted.
+
+`agent_name` is the agent's registered business name. The output never names a shop, an owner, a phone, a brand, a tenant or a place.
+
+**Readers (checked live):**
+
+- an ACTIVE member of an agent: that agent's rows, across every tenant. This wins if the caller is also a ZSA or ASA;
+- a ZSA (`assert_tenant_role`, active tenant from the JWT): that tenant's financings whose area lies in the ZSA's zone (area → territory → zone);
+- an ASA: that tenant's financings in the ASA's area;
+- anyone else (TM, ZSM, CSM, TENANT_ADMIN, LM, others, anon): 42501.
+
+**The ZSA/ASA reading is the user's decision (2026-11-02).** It is a deliberate exception to §16.2.2 ("tenants never see or steer lenders"). The Step 3 plan's lender-privacy list (TENANT_ADMIN, CSM, ZSM, TM, LM, the raiser) does not include the ZSA or ASA. They recruit and support the agents (§4.1), and they see lenders only through this summary.
+
+#### 19.4.4 Departures from the first wording (approved; cost if wrong)
+
+1. **Which statuses count.** CLAIMED, FUNDED, DELIVERED and DEFAULTED_WITH_LATE_CHARGE. **REFUND_DUE frees room at once** (R63, from the user's principle above), for both the exposure and the daily cap. OFFERED is not counted because no agent owns it yet. IN_TRANSIT is not counted because it is an order status, not a financing's.
+   - **Cost if wrong:** an agent can claim again while Teafair still holds the refundable money. This is bounded: the pledge stays debited until the refund is confirmed, so the agent cannot claim more than it pledged. Otherwise, one `in` list in `monvelo_agent_open_exposure` and one filter in the daily cap.
+2. **The amounts.** Open statuses count their principal. Delivered and defaulted financings count `least(outstanding, principal)`.
+   - **Cost if wrong:** with `outstanding`, a defaulted financing's late charge would eat into the agent's room; with `principal`, part repayments would free none.
+3. **One platform constant for the ceiling,** not a per-agent or per-tenant setting.
+   - **Cost if wrong:** a column on `monvelo_agents` and one line in the check.
+4. **No RLS policy changes.** The summary reads through SECURITY DEFINER; the tables' grants and policies are unchanged.
+   - **Cost if wrong:** none for privacy; a reader wanting rows would need a new RPC.
+
+#### 19.4.5 Calls made while building
+
+- **The message is built from the constant** (`'₦' || to_char(ceiling, 'FM999,999,999,990')`), so it reads "₦100,000" now and follows the ceiling if a migration changes it.
+- **pgTAP 061–064 raise the ceiling inside their own transaction.** Their agents fund several 48,000 financings, more than ₦100,000. The cap is tested in 065.
+  - **Cost if wrong:** each file's fixtures would need more agents.
+- **045's boundary guard names `get_lender_reconciliation_summary` as an exception.** The guard asserts that no function without "monvelo" in its name reads a Monvelo table. The function name is the approved one.
+  - **Cost if wrong:** rename the function `get_monvelo_lender_reconciliation_summary` and drop the exception.

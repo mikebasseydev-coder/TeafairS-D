@@ -84,6 +84,8 @@ select is((select array_agg(conname::text order by conname) from pg_constraint
   null::text[], 'no foreign key joins the web and Monvelo domains');
 select is((select array_agg(proname::text order by proname) from pg_proc
             where pronamespace = 'public'::regnamespace and proname !~ 'monvelo'
+              -- A6 §19: the lender summary is Monvelo's, under the name the user approved
+              and proname <> 'get_lender_reconciliation_summary'
               and prosrc ~ '(^|[^a-z_])monvelo_[a-z]'),
   null::text[], 'no function without monvelo in its name reads a Monvelo table');
 -- positive control: the boundary pattern bites a known Monvelo body

@@ -23,6 +23,12 @@ $f$;
 create trigger a6_stock_for_line after insert on public.order_items
   for each row execute function pg_temp.a6_stock_for_line();
 
+-- A6 §19: one agent funds several 48000 financings here, more than the 100000
+-- open exposure ceiling; this file is not about the cap (065 is), so the
+-- ceiling is raised for this transaction only
+create or replace function public.monvelo_open_exposure_ceiling() returns numeric language sql immutable
+set search_path = public, pg_temp as $$ select 100000000.00::numeric(15,2) $$;
+
 -- ── fixtures (as postgres), tenant TEAFAIR ──────────────────────────────
 -- 01 ZSM · 03 TM (Ikeja) · 04 ASA (Allen, the raiser) · 07 TENANT_ADMIN · 10 owner of S1 and S2
 -- 06 MONVELO_FINANCE · 09 MONVELO_OPERATOR

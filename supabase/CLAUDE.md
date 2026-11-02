@@ -1016,12 +1016,41 @@ calls, as amended, and the material rulings are recorded in A6 §19.
   - R58: the CLAIM route of `settle_monvelo_funding` has no supply-day bound
     by design (the stock sweep cancels an unpaid order; the agent held the
     claim).
+- **Exposure cap, pledge restoration, lender summary (A6 §19.4, user
+  2026-11-02):** migration `20261031120700`, pgTAP 065.
+  - `monvelo_open_exposure_ceiling()` is one constant, `100000.00`; a
+    migration changes it. `monvelo_agent_open_exposure(agent)` counts
+    CLAIMED and FUNDED at principal, and DELIVERED and
+    DEFAULTED_WITH_LATE_CHARGE at `least(outstanding, principal)`. Both are
+    ungranted.
+  - `monvelo_claim_refusal` refuses past the ceiling ("this request would
+    take your open exposure above ₦100,000"), after the daily cap: the claim
+    gets a P0001, and the late route gets `late_payment` and a flag.
+  - R63 (the user's principle, 2026-11-02: "the central truth is funded order
+    fulfilment"): REFUND_DUE counts toward neither the exposure nor the daily
+    cap, from the sweep on. Only the pledge waits for the refund.
+  - `apply_monvelo_refund`, closing a REFUND_DUE financing, gives the
+    principal back to that financing's own pledge, even after its supply day,
+    once, with a tenant-null audit row (`monvelo_pledges`). R62: a funding
+    already refunded while FUNDED is restored by `monvelo_sweep_money` when it
+    closes the financing at once (lock order financing, order, pledge; once,
+    while `closed_at` was null; a tenant-null CRON row).
+  - `get_lender_reconciliation_summary(p_weeks default 12)` is
+    `authenticated` only and returns one row per agent and Lagos funding week.
+    An agent's member sees their own agent's rows across tenants (this wins);
+    a ZSA sees their zone and an ASA their area, in the active tenant. Anyone
+    else gets 42501. The ZSA/ASA reading is the user's decision, an exception
+    to §16.2.2.
+  - Tests 061–064 raise the ceiling in their own transaction. 045's boundary
+    guard names the summary as an exception.
 - **Open for later:**
   - Step 5 must not pay a rebate payable whose funding was refunded
     (`FUNDING_REFUNDED` leaves it DUE).
   - Partial refunds are not summed (same as web).
-  - REFUND_DUE does not restore the agent's pledge `remaining` or its
-    daily-cap headroom. Whether pledges recycle is a business question.
+  - Answered (user, 2026-11-02): pledges recycle. The pledge
+    is restored when the refund is confirmed: by `apply_monvelo_refund` for a
+    REFUND_DUE financing, and by the sweep for a funding already refunded (R62).
+    The exposure and the daily cap free at REFUND_DUE (R63).
 - **Integration.** `gateway.integration.ts` continues the Step 2 test's
   CLAIMED financing: funding, a lapsed claim that still funds, a payer
   mismatch, dispatch, the delivery code, a part repayment, the late charge and
