@@ -1051,6 +1051,12 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     is restored when the refund is confirmed: by `apply_monvelo_refund` for a
     REFUND_DUE financing, and by the sweep for a funding already refunded (R62).
     The exposure and the daily cap free at REFUND_DUE (R63).
+- **Next, designed not built: the market-maker allowance (A6 §20, 2026-11-02).**
+  A claim blocked only by the ₦100,000 exposure cap is held for 15 minutes
+  (exclusive); a ZSM or ASA in scope, never the request's raiser, may allow it
+  up to ₦300,000 of the agent's open exposure. The daily cap is never lifted.
+  The market maker never sees the agent. Read §20 before touching
+  `monvelo_claim_refusal`, `claim_monvelo_financing` or `monvelo_sweep_offers`.
 - **Integration.** `gateway.integration.ts` continues the Step 2 test's
   CLAIMED financing: funding, a lapsed claim that still funds, a payer
   mismatch, dispatch, the delivery code, a part repayment, the late charge and

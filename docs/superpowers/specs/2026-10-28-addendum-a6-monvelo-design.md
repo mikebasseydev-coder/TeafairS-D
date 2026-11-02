@@ -1,7 +1,7 @@
 # Addendum A6 to Spec A: Monvelo, inventory financing for neighbourhood shops
 
 **Date:** 2026-10-28
-**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15), 2026-10-29 (§16, §17), 2026-10-30 (§7.2, §18), 2026-11-01 (the 23-hour delivery cutoff) and 2026-11-02 (§19)
+**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15), 2026-10-29 (§16, §17), 2026-10-30 (§7.2, §18), 2026-11-01 (the 23-hour delivery cutoff), 2026-11-02 (§19) and 2026-11-02 (§20, design, not built)
 **Authority:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) still governs. Its §9 rules hold without exception. Where this addendum changes an earlier decision, it says so.
 
 ## 1. Intent
@@ -1180,3 +1180,92 @@ backdoors"; user, 2026-10-29).
   - **Cost if wrong:** each file's fixtures would need more agents.
 - **045's boundary guard names `get_lender_reconciliation_summary` as an exception.** The guard asserts that no function without "monvelo" in its name reads a Monvelo table. The function name is the approved one.
   - **Cost if wrong:** rename the function `get_monvelo_lender_reconciliation_summary` and drop the exception.
+
+## 20. Amendment 2026-11-02: the market-maker allowance (design, not built)
+
+**Status:** design written 2026-11-02 from the user's answers; the builder-check questions answered by the user the same day (1A, 2A, 3A: decisions 5–7 below). Awaiting the user's approval of the whole section. Nothing is built.
+
+### 20.1 Intent
+
+The ₦100,000 open exposure cap (§19.4) protects agents and Teafair, but a good agent next to a good shop can be blocked by a number that knows neither of them. Teafair's **market makers**, the ZSM and the ASA, stand close to the shop and can judge whether it will pay back within the agreed 30 days. When the only thing stopping a funding is a cap, a market maker may **allow** it, up to a hard ceiling of **₦300,000** of that agent's open exposure.
+
+The principle of §19.4 still governs: **the central truth is funded order fulfilment.** An allowance changes who may fund; it never changes fulfilment, delivery codes, repayment or the sweep.
+
+### 20.2 Decisions (user, 2026-11-02; binding)
+
+1. **The market makers are the ZSM and the ASA.** The ZSA is not one; it keeps its read of the lender summary (§19.4.3) and nothing more.
+2. **The readiness is about the funding agent**: the agent who tried to claim and was blocked. The market maker judges the **shop's** capacity to repay within the agreed one month.
+3. **The ZSM never sees which agent is funding** (the user's "no"). The market maker sees whether the funding side is ready, what blocks it and the figures, never the agent's name, id, phone, network or location. §16.2.2 and R19 stand.
+4. **An allowance may take the agent's open exposure, including this financing, up to ₦300,000** ("any amount up to ₦300,000"). Above that, nobody can allow.
+5. **The hold is exclusive (1A).** A blocked claim is held, not refused, for 15 minutes, the same as a claim's payment window. While it is held, no other agent can claim the financing. The user accepts the timing cost: the preferred window (10 min), the hold (15 min) and the payment window (15 min) can keep a request from being paid for about 40 minutes.
+6. **Four eyes (2A).** The person who raised the request (`monvelo_financings.raised_by`) can never allow or decline its hold. An ASA who raised it cannot decide; the decision falls to a ZSM whose zone covers the area. If no other market maker is in scope, the hold lapses at 15 minutes. *Claude's call: the rule binds any raiser, not only an ASA, so a ZSM who raised a request cannot decide it either.*
+7. **Only the ₦100,000 exposure cap can be lifted (3A).** The agent's own `daily_cap`, set by Monvelo staff, is never overridden. A claim blocked by the daily cap (alone or together with the exposure cap) is refused exactly as today.
+
+### 20.3 Claude's calls (open to change)
+
+1. **Only the exposure cap is allowable (decision 7).** Every other refusal stands: the agent or member not ACTIVE, the default freeze (§18.2), no pledge or a short pledge (the money must exist), the daily cap, the per-financing cap, the radius, enrolment, the preferred window, a lapsed or declined agent reclaiming. *Cost if wrong: one more refusal joins the allowable list.*
+2. **The ASA sees the same anonymous view as the ZSM**, although the ASA may read agent names in the lender summary. One view, one rule. *Cost if wrong: a name column for ASA callers.*
+3. *(Now decision 5.)*
+4. **A held financing counts toward the agent's open exposure at its principal**, so two holds cannot together pass ₦300,000.
+5. **The late payment route never holds.** Money has already arrived, so a cap block there stays `late_payment`, a flag and a refund, as today.
+6. **A written reason is required to allow** (at least 10 characters); a decline needs none.
+7. **An allowance survives a late payment.** If an allowed claim's payment window lapses and the agent's money then arrives on the late route, the late route finds the ALLOWED hold for that agent and financing and checks the caps against ₦300,000 instead of refusing. *Cost if wrong: the market maker's approval is wasted and the money is refunded by staff.*
+8. **A declined hold bars that agent from that request; a lapsed hold does not bar a fresh claim, but it cannot be held again.** The agent may claim again only if the caps now pass on their own. A preferred agent whose hold is declined or lapses does not get the preferred window back. *Cost if wrong: one more check in the claim refusal.*
+9. **The market maker sees pass or fail, not the agent's own figures.** The agent's exposure and pledge left are summed across every tenant, and raw figures could let a market maker work out which agent it is, or see the lender's business with other tenants. So the view shows each block, this financing's principal, and "within the ₦300,000 limit: yes or no". The figures are stored on the hold for Monvelo staff and the audit only. *Cost if wrong: the readiness view gains the raw figures.*
+
+### 20.4 The flow
+
+1. An ACTIVE agent calls `claim_monvelo_financing` on an OFFERED financing (in the preferred window or after it, per §7.1).
+2. `monvelo_claim_refusal` runs every check as today. If the **only** refusal is the ₦100,000 exposure cap (decision 7) and `open exposure + principal ≤ ₦300,000`, the claim is **held** instead of refused:
+   - the financing moves OFFERED → **HELD**;
+   - a `monvelo_claim_holds` row records the hold (§20.5);
+   - the claim reply is `{held: true, hold_id, expires_at}` instead of an error.
+
+   Any other refusal, or a total above ₦300,000, is refused exactly as today.
+3. Every ZSM whose zone covers the financing's area, and the ASA of that area, in the financing's tenant, is notified (no agent identity in the notice) and sees the hold in their list. The request's raiser is never notified and cannot decide (decision 6); if nobody else is in scope, the hold can only lapse.
+4. A market maker opens the hold, sees the readiness view (§20.6) and decides:
+   - **Allow** (with a reason): in one transaction, under the agent's advisory lock (R13), every check except the ₦100,000 exposure cap is re-run (the daily cap included), and `open exposure + principal ≤ ₦300,000` is re-checked. The decider must not be the request's raiser (decision 6). If they pass, the hold becomes ALLOWED and the financing HELD → CLAIMED for that agent; the claim's 15-minute payment window starts then, and the agent funds through `monvelo-fund` as usual. If they fail, the allow is refused with the reason and the hold stays HELD.
+   - **Decline:** the hold becomes DECLINED and the financing HELD → OFFERED. The declined agent may not reclaim that financing (as a lapsed agent cannot, §7.1 step 3).
+5. **No decision within 15 minutes:** the offers sweep moves the hold to LAPSED and the financing HELD → OFFERED, as a lapsed claim does today.
+6. The agent is told the outcome (allowed: pay now; declined or lapsed: the request is gone).
+
+### 20.5 Data
+
+- **`monvelo_financings.status`** gains `HELD`. New guard transitions: OFFERED → HELD; HELD → CLAIMED, OFFERED, CANCELLED or EXPIRED (a CANCELLED or EXPIRED request ends its hold as LAPSED).
+- **`monvelo_claim_holds`** (insert-only apart from the one final move; never deleted):
+  - `id`, `tenant_id`, `financing_id`, `agent_id`, `claimed_by` (the member), `blocks text[]` (`EXPOSURE_CAP` only today), `exposure_before`, `exposure_after`, `pledge_remaining` (staff and audit only, call 9), `created_at`, `expires_at`, `status` (`HELD`, `ALLOWED`, `DECLINED`, `LAPSED`), `decided_by`, `decided_at`, `reason`;
+  - at most one HELD hold per financing (partial unique index);
+  - RLS on, **no policy**: market makers read through the RPCs below, agents through their claim replies. No column is granted to `authenticated`.
+- **Exposure:** `monvelo_agent_open_exposure` counts the agent's HELD financings at their principal (call 4).
+- **Audit:** every hold, allow, decline and lapse writes one audit row with `tenant_id` null (it names an agent; R15).
+
+### 20.6 What the market maker sees
+
+`list_monvelo_claim_holds()` (the caller's scope: HELD first, then the last 7 days) and `get_monvelo_claim_hold(p_hold_id)` return, per hold:
+
+- **The request:** the financing reference, the shop's name and code (the tenant already sees its shops), the area, the principal and the brand lines, `expires_at`.
+- **The funding side, anonymous (call 9):** `ready` (false while held), the blocks, this financing's principal, and whether the agent stays within the ₦300,000 limit (yes or no). **No agent name, id, phone, network, location or the agent's own figures.**
+- **The shop side:** the shop's Monvelo record in this tenant: financings repaid within the window, repaid late, defaulted and open now, and its current limit per brand.
+- **The outcome**, once decided: the status, the deciding market maker's own name, when, and the reason.
+
+### 20.7 Interfaces
+
+| RPC | Caller | Notes |
+|---|---|---|
+| `claim_monvelo_financing` (changed) | fintech member | holds instead of refusing (§20.4 step 2); the reply gains `held` |
+| `list_monvelo_claim_holds()` | ZSM (their zones), ASA (their area); active tenant, checked live | read; anonymous funding side |
+| `get_monvelo_claim_hold(p_hold_id)` | the same | read |
+| `decide_monvelo_claim_hold(p_idempotency_key, p_hold_id, p_allow boolean, p_reason text)` | the same, never the request's raiser (42501) | allow re-checks under the agent's advisory lock; decline needs no reason |
+| `monvelo_sweep_offers` (changed) | cron | lapses holds past `expires_at` |
+
+Every other role, including TM, CSM, TENANT_ADMIN, LM, the ZSA and the agent, gets 42501 on the three new RPCs.
+
+### 20.8 Not changed
+
+Delivery and its 23-hour cutoff, repayment, the late charge, the money sweep, refunds and pledge restoration (§19.4) work as they do today. An allowed claim is an ordinary CLAIMED financing from then on, and the lender reconciliation summary counts it like any other.
+
+### 20.9 Left to the builder
+
+- The notification channel for steps 3 and 6 (the existing staff and agent notice paths; no agent identity in the staff notice).
+- Whether the claim reply change needs a gateway (today the claim is a direct RPC).
+- Index choices and the exact wording of the readiness labels.
