@@ -2,7 +2,7 @@ import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { type InitializeRequest, PaystackDuplicateReference } from "../_shared/payments/paystack.ts";
-import { createMonveloFundHandler, monveloCheckoutRecorder } from "./handler.ts";
+import { checkoutKey, createMonveloFundHandler } from "./handler.ts";
 
 const KEY = "c0000000-0000-0000-0000-000000000001";
 const FIN = "e0000000-0000-0000-0000-000000000003";
@@ -19,9 +19,11 @@ function setup(opts: {
 } = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
   const inits: InitializeRequest[] = [];
-  const recorded: Array<[string, { authorizationUrl: string; accessCode: string }]> = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
+    if (fn === "record_monvelo_checkout") {
+      return opts.recordError ? Promise.reject(opts.recordError) : Promise.resolve({ recorded: true } as T);
+    }
     if (opts.rpcError) return Promise.reject(opts.rpcError);
     return Promise.resolve((opts.started ?? { ...STARTED, replayed: false }) as T);
   };
@@ -33,11 +35,9 @@ function setup(opts: {
       if (opts.paystackError) return Promise.reject(opts.paystackError);
       return Promise.resolve({ reference: req.reference, accessCode: "ac_SECRET", authorizationUrl: "https://checkout.paystack.com/ac_SECRET" });
     },
-    recordCheckout: (paymentId, checkout) => {
-      recorded.push([paymentId, checkout]);
-      return opts.recordError ? Promise.reject(opts.recordError) : Promise.resolve();
-    },
+    gatewaySecret: "gw-secret",
   });
+  const recorded = () => rpcCalls.filter(([fn]) => fn === "record_monvelo_checkout").map(([, args]) => args);
   return { handler, rpcCalls, inits, recorded };
 }
 
@@ -50,7 +50,7 @@ Deno.test("happy path: RPC first, then Paystack with bank_transfer, the syntheti
   const { handler, rpcCalls, inits } = setup();
   const res = await post(handler, body());
   assertEquals(res.status, 200);
-  assertEquals(rpcCalls, [["start_monvelo_funding", { p_idempotency_key: KEY, p_financing_id: FIN, p_agent_id: AGENT }]]);
+  assertEquals(rpcCalls[0], ["start_monvelo_funding", { p_idempotency_key: KEY, p_financing_id: FIN, p_agent_id: AGENT }]);
   assertEquals(inits, [{
     reference: REF,
     amountMinor: 4500000,
@@ -65,10 +65,20 @@ Deno.test("happy path: RPC first, then Paystack with bank_transfer, the syntheti
 });
 
 // R53: a retried key must not dead-end on Paystack's duplicate-reference refusal
-Deno.test("the first call stores the checkout for its payment", async () => {
+Deno.test("the first call stores the checkout on the caller's JWT with the gateway proof (R59)", async () => {
   const { handler, recorded } = setup();
   assertEquals((await post(handler, body())).status, 200);
-  assertEquals(recorded, [["p1", { authorizationUrl: "https://checkout.paystack.com/ac_SECRET", accessCode: "ac_SECRET" }]]);
+  assertEquals(recorded(), [{
+    p_idempotency_key: await checkoutKey("p1"), p_gateway_proof: "gw-secret", p_payment_id: "p1",
+    p_authorization_url: "https://checkout.paystack.com/ac_SECRET", p_access_code: "ac_SECRET",
+  }]);
+});
+
+Deno.test("the checkout key is a stable uuid per payment", async () => {
+  const a = await checkoutKey("11111111-1111-1111-1111-111111111111");
+  assertEquals(a, await checkoutKey("11111111-1111-1111-1111-111111111111"));
+  assertEquals(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(a), true);
+  assertEquals(a === await checkoutKey("22222222-2222-2222-2222-222222222222"), false);
 });
 
 Deno.test("a replay returns the stored checkout and never calls Initialize", async () => {
@@ -79,7 +89,7 @@ Deno.test("a replay returns the stored checkout and never calls Initialize", asy
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { reference: REF, authorization_url: "https://checkout.paystack.com/ac_STORED", access_code: "ac_STORED" });
   assertEquals(inits.length, 0);
-  assertEquals(recorded.length, 0);
+  assertEquals(recorded().length, 0);
 });
 
 Deno.test("a replay with nothing stored initialises again and stores what Paystack returns", async () => {
@@ -87,7 +97,7 @@ Deno.test("a replay with nothing stored initialises again and stores what Paysta
   const res = await post(handler, body());
   assertEquals(res.status, 200);
   assertEquals(inits.length, 1);
-  assertEquals(recorded.length, 1);
+  assertEquals(recorded().length, 1);
 });
 
 Deno.test("a replay with nothing stored that Paystack refuses as a duplicate is 409 MONVELO_CHECKOUT_LOST", async () => {
@@ -118,16 +128,10 @@ Deno.test("a failed store still returns the checkout, and logs nothing of it", a
   assertEquals(JSON.stringify(logged).includes("ac_SECRET"), false);
 });
 
-Deno.test("the recorder calls the service-role RPC with the payment and the checkout", async () => {
-  const calls: Array<[string, Record<string, unknown>]> = [];
-  const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
-    calls.push([fn, args]);
-    return Promise.resolve({} as T);
-  };
-  await monveloCheckoutRecorder(rpc)("p1", { authorizationUrl: "https://checkout.paystack.com/x", accessCode: "x" });
-  assertEquals(calls, [["record_monvelo_checkout", {
-    p_payment_id: "p1", p_authorization_url: "https://checkout.paystack.com/x", p_access_code: "x",
-  }]]);
+Deno.test("the gateway takes no service-role client (R59)", async () => {
+  const src = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  assertEquals(/serviceRpc|SERVICE_ROLE/.test(src), false);
+  assertEquals(/GATEWAY_SECRET/.test(src), true);
 });
 
 Deno.test("an RPC refusal (42501) is 403 and Paystack is never called", async () => {

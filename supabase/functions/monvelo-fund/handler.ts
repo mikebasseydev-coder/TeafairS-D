@@ -8,39 +8,31 @@
 // R53: the reference is drawn by the database, so a retried key must not ask
 // Paystack to initialise it again (Paystack refuses a duplicate reference).
 // After Initialize succeeds, the checkout is stored on the payment
-// (record_monvelo_checkout, service_role only; the columns are granted to no
-// API role), and a replay of start_monvelo_funding hands it back: the gateway
+// (record_monvelo_checkout, on the caller's JWT with the gateway proof, R59;
+// the columns are granted to no API role), and a replay of start_monvelo_funding hands it back: the gateway
 // returns it without calling Paystack. A replay that finds nothing stored (the
 // first Initialize failed, or its store did) initialises again; if Paystack
 // refuses that as a duplicate, the checkout is lost: 409 MONVELO_CHECKOUT_LOST,
 // and the client starts again with a new idempotency key (a new payment and
-// reference). This is the one service-role write in a user gateway outside R22:
-// the user's work still runs on the caller's JWT.
+// reference). The store's idempotency key is derived from the payment, so a
+// retried store replays.
 import { z } from "../_shared/core/deps.ts";
-import type { Rpc } from "../_shared/core/db.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { userGateway, type UserGatewayDeps } from "../_shared/core/gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
 import { type InitializeTransaction, PaystackDuplicateReference } from "../_shared/payments/paystack.ts";
 
-export type StoredCheckout = { authorizationUrl: string; accessCode: string };
-export type RecordCheckout = (paymentId: string, checkout: StoredCheckout) => Promise<void>;
-
 export type MonveloFundDeps = UserGatewayDeps & {
   initializeTransaction: InitializeTransaction;
-  /** Stores the checkout on the payment: service_role, record_monvelo_checkout. */
-  recordCheckout: RecordCheckout;
+  /** Must equal the Vault secret `gateway_secret`. */
+  gatewaySecret: string;
 };
 
-/** record_monvelo_checkout over a service-role client (index.ts wires serviceRpc()). */
-export function monveloCheckoutRecorder(rpc: Rpc): RecordCheckout {
-  return async (paymentId, checkout) => {
-    await rpc("record_monvelo_checkout", {
-      p_payment_id: paymentId,
-      p_authorization_url: checkout.authorizationUrl,
-      p_access_code: checkout.accessCode,
-    });
-  };
+/** The idempotency key of a payment's checkout store: a uuid drawn from SHA-256 of the payment id. */
+export async function checkoutKey(paymentId: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`monvelo-checkout:${paymentId}`)));
+  const hex = Array.from(digest.slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 const schema = z.object({
@@ -92,7 +84,13 @@ export function createMonveloFundHandler(deps: MonveloFundDeps): (req: Request) 
     }
 
     try {
-      await deps.recordCheckout(started.payment_id, { authorizationUrl: tx.authorizationUrl, accessCode: tx.accessCode });
+      await rpc("record_monvelo_checkout", {
+        p_idempotency_key: await checkoutKey(started.payment_id),
+        p_gateway_proof: deps.gatewaySecret,
+        p_payment_id: started.payment_id,
+        p_authorization_url: tx.authorizationUrl,
+        p_access_code: tx.accessCode,
+      });
     } catch (e) {
       // the payer still gets the link; a later replay would find nothing stored
       console.error("Monvelo checkout not stored", e instanceof Error ? e.name : "error");

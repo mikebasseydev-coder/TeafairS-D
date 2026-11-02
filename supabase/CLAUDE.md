@@ -915,7 +915,7 @@ rulings is in `.superpowers/sdd/` (git-ignored).
 
 ### Monvelo (A6) Step 3: funding, delivery, repayment, the money sweep
 
-Migrations `20261031120000`-`20261031120500`, pgTAP 061-064, the functions
+Migrations `20261031120000`-`20261031120600`, pgTAP 061-064, the functions
 `monvelo-fund`, `monvelo-confirm-delivery` and `monvelo-confirm-repayment`,
 local only. The plan is
 `docs/superpowers/plans/2026-10-31-monvelo-step3-funding-repayment.md`. Its
@@ -1000,8 +1000,10 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     repayment expires at 24 h. If wrong: a line each.
   - R53: `monvelo-fund` stores the checkout after Initialize
     (`payments.monvelo_authorization_url`, `monvelo_access_code`, ungranted;
-    `record_monvelo_checkout`, service_role, the gateway's one service-role
-    write) and a replay returns it without calling Paystack. A replay with
+    `record_monvelo_checkout` on the caller's JWT with the gateway proof,
+    R59: only the payment's starter, still an ACTIVE member of an ACTIVE
+    agent, while the payment is INITIATED) and a replay returns it without
+    calling Paystack. `monvelo-fund` now needs `GATEWAY_SECRET`. A replay with
     nothing stored that Paystack refuses as a duplicate is 409
     `MONVELO_CHECKOUT_LOST`: **the client starts again with a new key.**
   - R54: recording again ends the recorder's own dead-code PENDING
@@ -1124,9 +1126,7 @@ one responsibility per file. Third-party versions appear only in
   exception (A5, R22):** user gateways use the service role only to sign and
   remove Storage objects (`_shared/storage/`) and for the message router's
   `log_message_delivery` write. Every RPC that does the user's work still runs
-  on the caller's JWT. **Monvelo R53** adds one more: `monvelo-fund` stores
-  the Paystack checkout with the service-role `record_monvelo_checkout`
-  after Initialize.
+  on the caller's JWT.
 - **PIN-gated operations** call `requirePin(rpc, body.pin)` (from
   `_shared/auth/pin.ts`) before their RPC.
 - **System functions** use `serviceRpc()` and authenticate the caller

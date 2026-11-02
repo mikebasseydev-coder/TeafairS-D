@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(174);
+select plan(180);
 
 -- A6 Task 6b: placing an order reserves stock. This file is not about stock,
 -- so every ordered line finds ample stock in its order's fulfilment warehouse.
@@ -302,28 +302,52 @@ select ok(not has_column_privilege('authenticated', 'public.payments', 'monvelo_
       and not has_column_privilege('authenticated', 'public.payments', 'monvelo_access_code', 'select')
       and not has_column_privilege('anon', 'public.payments', 'monvelo_access_code', 'select'),
   'neither column is granted to the API');
-select ok(has_function_privilege('service_role', 'public.record_monvelo_checkout(uuid,text,text)', 'execute')
-      and not has_function_privilege('authenticated', 'public.record_monvelo_checkout(uuid,text,text)', 'execute')
-      and not has_function_privilege('anon', 'public.record_monvelo_checkout(uuid,text,text)', 'execute'),
-  'record_monvelo_checkout is for service_role only');
+-- R59: the gateway records it on the caller's JWT with the gateway proof (R16), never the service role
+delete from vault.secrets where name = 'gateway_secret';
+do $$ begin perform vault.create_secret('test-gw-secret', 'gateway_secret'); end $$;
+select is(to_regprocedure('public.record_monvelo_checkout(uuid,text,text)'), null, 'R59: the service-role signature is gone');
+select ok(has_function_privilege('authenticated', 'public.record_monvelo_checkout(uuid,text,uuid,text,text)', 'execute')
+      and not has_function_privilege('anon', 'public.record_monvelo_checkout(uuid,text,uuid,text,text)', 'execute')
+      and not has_function_privilege('service_role', 'public.record_monvelo_checkout(uuid,text,uuid,text,text)', 'execute'),
+  'record_monvelo_checkout is for signed-in callers only (the RPC checks the proof and the starter)');
 select ok((select p.prosecdef and p.proconfig @> array['search_path=public, pg_temp'] from pg_proc p
-            where p.oid = 'public.record_monvelo_checkout(uuid,text,text)'::regprocedure),
+            where p.oid = 'public.record_monvelo_checkout(uuid,text,uuid,text,text)'::regprocedure),
   'it is SECURITY DEFINER with the pinned search_path');
-grant execute on function pg_temp.pid(text) to authenticated;
-select pg_temp.act_as(pg_temp.u(21), null);
-select throws_ok(format($$select public.record_monvelo_checkout(%L, 'https://checkout.paystack.com/x', 'x')$$, pg_temp.pid('A1')),
-  '42501', null, 'the member cannot call it');
-reset role;
-select is(public.record_monvelo_checkout(pg_temp.pid('A1'), 'https://checkout.paystack.com/ac_A', 'ac_A') ->> 'recorded', 'true',
-  'the gateway stores A1''s checkout');
-select lives_ok(format($$select public.record_monvelo_checkout(%L, 'https://checkout.paystack.com/ac_A', 'ac_A')$$, pg_temp.pid('A1')),
-  'the same checkout again is a replay');
-select throws_ok(format($$select public.record_monvelo_checkout(%L, 'https://checkout.paystack.com/ac_B', 'ac_B')$$, pg_temp.pid('A1')),
-  'TF002', null, 'another checkout for the same payment is refused');
-select throws_ok($$select public.record_monvelo_checkout(gen_random_uuid(), 'https://checkout.paystack.com/x', 'x')$$,
+-- member p_user stores a checkout for payment p_pay under key k(p_key)
+create function pg_temp.rc(p_key integer, p_user integer, p_pay uuid, p_url text, p_code text, p_proof text default 'test-gw-secret')
+returns jsonb language plpgsql as $f$
+declare v jsonb;
+begin
+  perform pg_temp.act_as(pg_temp.u(p_user), null);
+  v := public.record_monvelo_checkout(pg_temp.k(p_key), p_proof, p_pay, p_url, p_code);
+  perform set_config('role', 'postgres', true);
+  return v;
+end; $f$;
+create temp table a1 as select pg_temp.pid('A1') as id;
+select throws_ok($$select pg_temp.rc(120, 21, (select id from a1), 'https://checkout.paystack.com/x', 'x', 'wrong')$$,
+  '42501', 'this operation must come through its gateway', 'without the gateway proof it is refused');
+select throws_ok($$select pg_temp.rc(121, 22, (select id from a1), 'https://checkout.paystack.com/x', 'x')$$,
+  '42501', 'only the member who started this payment records its checkout', 'another agent''s member is refused');
+update public.monvelo_agents set status = 'SUSPENDED' where id = pg_temp.ag(21);
+select throws_ok($$select pg_temp.rc(122, 21, (select id from a1), 'https://checkout.paystack.com/x', 'x')$$,
+  '42501', 'only the member who started this payment records its checkout', 'nor the starter while the agent is suspended');
+update public.monvelo_agents set status = 'ACTIVE' where id = pg_temp.ag(21);
+update public.payments set payment_status = 'FAILED' where id = (select id from a1);
+select throws_ok($$select pg_temp.rc(123, 21, (select id from a1), 'https://checkout.paystack.com/x', 'x')$$,
+  'P0001', 'only a payment still being started takes its checkout', 'a payment no longer INITIATED is refused');
+update public.payments set payment_status = 'INITIATED' where id = (select id from a1);
+select throws_ok($$select pg_temp.rc(124, 21, gen_random_uuid(), 'https://checkout.paystack.com/x', 'x')$$,
   'P0001', 'not a Monvelo payment', 'an unknown payment is refused');
-select throws_ok(format($$select public.record_monvelo_checkout(%L, 'http://evil.test/x', 'x')$$, pg_temp.pid('A1')),
+select throws_ok($$select pg_temp.rc(125, 21, (select id from a1), 'http://evil.test/x', 'x')$$,
   'P0001', 'the checkout must be a Paystack https URL and an access code', 'a non-https URL is refused');
+select is(pg_temp.rc(126, 21, (select id from a1), 'https://checkout.paystack.com/ac_A', 'ac_A') ->> 'recorded', 'true',
+  'the starter stores A1''s checkout through the gateway');
+select lives_ok($$select pg_temp.rc(126, 21, (select id from a1), 'https://checkout.paystack.com/ac_A', 'ac_A')$$,
+  'the same key and checkout again is a replay');
+select throws_ok($$select pg_temp.rc(126, 21, (select id from a1), 'https://checkout.paystack.com/ac_B', 'ac_B')$$,
+  'TF002', null, 'the same key with another checkout is refused');
+select throws_ok($$select pg_temp.rc(127, 21, (select id from a1), 'https://checkout.paystack.com/ac_B', 'ac_B')$$,
+  'P0001', 'this payment already has its checkout', 'a second checkout for the payment is refused');
 select is((select row(monvelo_authorization_url, monvelo_access_code)::text from public.payments where id = pg_temp.pid('A1')),
   '(https://checkout.paystack.com/ac_A,ac_A)', 'the first checkout is kept');
 select pg_temp.act_as(pg_temp.u(21), null);
@@ -332,11 +356,13 @@ select is(public.start_monvelo_funding(pg_temp.k(114), pg_temp.f('A'), pg_temp.a
     || '{"replayed": true, "authorization_url": "https://checkout.paystack.com/ac_A", "access_code": "ac_A"}'::jsonb,
   'the replay now hands back the stored checkout');
 select throws_ok($$select monvelo_access_code from public.payments$$, '42501', null, 'which the member cannot select');
+select throws_ok($$select monvelo_authorization_url from public.payments$$, '42501', null, 'nor the URL');
 reset role;
-select ok((select a.tenant_id is null and a.after::text !~ 'ac_A' from public.audit_logs a
+select ok((select a.tenant_id is null and a.after::text !~ 'ac_A' and a.actor_id = pg_temp.u(21) from public.audit_logs a
             where a.operation = 'record_monvelo_checkout' and a.entity_id = pg_temp.pid('A1')::text)
-      and (select count(*) from public.audit_logs where operation = 'record_monvelo_checkout') = 1,
-  'one audit row, tenant null, holding neither the URL nor the code');
+      and (select count(*) from public.audit_logs where operation = 'record_monvelo_checkout'
+             and entity_id = pg_temp.pid('A1')::text) = 1,
+  'one audit row, tenant null, by the starter, holding neither the URL nor the code');
 select ok((select bool_and(response::text !~ 'ac_A') from public.idempotency_logs where operation = 'record_monvelo_checkout'),
   'the stored idempotency reply holds no access code');
 
