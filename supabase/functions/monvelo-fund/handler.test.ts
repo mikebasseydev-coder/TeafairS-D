@@ -1,23 +1,29 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
-import type { InitializeRequest } from "../_shared/payments/paystack.ts";
-import { createMonveloFundHandler } from "./handler.ts";
+import { type InitializeRequest, PaystackDuplicateReference } from "../_shared/payments/paystack.ts";
+import { createMonveloFundHandler, monveloCheckoutRecorder } from "./handler.ts";
 
 const KEY = "c0000000-0000-0000-0000-000000000001";
 const FIN = "e0000000-0000-0000-0000-000000000003";
 const AGENT = "d0000000-0000-0000-0000-000000000002";
 const REF = "MV-ABCDEFGH-1";
 
-function setup(opts: { rpcError?: Error; paystackError?: Error } = {}) {
+const STARTED = { payment_id: "p1", reference: REF, amount_minor: 4500000, currency: "NGN", claim_expires_at: "2026-11-01T00:00:00Z" };
+
+function setup(opts: {
+  rpcError?: Error;
+  paystackError?: Error;
+  recordError?: Error;
+  started?: Record<string, unknown>;
+} = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
   const inits: InitializeRequest[] = [];
+  const recorded: Array<[string, { authorizationUrl: string; accessCode: string }]> = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
     if (opts.rpcError) return Promise.reject(opts.rpcError);
-    return Promise.resolve(
-      { payment_id: "p1", reference: REF, amount_minor: 4500000, currency: "NGN", claim_expires_at: "2026-11-01T00:00:00Z" } as T,
-    );
+    return Promise.resolve((opts.started ?? { ...STARTED, replayed: false }) as T);
   };
   const handler = createMonveloFundHandler({
     verifyToken: () => Promise.resolve({ sub: "u1", role: "authenticated", app_metadata: {} }),
@@ -27,8 +33,12 @@ function setup(opts: { rpcError?: Error; paystackError?: Error } = {}) {
       if (opts.paystackError) return Promise.reject(opts.paystackError);
       return Promise.resolve({ reference: req.reference, accessCode: "ac_SECRET", authorizationUrl: "https://checkout.paystack.com/ac_SECRET" });
     },
+    recordCheckout: (paymentId, checkout) => {
+      recorded.push([paymentId, checkout]);
+      return opts.recordError ? Promise.reject(opts.recordError) : Promise.resolve();
+    },
   });
-  return { handler, rpcCalls, inits };
+  return { handler, rpcCalls, inits, recorded };
 }
 
 const post = (handler: (r: Request) => Promise<Response>, body: unknown) =>
@@ -52,6 +62,72 @@ Deno.test("happy path: RPC first, then Paystack with bank_transfer, the syntheti
   assertEquals(await res.json(), {
     reference: REF, authorization_url: "https://checkout.paystack.com/ac_SECRET", access_code: "ac_SECRET",
   });
+});
+
+// R53: a retried key must not dead-end on Paystack's duplicate-reference refusal
+Deno.test("the first call stores the checkout for its payment", async () => {
+  const { handler, recorded } = setup();
+  assertEquals((await post(handler, body())).status, 200);
+  assertEquals(recorded, [["p1", { authorizationUrl: "https://checkout.paystack.com/ac_SECRET", accessCode: "ac_SECRET" }]]);
+});
+
+Deno.test("a replay returns the stored checkout and never calls Initialize", async () => {
+  const { handler, inits, recorded } = setup({
+    started: { ...STARTED, replayed: true, authorization_url: "https://checkout.paystack.com/ac_STORED", access_code: "ac_STORED" },
+  });
+  const res = await post(handler, body());
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { reference: REF, authorization_url: "https://checkout.paystack.com/ac_STORED", access_code: "ac_STORED" });
+  assertEquals(inits.length, 0);
+  assertEquals(recorded.length, 0);
+});
+
+Deno.test("a replay with nothing stored initialises again and stores what Paystack returns", async () => {
+  const { handler, inits, recorded } = setup({ started: { ...STARTED, replayed: true } });
+  const res = await post(handler, body());
+  assertEquals(res.status, 200);
+  assertEquals(inits.length, 1);
+  assertEquals(recorded.length, 1);
+});
+
+Deno.test("a replay with nothing stored that Paystack refuses as a duplicate is 409 MONVELO_CHECKOUT_LOST", async () => {
+  const { handler, inits } = setup({ started: { ...STARTED, replayed: true }, paystackError: new PaystackDuplicateReference() });
+  const res = await post(handler, body());
+  assertEquals(res.status, 409);
+  assertEquals((await res.json()).error.code, "MONVELO_CHECKOUT_LOST");
+  assertEquals(inits.length, 1);
+});
+
+Deno.test("a first call that Paystack refuses is still 502, duplicate or not", async () => {
+  const { handler } = setup({ paystackError: new PaystackDuplicateReference() });
+  assertEquals((await post(handler, body())).status, 502);
+});
+
+Deno.test("a failed store still returns the checkout, and logs nothing of it", async () => {
+  const logged: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => logged.push(args);
+  try {
+    const { handler } = setup({ recordError: new Error("db down ac_SECRET") });
+    const res = await post(handler, body());
+    assertEquals(res.status, 200);
+    assertEquals((await res.json()).access_code, "ac_SECRET");
+  } finally {
+    console.error = original;
+  }
+  assertEquals(JSON.stringify(logged).includes("ac_SECRET"), false);
+});
+
+Deno.test("the recorder calls the service-role RPC with the payment and the checkout", async () => {
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
+    calls.push([fn, args]);
+    return Promise.resolve({} as T);
+  };
+  await monveloCheckoutRecorder(rpc)("p1", { authorizationUrl: "https://checkout.paystack.com/x", accessCode: "x" });
+  assertEquals(calls, [["record_monvelo_checkout", {
+    p_payment_id: "p1", p_authorization_url: "https://checkout.paystack.com/x", p_access_code: "x",
+  }]]);
 });
 
 Deno.test("an RPC refusal (42501) is 403 and Paystack is never called", async () => {

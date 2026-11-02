@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(64);
+select plan(75);
 
 -- A6 Task 6b: placing an order reserves stock. Every ordered line finds ample
 -- stock in its order's fulfilment warehouse (one FIXTURE batch per SKU).
@@ -200,6 +200,15 @@ begin
   insert into res values (p_n, v);
   return v;
 end; $$;
+-- ... and confirms it with the owner's code
+create function pg_temp.conf(p_key integer, p_rec text) returns jsonb language plpgsql as $$
+declare v jsonb;
+begin
+  perform pg_temp.act_as(pg_temp.u(21), null);
+  v := public.confirm_monvelo_repayment(pg_temp.k(p_key), (pg_temp.r(p_rec) ->> 'challenge_id')::uuid, pg_temp.r(p_rec) ->> 'code');
+  perform set_config('role', 'postgres', true);
+  return v;
+end; $$;
 create function pg_temp.fin_state(p_n text) returns text language sql as $$
   select row(status, outstanding, late_charge_amount, closed_at is not null)::text
     from public.monvelo_financings where id = pg_temp.f(p_n) $$;
@@ -252,6 +261,14 @@ select is(pg_temp.delivered('LA', 200, 2) || pg_temp.delivered('LB', 210, 2) || 
                jsonb_build_object('sku_code', 'PURERIGIN-COCONUT-OIL-100ML', 'qty', 12),
                jsonb_build_object('sku_code', 'TIGER-1', 'qty', 18))),
   'DELIVERED' || 'DELIVERED' || 'DELIVERED' || 'DELIVERED', 'LA, LB, PR and LC are DELIVERED');
+-- R54 fixtures: CL (to be closed) with a repayment left PENDING; SP with a PENDING
+-- repayment and a later one by the same recorder, confirmed
+select is(pg_temp.delivered('CL', 240, 2) || pg_temp.delivered('SP', 250, 2), 'DELIVERED' || 'DELIVERED',
+  'CL and SP are DELIVERED');
+select pg_temp.rec('PC', 410, 'CL', 1000);
+select pg_temp.rec('S1', 411, 'SP', 1000);
+select pg_temp.rec('S2', 412, 'SP', 1000);
+select is(pg_temp.conf(413, 'S2') ->> 'confirmed', 'true', 'S2 is confirmed; S1 stays PENDING');
 select is((select string_agg(brand_key || ':' || amount || ':' || late_charge_bps, ',' order by brand_key)
              from public.monvelo_financing_lines where financing_id = pg_temp.f('LC')),
   'purerigin:30000.00:1000,tiger:18000.00:500', 'LC has two lines with their own late-charge terms');
@@ -275,7 +292,8 @@ update public.monvelo_repayments set recorded_at = now() - interval '23 hours' w
 set local session_replication_role = origin;
 
 -- ── the sweep ───────────────────────────────────────────────────────────
-select is(public.monvelo_sweep_money(), '{"refund_due": 2, "late_charged": 3, "repayments_expired": 1}'::jsonb,
+select is(public.monvelo_sweep_money(),
+  '{"refund_due": 2, "late_charged": 3, "repayments_expired": 1, "repayments_superseded": 0}'::jsonb,
   'two refunds due, three late charges, one repayment expired');
 
 -- refund due: RD (paid, not dispatched)
@@ -293,6 +311,8 @@ select is((select status from public.monvelo_rebate_payables where financing_id 
 select is((select string_agg(t.kind || ':' || t.priority || ':' || (t.order_id = pg_temp.ord('RD'))::text, ',')
              from public.support_tickets t where t.system_key = 'monvelo-refund:' || pg_temp.f('RD')),
   'SYSTEM:HIGH:true', 'one HIGH system ticket on RD''s order');
+select is((select status || ':' || (resolved_at is null)::text from public.support_tickets
+            where system_key = 'monvelo-refund:' || pg_temp.f('RD')), 'OPEN:true', 'R56: it is OPEN until the refund lands');
 select is((select string_agg(m.body, '|') from public.support_messages m join public.support_tickets t on t.id = m.ticket_id
             where t.system_key = 'monvelo-refund:' || pg_temp.f('RD')),
   'Refund the funding of ' || pg_temp.ref('RD') || ' in Paystack.', 'the ticket names the MV- reference to refund');
@@ -348,7 +368,8 @@ select ok((select bool_and(m.body !~ ('ADE|BISI|POS 21|80000000-|82000000-|20000
   'no sweep ticket names the agent, its pledge or its member');
 
 -- a second sweep adds nothing
-select is(public.monvelo_sweep_money(), '{"refund_due": 0, "late_charged": 0, "repayments_expired": 0}'::jsonb,
+select is(public.monvelo_sweep_money(),
+  '{"refund_due": 0, "late_charged": 0, "repayments_expired": 0, "repayments_superseded": 0}'::jsonb,
   'a second sweep does nothing');
 select is(pg_temp.fin_state('LA') || pg_temp.fin_state('LB'),
   '(DEFAULTED_WITH_LATE_CHARGE,52800.00,4800.00,f)(DEFAULTED_WITH_LATE_CHARGE,30800.00,2800.00,f)',
@@ -384,6 +405,12 @@ select is(pg_temp.r('RF-1') - 'payment_id',
   'the refund of RD''s funding is applied');
 select is(pg_temp.pay_status('RD') || pg_temp.fin_state('RD'), 'REFUNDED(REFUND_DUE,,0.00,t)',
   'the payment is REFUNDED and RD is closed');
+-- R56: the refund ticket is resolved, with a system message
+select is((select status || ':' || (resolved_at is not null)::text from public.support_tickets
+            where system_key = 'monvelo-refund:' || pg_temp.f('RD')), 'RESOLVED:true', 'R56: RD''s refund ticket is RESOLVED');
+select is((select m.body || ':' || m.sender_type from public.support_messages m join public.support_tickets t on t.id = m.ticket_id
+            where t.system_key = 'monvelo-refund:' || pg_temp.f('RD') order by m.created_at desc, m.id desc limit 1),
+  'Refund received in Paystack; financing closed.:SYSTEM', 'with a SYSTEM message saying why');
 select is(pg_temp.refund('RF-1', 'RD', 4800000), pg_temp.r('RF-1'), 'the same refund id again replays the first reply');
 select is((select count(*)::int from public.audit_logs where operation = 'apply_monvelo_refund' and entity_type = 'payments'
               and entity_id = (select id::text from public.payments where paystack_reference = pg_temp.ref('RD'))), 1,
@@ -399,6 +426,8 @@ select is(pg_temp.pay_status('PM') || pg_temp.fin_state('PM'), 'REFUNDED(CLAIMED
 -- a partial refund changes no status; over-refunds and unknown references conflict
 select is(pg_temp.refund('RF-4', 'RT', 100000) ->> 'outcome', 'partial', 'a partial refund of RT');
 select is(pg_temp.pay_status('RT') || pg_temp.fin_state('RT'), 'SUCCESS(REFUND_DUE,,0.00,f)', 'changes no status');
+select is((select status from public.support_tickets where system_key = 'monvelo-refund:' || pg_temp.f('RT')), 'OPEN',
+  'and RT''s refund ticket stays OPEN');
 select is(pg_temp.refund('RF-5', 'RT', 4800001) ->> 'reason', 'over_refund', 'more than was paid is a conflict');
 select is(public.apply_monvelo_refund('sweep', 'RF-6', 'MV-ZZZZZZZZ-1', 100, 'NGN', 'REFUND', '{}') ->> 'reason',
   'unknown_reference', 'an unknown reference is a conflict');
@@ -430,6 +459,33 @@ select ok((select bool_and(tenant_id is null) from public.audit_logs
       and (select count(*) from public.audit_logs
             where operation = 'apply_monvelo_refund' and entity_type = 'monvelo_financings') = 1,
   'payment rows are written with tenant null; the closure row is the tenant''s and names no lender');
+
+-- ── R54: the sweep expires orphaned repayments quietly ─────────────────
+-- CL is closed with PC still PENDING; SP's S1 is followed by S2, confirmed by the
+-- same recorder; PR's P23 is a genuine unconfirmed repayment. All 25 h old.
+update public.monvelo_financings set status = 'REPAID_WITHIN_WINDOW', outstanding = 0, closed_at = now()
+ where id = pg_temp.f('CL');
+set local session_replication_role = replica;
+update public.monvelo_repayments set recorded_at = now() - interval '25 hours'
+ where id in (pg_temp.rp('PC'), pg_temp.rp('S1'), pg_temp.rp('P23'));
+set local session_replication_role = origin;
+select is(public.monvelo_sweep_money(),
+  '{"refund_due": 0, "late_charged": 0, "repayments_expired": 1, "repayments_superseded": 2}'::jsonb,
+  'R54: one genuine expiry, two orphans');
+select is((select string_agg(status, ',' order by recorded_at) from public.monvelo_repayments
+            where id in (pg_temp.rp('PC'), pg_temp.rp('S1'), pg_temp.rp('P23'))), 'EXPIRED,EXPIRED,EXPIRED',
+  'all three are EXPIRED');
+select is((select count(*)::int from public.monvelo_flags where financing_id in (pg_temp.f('CL'), pg_temp.f('SP')))
+          + (select count(*)::int from public.support_tickets
+              where system_key in ('monvelo-repayment:' || pg_temp.rp('PC'), 'monvelo-repayment:' || pg_temp.rp('S1'))), 0,
+  'the closed financing''s and the superseded repayment raise no flag and no ticket');
+select is((select count(*)::int from public.monvelo_flags where kind = 'REPAYMENT_UNCONFIRMED' and details ->> 'repayment_id' = pg_temp.rp('P23')::text)
+          + (select count(*)::int from public.support_tickets where system_key = 'monvelo-repayment:' || pg_temp.rp('P23') and priority = 'HIGH'),
+  2, 'the genuine one still gets its flag and its HIGH ticket');
+select is((select string_agg(a.after ->> 'reason', ',' order by a.after ->> 'reason') from public.audit_logs a
+            where a.operation = 'monvelo_sweep_money' and a.entity_type = 'monvelo_repayments' and a.tenant_id is null
+              and a.entity_id in (pg_temp.rp('PC')::text, pg_temp.rp('S1')::text)),
+  'FINANCING_CLOSED,SUPERSEDED', 'each orphan has one audit row, tenant null, with its reason');
 
 select * from finish();
 rollback;

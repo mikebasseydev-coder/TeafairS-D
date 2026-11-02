@@ -73,6 +73,15 @@ export type InitializeRequest = {
   metadata: Record<string, unknown>;
   split?: { subaccount: string; transactionChargeMinor: number };
 };
+// Paystack refuses a second Initialize for a reference it has seen
+// ("Duplicate Transaction Reference"). monvelo-fund tells this apart (R53).
+export class PaystackDuplicateReference extends Error {
+  constructor() {
+    super("Paystack initialize failed: Duplicate Transaction Reference");
+    this.name = "PaystackDuplicateReference";
+  }
+}
+
 export type InitializedTransaction = { reference: string; accessCode: string; authorizationUrl: string };
 export type InitializeTransaction = (req: InitializeRequest) => Promise<InitializedTransaction>;
 
@@ -118,6 +127,7 @@ export function paystackInitializer(opts: {
     const payload = await res.json().catch(() => null) as { message?: string } | null;
     const parsed = initializeResponse.safeParse(payload);
     if (!res.ok || !parsed.success) {
+      if (/duplicate transaction reference/i.test(payload?.message ?? "")) throw new PaystackDuplicateReference();
       throw new Error(`Paystack initialize failed: ${payload?.message ?? `HTTP ${res.status}`}`);
     }
     const { data } = parsed.data;

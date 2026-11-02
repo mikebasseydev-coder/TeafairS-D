@@ -92,7 +92,8 @@ select is((select array_agg(column_name::text order by column_name) from informa
   'every payments column added since the web split is monvelo_-named');
 select is((select array_agg(column_name::text order by column_name) from information_schema.columns
             where table_schema = 'public' and table_name = 'payments' and column_name ~ '^monvelo_'),
-          array['monvelo_agent_id', 'monvelo_financing_id', 'monvelo_started_by'], 'the Monvelo payments columns');
+          array['monvelo_access_code', 'monvelo_agent_id', 'monvelo_authorization_url', 'monvelo_financing_id', 'monvelo_started_by'],
+  'the Monvelo payments columns');
 select is((select count(*)::int from information_schema.columns c
             where c.table_schema = 'public' and c.table_name = 'payments' and c.column_name ~ '^monvelo_'
               and (has_column_privilege('authenticated', 'public.payments', c.column_name, 'select')

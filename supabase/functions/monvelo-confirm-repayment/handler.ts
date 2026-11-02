@@ -10,7 +10,9 @@
 //
 // A replayed record carries no code (the database never stored it), so it
 // sends nothing; if the message was lost, record again with a new key once the
-// code has lapsed.
+// code has lapsed. A failed send leaves the repayment PENDING with its code live
+// for 10 minutes, holding its amount; recording again after the code lapses
+// ends it quietly (R54), with no flag and no ticket.
 import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { userGateway, type UserGatewayDeps } from "../_shared/core/gateway.ts";
@@ -106,7 +108,7 @@ export function createMonveloConfirmRepaymentHandler(
         });
       } catch {
         // no error object is logged: it could echo the destination or the code
-        throw new GatewayError(502, "MESSAGE_DELIVERY_FAILED", "The code could not be sent. Record the repayment again.");
+        throw new GatewayError(502, "MESSAGE_DELIVERY_FAILED", "The code could not be sent. This repayment stays pending, holding its amount, until its code lapses in 10 minutes; then record it again.");
       }
     }
     return {

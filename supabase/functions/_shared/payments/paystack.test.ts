@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { paystackInitializer, paystackVerifier } from "./paystack.ts";
+import { PaystackDuplicateReference, paystackInitializer, paystackVerifier } from "./paystack.ts";
 
 function fakeFetch(body: unknown, status = 200, seen: Request[] = []): typeof fetch {
   return (input, init) => {
@@ -103,6 +103,16 @@ Deno.test("Initialize status:false is an error", async () => {
   await assertRejects(
     () => init({ reference: "r", amountMinor: 1, currency: "NGN", email: "e@x.com", callbackUrl: "https://t/c", metadata: {} }),
     Error, "Duplicate Transaction Reference");
+});
+
+Deno.test("a duplicate reference is its own error; other refusals are not", async () => {
+  const dup = paystackInitializer({ secretKey: "k", fetchFn: fakeFetch({ status: false, message: "Duplicate Transaction Reference" }, 400) });
+  await assertRejects(
+    () => dup({ reference: "r", amountMinor: 1, currency: "NGN", email: "e@x.com", metadata: {} }),
+    PaystackDuplicateReference);
+  const other = paystackInitializer({ secretKey: "k", fetchFn: fakeFetch({ status: false, message: "Invalid key" }, 401) });
+  const e = await assertRejects(() => other({ reference: "r", amountMinor: 1, currency: "NGN", email: "e@x.com", metadata: {} }));
+  assertEquals(e instanceof PaystackDuplicateReference, false);
 });
 
 Deno.test("a hung Initialize call is aborted by the timeout", async () => {

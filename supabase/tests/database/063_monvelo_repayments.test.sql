@@ -7,7 +7,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(94);
+select plan(99);
 
 -- A6 Task 6b: placing an order reserves stock. Every ordered line finds ample
 -- stock in its order's fulfilment warehouse (one FIXTURE batch per SKU).
@@ -321,10 +321,22 @@ select is((select failed_attempts from public.monvelo_owner_challenges where id 
 update public.monvelo_owner_challenges set expires_at = now() - interval '1 second'
  where id = (pg_temp.r('R1') ->> 'challenge_id')::uuid;
 select lives_ok($$select pg_temp.rec('R2', 21, 320, 'R', 20000)$$, 'once R1''s code lapsed, 20000 can be recorded');
+-- R54: recording again ends the recorder's own repayment whose code is dead, quietly
+select is((select status || ':' || (ended_at is not null)::text from public.monvelo_repayments where id = pg_temp.rp('R1')),
+  'EXPIRED:true', 'R54: R2''s record moved R1 (code expired) PENDING -> EXPIRED');
+select ok((select a.tenant_id is null and a.after ->> 'status' = 'EXPIRED' and a.after ->> 'reason' = 'SUPERSEDED'
+                  and a.after ->> 'superseded_by' = pg_temp.rp('R2')::text
+             from public.audit_logs a
+            where a.operation = 'record_monvelo_repayment' and a.entity_id = pg_temp.rp('R1')::text
+              and a.after ->> 'reason' = 'SUPERSEDED')
+      and (select count(*) from public.audit_logs
+            where operation = 'record_monvelo_repayment' and entity_id = pg_temp.rp('R1')::text and after ->> 'reason' = 'SUPERSEDED') = 1,
+  'one audit row, tenant null, names the superseding repayment');
+select is((select count(*)::int from public.monvelo_flags where financing_id = pg_temp.f('R'))
+          + (select count(*)::int from public.support_tickets where system_key = 'monvelo-repayment:' || pg_temp.rp('R1')), 0,
+  'no flag and no ticket for the superseded repayment');
 select is(pg_temp.conf('R1E', 21, 321, 'R1'), '{"confirmed": false, "reason": "EXPIRED"}'::jsonb,
   'R1''s right code after expiry is EXPIRED');
-select is((select status || ':' || (ended_at is not null)::text from public.monvelo_repayments where id = pg_temp.rp('R1')),
-  'EXPIRED:true', 'and R1 moved PENDING -> EXPIRED in the same call');
 
 -- ── partial 20000 ───────────────────────────────────────────────────────
 select is(pg_temp.conf('R2C', 21, 330, 'R2'),
@@ -471,6 +483,20 @@ select is((select count(*)::int from public.monvelo_shop_limit_events where fina
 select is((select count(*)::int from public.audit_logs where operation = 'monvelo_apply_late_charge'
               and entity_id = pg_temp.f('L')::text), 1,
   'the charge was applied once');
+
+-- ── R54: only the recorder's own dead codes are superseded (X on S1) ────
+select is(pg_temp.delivered('X', 700, 1), 'DELIVERED', 'X is DELIVERED');
+select pg_temp.rec('X23', 23, 710, 'X', 1000);
+update public.monvelo_owner_challenges set expires_at = now() - interval '1 second'
+ where id = (pg_temp.r('X23') ->> 'challenge_id')::uuid;
+select pg_temp.rec('X21a', 21, 711, 'X', 2000);
+update public.monvelo_owner_challenges set failed_attempts = 5 where id = (pg_temp.r('X21a') ->> 'challenge_id')::uuid;
+select pg_temp.rec('X21b', 21, 712, 'X', 3000);
+select is((select string_agg(status, ',' order by amount) from public.monvelo_repayments where financing_id = pg_temp.f('X')),
+  'PENDING,EXPIRED,PENDING', 'X21b''s record ends X21a (locked) but not X23 (another recorder''s)');
+select is((select count(*)::int from public.monvelo_flags where financing_id = pg_temp.f('X'))
+          + (select count(*)::int from public.support_tickets where system_key = 'monvelo-repayment:' || pg_temp.rp('X21a')), 0,
+  'no flag and no ticket');
 
 -- ── readers and audit ───────────────────────────────────────────────────
 select pg_temp.act_as(pg_temp.u(3), pg_temp.t1());

@@ -102,7 +102,11 @@ Deno.test("a replayed record sends nothing", async () => {
 Deno.test("a router failure is 502 MESSAGE_DELIVERY_FAILED", async () => {
   const { handler } = setup({ sendFails: true });
   const res = await call(handler, record);
-  assertEquals([res.status, (await res.json()).error.code], [502, "MESSAGE_DELIVERY_FAILED"]);
+  const { error } = await res.json();
+  assertEquals([res.status, error.code], [502, "MESSAGE_DELIVERY_FAILED"]);
+  // R54: the copy says what really happens to the unsent code
+  assertEquals(error.message,
+    "The code could not be sent. This repayment stays pending, holding its amount, until its code lapses in 10 minutes; then record it again.");
 });
 
 Deno.test("confirm returns the outstanding and the status", async () => {
