@@ -1,7 +1,7 @@
 # Addendum A6 to Spec A: Monvelo, inventory financing for neighbourhood shops
 
 **Date:** 2026-10-28
-**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15), 2026-10-29 (§16, §17) and 2026-10-30 (§7.2, §18)
+**Status:** approved by the user 2026-10-28; amended 2026-10-28 (§15), 2026-10-29 (§16, §17), 2026-10-30 (§7.2, §18), 2026-11-01 (the 23-hour delivery cutoff) and 2026-11-02 (§19)
 **Authority:** Spec A (`2026-10-05-multi-tenant-rtm-foundation-design.md`) still governs. Its §9 rules hold without exception. Where this addendum changes an earlier decision, it says so.
 
 ## 1. Intent
@@ -1046,3 +1046,59 @@ backdoors"; user, 2026-10-29).
   - `set_tenant_operational_state` sets both channel flags in one call, so a brand changing one channel passes the other as it should be. A channel the platform has switched off must be passed as off.
   - Winding down is always allowed in an off state: deactivating a supply day, reducing or cancelling a pledge, and opting out. Only new or increased commitments are refused.
 - **Delivery:** plan Task 1f.
+
+## 19. Amendment 2026-11-02: Step 3 calls (funding, delivery, repayment)
+
+**Status:** Claude's calls from the Step 3 plan (`docs/superpowers/plans/2026-10-31-monvelo-step3-funding-repayment.md`), as amended by the rulings made while building it. They are open to change, except where marked as the user's. Built locally (migrations `20261031120000`–`20261031120400`), not pushed.
+
+### 19.1 The plan's calls, as amended
+
+1. **Funding comes before dispatch, not on dispatch.** The agent pays once the financing is CLAIMED. Stock leaves only for a FUNDED financing, and the owner's code confirms delivery (§4.4, §5 steps 5–7).
+   - **Cost if wrong:** none for money. Dispatch-first would mean Teafair ships stock nobody has paid for.
+2. **No Paystack subaccount split on funding.** The agent pays Teafair's main account. Subaccounts are the web commission path (§15.5), and web never touches Monvelo.
+3. **The rebate is not deducted from repayment.** It is a payable Teafair owes the agent within 24 hours (§4.4). Step 3 creates it; Step 5 pays it.
+4. **The payer binding is a transfer charge with matching last four digits and name (F1).** Card and USSD funding are refused by `channels: ["bank_transfer"]` and by the check.
+   - **Cost if wrong:** an agent whose bank truncates names is flagged. The operator reviews the flag and the funding is refunded.
+   - **Gap (recorded):** two accounts with the same holder name and the same last four digits cannot be told apart; Paystack masks the rest of the number.
+5. **A payment that lands after its claim lapsed still funds** when nobody else holds the request and the pledge covers it (Review Focus 1). The late route re-runs the claim's checks, except the claim itself and the preferred window.
+   - **Cost if wrong:** a lapsed claimant funds instead of the next agent; one condition to drop.
+6. **Funding marks the trade order PAID.** The stock sweep then no longer cancels it, and Spec C sees a paid order.
+7. **`due_at` uses the shortest interest-free period across the order's brands,** so the shop has one due date. The late charge is computed per brand.
+   - **Cost if wrong:** a mixed order's longer-term brand falls due early. Per-line due dates are a column and a sweep change.
+8. **The tenant's gross and fee are booked at delivery.** §4.4 defines gross as "funded and delivered", although §16.5 names the funding webhook as a writer. As a result, refunds before delivery need no `REFUND` entry.
+9. **REFUND_DUE cancels the trade order and the payable,** and opens a HIGH system ticket. Staff refund in the Paystack dashboard, as D1 does, and `refund.processed` closes the financing.
+10. **The late charge is applied once,** at the sweep or at a confirmation that finds `due_at` passed. The charge goes to the lender as part of `outstanding`.
+11. **No callback URL on funding,** to avoid a new secret. The synthetic email follows D1's pattern.
+12. **Amended: `payments` gains three Monvelo columns, all ungranted:** `monvelo_financing_id`, `monvelo_agent_id` and `monvelo_started_by`. The plan said only `monvelo_financing_id`, with the agent reached through the financing and its claims. On the late route (call 5) the financing no longer names a claimant, so the payment records the paying agent and the member who started it. No `authenticated` reader can select any of the three, nor `gateway_response_payload`.
+    - **Cost if wrong:** derive the agent from the claim instead; two columns to drop.
+13. **The delivery cutoff is 23 hours after `funded_at`** (user, 2026-11-01; binding). It replaces "23:59 Lagos on the funding day" (§4.4, §5 step 7, Q1). Dispatch, a new delivery code and a confirmation are refused from `funded_at + 23 hours`. The money sweep moves the financing to REFUND_DUE at the same instant, through one helper (`monvelo_delivery_cutoff`).
+
+### 19.2 Rulings made while building
+
+- **The lender columns are out of the tenant's grant** (§16.2.2). `monvelo_financings` is granted column by column, without `preferred_agent_id`, `claimed_by_agent_id`, `claimed_by`, `pledge_id`, `funder_agent_id` and `paystack_reference`. Agents and staff read them through RPCs.
+  - **Cost if wrong:** tenants would see the lender's id, which the binding rule forbids.
+- **Audit rows that name a lender are tenant-null.** Every Monvelo audit row naming an agent, a pledge, a payer, a Monvelo payment, a payable, a repayment or its recorder is written with `tenant_id` null: claims, offer lapses, funding, repayments, the money sweep and refunds. The four recruitment rows were made tenant-null too (user, 2026-10-31).
+  - **Cost if wrong:** ZSMs lose those rows from their audit view, which §16.2.2 requires anyway.
+- **Only a delivery-path holder confirms a delivery.** `confirm_monvelo_delivery` requires a `fulfilment_delivery_path` for the order, as starting a code does. A code alone never confirms: the deliverer types in the code the owner reads out.
+  - **Cost if wrong:** a field user without the order in scope cannot confirm.
+- **The tenant ledger holds at most one FUNDED_GROSS and one FEE per financing**, enforced by a partial unique index.
+  - **Cost if wrong:** drop the index.
+- **A lapsed repayment code ends its repayment.** A code that comes back EXPIRED or LOCKED moves its repayment PENDING → EXPIRED in the same call. "Outstanding less pending" counts only repayments whose code is still live.
+  - **Cost if wrong:** an agent may briefly hold two PENDING records; confirmation still caps at `outstanding`.
+- **Only the member who recorded a repayment confirms it,** while still an ACTIVE member of the funder.
+  - **Cost if wrong:** a colleague cannot finish a hand-over.
+- **A suspended funder may still record and confirm repayments.** Repayment only lowers the shop's debt and the agent's exposure.
+  - **Cost if wrong:** one status check.
+- **The money sweep's details:**
+  - the refund ticket names the Paystack reference `MV-…-N`, never the agent;
+  - a dispatched order's ticket also asks staff to record the return;
+  - a new flag, `FUNDING_REFUNDED`, marks a live financing whose funding was refunded (Monvelo staff only);
+  - a funding already refunded when the sweep runs closes the financing at once, with no ticket;
+  - unconfirmed-repayment tickets are HIGH;
+  - a repayment expires once `recorded_at` is 24 hours old.
+  - **Cost if wrong:** a line each.
+
+### 19.3 Open for later
+
+- The `monvelo-refund:<financing>` system ticket stays open after `apply_monvelo_refund` closes the financing, so staff could refund twice by hand.
+- REFUND_DUE does not restore the agent's pledge `remaining` or its daily-cap headroom. Whether pledges recycle is a business question.

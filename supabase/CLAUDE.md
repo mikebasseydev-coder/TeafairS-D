@@ -26,6 +26,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) Step 1 | done (local) |
 | Monvelo (A6) Step 1c: tenant representation | done (local) |
 | Monvelo (A6) Step 2: financing ledger and allocation | done (local) |
+| Monvelo (A6) Step 3: funding, delivery, repayment, the money sweep | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -911,6 +912,99 @@ rulings is in `.superpowers/sdd/` (git-ignored).
   delivered, with every tenant) passes 10% cannot request until it drops.
 - **For Step 3:** funding must require a PENDING trade order and debit the
   pledge once; the tenant ledger's writers arrive with funding and payouts.
+
+### Monvelo (A6) Step 3: funding, delivery, repayment, the money sweep
+
+Migrations `20261031120000`-`20261031120400`, pgTAP 061-064, the functions
+`monvelo-fund`, `monvelo-confirm-delivery` and `monvelo-confirm-repayment`,
+local only. The plan is
+`docs/superpowers/plans/2026-10-31-monvelo-step3-funding-repayment.md`. Its
+calls, as amended, and the material rulings are recorded in A6 §19.
+
+- **Tables:** `monvelo_flags` (PAYER_MISMATCH, LATE_PAYMENT, AMOUNT_MISMATCH,
+  REPAYMENT_REJECTED, REPAYMENT_UNCONFIRMED, FUNDING_REFUNDED; Monvelo staff
+  only; reviewed once with `review_monvelo_flag`), `monvelo_rebate_payables`
+  and `monvelo_rebate_payable_lines` (what Teafair owes the agent within 24
+  hours; the agent's members and Monvelo staff), `monvelo_owner_challenges`
+  (the shop owner's DELIVERY and REPAYMENT codes; no reader at all),
+  `monvelo_repayments` (the funder's members, the shop owner and Monvelo
+  staff). `payments` gains `monvelo_financing_id`, `monvelo_agent_id` and
+  `monvelo_started_by`, none granted to `authenticated`.
+- **RPCs:** `start_monvelo_funding` (the claimant's member; the reference is
+  `MV-<financing>-<n>`), `settle_monvelo_funding` (service_role; the webhook
+  and the sweep), `dispatch_monvelo_financing` (whoever passes
+  `fulfilment_can_dispatch`; consumes the order's reservations),
+  `start_monvelo_delivery` / `confirm_monvelo_delivery` (a holder of a
+  `fulfilment_delivery_path`; delivery starts the clock and books FUNDED_GROSS
+  and the FEE in the tenant ledger), `record_monvelo_repayment` /
+  `confirm_monvelo_repayment` (the funder's member who recorded it),
+  `reject_monvelo_repayment` (the shop owner; a flag and a HIGH ticket),
+  `apply_monvelo_refund` (service_role). Internal: `monvelo_apply_late_charge`,
+  `monvelo_delivery_cutoff`, `monvelo_fee_bps_at`, `monvelo_payer_matches`.
+  The code RPCs take the gateway proof (`gateway_secret`), like A5's PIN RPCs.
+- **Gateways.** `monvelo-fund` starts a Paystack bank transfer to Teafair's
+  main account (no split, no callback URL, `channels: ["bank_transfer"]`).
+  `monvelo-confirm-delivery` and `monvelo-confirm-repayment` send the owner's
+  6-digit code over WhatsApp only, to the owner's verified profile phone, and
+  never return it. The deliverer or recorder types in the code the owner reads
+  out. A wrong, expired or locked code is a 422.
+- **`MV-` routing.** `process-payment` and `reconcile-funds` share
+  `_shared/payments/settle.ts`: a reference matching `MV-[A-Z2-7]{8}-n` settles
+  through `settle_monvelo_funding`, and its refunds and reversals through
+  `apply_monvelo_refund`. `settle_paystack_payment` and
+  `apply_paystack_refund` refuse an MV- payment (outcome `monvelo_reference`),
+  and `stock-reservation-sweep` ignores it.
+- **The payer binding (F1).** A funding counts only if Paystack's Verify shows
+  a bank transfer whose masked sender account ends in the agent's
+  `settlement_account_last4`, and whose sender name matches the holder's name
+  (at least two name tokens of two or more letters, either name inside the
+  other). Anything else is flagged and refunded by staff in the Paystack
+  dashboard, as D1 does. **Gap:** two accounts with the same holder name and
+  the same last four digits cannot be told apart.
+- **Cron `monvelo-money-sweep`** (every 5 min, pure SQL, `monvelo_sweep_money`):
+  1. FUNDED at or after `funded_at` + 23 h → REFUND_DUE: the order is
+     cancelled, its reservations released, the payable cancelled, and a HIGH
+     ticket asks staff to refund.
+  2. DELIVERED past `due_at` → the one late charge (DEFAULTED_WITH_LATE_CHARGE).
+  3. Repayments PENDING for 24 h → EXPIRED, with a flag and a HIGH ticket.
+- **Calls and rulings (cost if wrong):**
+  - `payments` gains `monvelo_agent_id` and `monvelo_started_by` as well as
+    `monvelo_financing_id`, all ungranted. Plan call 12 said one column; the
+    late route needs the paying agent (R7, R12). If wrong: two columns to drop.
+  - The delivery cutoff is 23 h after `funded_at` (user, 2026-11-01). It
+    replaces 23:59 Lagos on the funding day. Delivery stops, and the refund
+    falls due, at the same instant (`monvelo_delivery_cutoff`).
+  - R9: the lender columns of `monvelo_financings` are out of the tenant's
+    column grant. If wrong: tenants would see the lender.
+  - R15/R19: every audit row naming an agent, a pledge, a payer, a Monvelo
+    payment, a payable or a repayment is written with `tenant_id` null,
+    including the four recruitment rows. If wrong: ZSMs lose those rows.
+  - R20: only a `fulfilment_delivery_path` holder confirms a delivery; a code
+    alone never does. If wrong: a field user without the order in scope
+    cannot confirm.
+  - R29: at most one FUNDED_GROSS and one FEE per financing (a unique index).
+    If wrong: drop the index.
+  - R30: an EXPIRED or LOCKED repayment code ends its repayment in the same
+    call. If wrong: two PENDING records for a moment; confirmation still caps.
+  - R32: only the recording member confirms a repayment. If wrong: a
+    colleague cannot finish a hand-over.
+  - R34: a suspended funder may still record and confirm repayments. If
+    wrong: one status check.
+  - R48 (D1–D6): the refund ticket names `MV-…-N`, never the agent; a
+    dispatched order's ticket asks for the return; `FUNDING_REFUNDED` flags a
+    live financing whose funding was refunded; a funding already refunded
+    closes at once with no ticket; unconfirmed-repayment tickets are HIGH; a
+    repayment expires at 24 h. If wrong: a line each.
+- **Open for later:**
+  - The `monvelo-refund:<financing>` ticket stays open after the refund closes
+    the financing, so staff could refund twice by hand.
+  - REFUND_DUE does not restore the agent's pledge `remaining` or its
+    daily-cap headroom. Whether pledges recycle is a business question.
+- **Integration.** `gateway.integration.ts` continues the Step 2 test's
+  CLAIMED financing: funding, a lapsed claim that still funds, a payer
+  mismatch, dispatch, the delivery code, a part repayment, the late charge and
+  REPAID_LATE, and the TENANT_ADMIN's reads. It moves time as postgres through
+  `DB_URL`.
 
 ## Layout
 

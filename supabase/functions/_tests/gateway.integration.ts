@@ -5,8 +5,12 @@
 // WHATSAPP_API_URL pointing at this file's fake (host.docker.internal:54399) and
 // GATEWAY_SECRET equal to the Vault secret `gateway_secret` (A5, R16), and with
 // RESEND_API_URL pointing at the same fake for the send-auth-email hook.
+// The Monvelo Step 3 test moves time and reads Monvelo tables as postgres through
+// DB_URL (also from `supabase status -o env`): the money and offer sweeps, and the
+// Monvelo tables, are granted to no service_role.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createClient } from "../_shared/core/deps.ts";
+import postgres from "npm:postgres@3.4.5";
 
 const API = Deno.env.get("API_URL")!;
 const ANON = Deno.env.get("ANON_KEY")!;
@@ -190,6 +194,11 @@ let IKEJA: string;
 // the test tenant's CSM and ZSM (fixtures), and the shop the consent test enrols (A6 Step 2 reuses them)
 let reps: { csm: { id: string; email: string }; zsm: { id: string; email: string } };
 let consented: { zsa: { id: string; email: string }; area: string; shop: string } | undefined;
+// the financing the Step 2 test leaves CLAIMED, and its lender (A6 Step 3 continues it)
+let claimedMv: {
+  financingId: string; reference: string; orderId: string; principal: number; agentId: string;
+  member: { id: string; email: string }; settlementName: string;
+} | undefined;
 
 // A6 18.4: a platform administrator switches Lagos on; a brand then opts in to it,
 // citing a DISTRIBUTION decision (filed by its CSM, approved by its ZSM, hard copy attached)
@@ -1346,6 +1355,192 @@ Deno.test({
       p_idempotency_key: crypto.randomUUID(), p_financing_id: requested.financing_id, p_agent_id: agent.id,
     })) as { status: string; principal: number };
     assertEquals([claimed.status, Number(claimed.principal)], ["CLAIMED", Number(order.total_amount)]);
+    claimedMv = {
+      financingId: requested.financing_id, reference: requested.reference, orderId: order.order_id,
+      principal: Number(claimed.principal), agentId: agent.id, member, settlementName: `IT lender ${run}`,
+    };
+  },
+});
+
+// ── A6 Step 3: funding, delivery, repayment and the money sweep ────────────
+// Time is moved, and Monvelo rows read, as postgres (DB_URL): no API role runs the sweeps.
+let pg: ReturnType<typeof postgres> | undefined;
+const asPostgres = () => (pg ??= postgres(Deno.env.get("DB_URL")!, { max: 1, onnotice: () => {} }));
+
+// a Verify record for a Monvelo bank transfer (F1 reads authorization.*)
+function transfer(reference: string, amountMinor: number, senderAccount: string, senderName: string): Record<string, unknown> {
+  return {
+    ...verified(reference, amountMinor), channel: "bank_transfer",
+    authorization: { channel: "bank_transfer", sender_bank: "OPay", sender_bank_account_number: senderAccount, sender_name: senderName },
+  };
+}
+
+// service_role reads no Monvelo table: read them as postgres (numerics come back as text)
+async function financing(id: string): Promise<{
+  status: string; outstanding: string | null; late_charge_amount: string; due_at: Date | null;
+  funder_agent_id: string | null; paystack_reference: string | null;
+}> {
+  const [row] = await asPostgres()`
+    select status, outstanding, late_charge_amount, due_at, funder_agent_id, paystack_reference
+      from public.monvelo_financings where id = ${id}`;
+  return row as Awaited<ReturnType<typeof financing>>;
+}
+
+// the one WhatsApp code sent to the shop owner since `before`
+async function ownerCode(before: number): Promise<string> {
+  const owner = await must(admin.from("profiles").select("phone_number").eq("id", users.owner.id).single()) as { phone_number: string };
+  const sent = whatsappSends.slice(before).filter((w) => w.template === "teafair_otp" && w.to === owner.phone_number.replace(/^\+/, ""));
+  assertEquals(sent.length, 1, "one code to the owner's verified phone");
+  const code = sent[0].params[0];
+  assert(/^[0-9]{6}$/.test(code), code);
+  return code;
+}
+
+Deno.test({
+  name: "monvelo step 3: the Ikeja lifecycle, with a payer mismatch, a lapsed claim and a default",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    assert(claimedMv && consented, "runs after the step 2 test, on the financing it claimed");
+    const mv = claimedMv;
+    const lender = await asUser(mv.member.email);
+    const zsm = await asUser(reps.zsm.email);
+    const zsa = await asUser(consented.zsa.email);
+    const sql = asPostgres();
+
+    // 1. the member starts the bank transfer: Teafair's main account, no split, no callback, transfer only
+    const fundRes = await lender.post("monvelo-fund", { idempotency_key: crypto.randomUUID(), financing_id: mv.financingId, agent_id: mv.agentId });
+    const fund = await fundRes.json();
+    assertEquals(fundRes.status, 200, JSON.stringify(fund));
+    assert(fund.reference.startsWith(`${mv.reference}-`), fund.reference);
+    const init = initialized.find((b) => b.reference === fund.reference)!;
+    assertEquals(
+      [init.amount, init.channels, init.subaccount, init.callback_url],
+      [Math.round(mv.principal * 100), ["bank_transfer"], undefined, undefined],
+    );
+
+    // the claim lapses before the money lands (Review Focus 1): the offer sweep reopens the offer
+    await sql`update public.monvelo_financings set claim_expires_at = now() - interval '1 second' where id = ${mv.financingId}`;
+    await sql`select public.monvelo_sweep_offers()`;
+    const claims = await sql`select outcome from public.monvelo_financing_claims where financing_id = ${mv.financingId}`;
+    assertEquals([(await financing(mv.financingId)).status, claims.map((c) => c.outcome)], ["OFFERED", ["LAPSED"]]);
+
+    // 2. a signed charge.success from the agent's own account still funds (nobody else holds
+    //    the offer and the pledge covers it): FUNDED, the order PAID, a rebate payable DUE
+    paystackLedger.set(fund.reference, transfer(fund.reference, Number(init.amount), "******0000", mv.settlementName.toUpperCase()));
+    const settled = await deliver({ event: "charge.success", data: { reference: fund.reference, paid_at: new Date().toISOString() } });
+    assertEquals([settled.status, settled.body.outcome], [200, "funded"], JSON.stringify(settled.body));
+    const funded = await financing(mv.financingId);
+    assertEquals([funded.status, funded.funder_agent_id, funded.paystack_reference], ["FUNDED", mv.agentId, fund.reference]);
+    assertEquals((await orderOf(mv.orderId)).status, "PAID");
+    const payables = await sql`select status from public.monvelo_rebate_payables where financing_id = ${mv.financingId}`;
+    assertEquals(payables.map((p) => p.status), ["DUE"]);
+
+    // a second financing for the shop is paid from someone else's account: flagged, still CLAIMED
+    const order2 = await must(zsa.db.rpc("place_trade_order", {
+      p_idempotency_key: crypto.randomUUID(), p_shop_id: consented.shop,
+      p_lines: [{ sku_code: "MILO-400", qty: 1 }], p_territory_id: ids.territory,
+    })) as { order_id: string };
+    const fin2 = await must(zsa.db.rpc("request_monvelo_financing", {
+      p_idempotency_key: crypto.randomUUID(), p_order_id: order2.order_id,
+    })) as { financing_id: string; status: string };
+    assertEquals(fin2.status, "OFFERED");
+    await must(lender.db.rpc("claim_monvelo_financing", {
+      p_idempotency_key: crypto.randomUUID(), p_financing_id: fin2.financing_id, p_agent_id: mv.agentId,
+    }));
+    const fund2Res = await lender.post("monvelo-fund", { idempotency_key: crypto.randomUUID(), financing_id: fin2.financing_id, agent_id: mv.agentId });
+    const fund2 = await fund2Res.json();
+    assertEquals(fund2Res.status, 200, JSON.stringify(fund2));
+    const init2 = initialized.find((b) => b.reference === fund2.reference)!;
+    paystackLedger.set(fund2.reference, transfer(fund2.reference, Number(init2.amount), "******9999", "SOMEONE ELSE ENTERPRISES"));
+    const mismatch = await deliver({ event: "charge.success", data: { reference: fund2.reference, paid_at: new Date().toISOString() } });
+    assertEquals([mismatch.status, mismatch.body.outcome], [200, "payer_mismatch"], JSON.stringify(mismatch.body));
+    assertEquals((await financing(fin2.financing_id)).status, "CLAIMED");
+    const flags = await sql`select kind from public.monvelo_flags where financing_id = ${fin2.financing_id}`;
+    assertEquals(flags.map((f) => f.kind), ["PAYER_MISMATCH"]);
+
+    // 3. the ZSM dispatches the funded order: the stock leaves only now
+    const dispatched = await must(zsm.db.rpc("dispatch_monvelo_financing", {
+      p_idempotency_key: crypto.randomUUID(), p_financing_id: mv.financingId, p_tracking_reference: `IT-${run}`,
+    })) as { order_status: string };
+    assertEquals(dispatched.order_status, "IN_TRANSIT");
+
+    // 4. the owner's code goes over WhatsApp; the deliverer types it in: DELIVERED, the clock starts
+    const before = whatsappSends.length;
+    const startRes = await zsm.post("monvelo-confirm-delivery", { idempotency_key: crypto.randomUUID(), action: "start", financing_id: mv.financingId });
+    const start = await startRes.json();
+    assertEquals(startRes.status, 200, JSON.stringify(start));
+    assert(!/"code"/.test(JSON.stringify(start)), "the code never reaches the deliverer");
+    const deliveryCode = await ownerCode(before);
+    const confirmRes = await zsm.post("monvelo-confirm-delivery", {
+      idempotency_key: crypto.randomUUID(), action: "confirm", challenge_id: start.challenge_id, code: deliveryCode,
+    });
+    const confirmed = await confirmRes.json();
+    assertEquals([confirmRes.status, confirmed.confirmed], [200, true], JSON.stringify(confirmed));
+    const delivered = await financing(mv.financingId);
+    assertEquals([delivered.status, Number(delivered.outstanding)], ["DELIVERED", mv.principal]);
+    assertEquals(delivered.due_at?.getTime(), new Date(confirmed.due_at).getTime());
+    assertEquals((await orderOf(mv.orderId)).status, "DELIVERED");
+
+    // 5. a part repayment, recorded by the member and confirmed with the owner's code
+    const repay = async (amount: number) => {
+      const mark = whatsappSends.length;
+      const recRes = await lender.post("monvelo-confirm-repayment", {
+        idempotency_key: crypto.randomUUID(), action: "record", financing_id: mv.financingId, agent_id: mv.agentId, amount,
+      });
+      const rec = await recRes.json();
+      assertEquals(recRes.status, 200, JSON.stringify(rec));
+      assert(!/"code"/.test(JSON.stringify(rec)), "the code never reaches the recorder");
+      const code = await ownerCode(mark);
+      const okRes = await lender.post("monvelo-confirm-repayment", {
+        idempotency_key: crypto.randomUUID(), action: "confirm", challenge_id: rec.challenge_id, code,
+      });
+      const ok = await okRes.json();
+      assertEquals([okRes.status, ok.confirmed], [200, true], JSON.stringify(ok));
+      return ok as { outstanding: number | string; status: string };
+    };
+    const part = 1000;
+    assert(mv.principal > part, String(mv.principal));
+    const first = await repay(part);
+    assertEquals([Number(first.outstanding), first.status], [mv.principal - part, "DELIVERED"]);
+
+    // 6. due_at passes; the money sweep applies the one late charge (Milo: 3% of what is left),
+    //    and a second pass charges nothing more
+    await sql`update public.monvelo_financings set due_at = now() - interval '1 minute' where id = ${mv.financingId}`;
+    await sql`select public.monvelo_sweep_money()`;
+    await sql`select public.monvelo_sweep_money()`;
+    const late = Math.round((mv.principal - part) * 3) / 100;
+    const defaulted = await financing(mv.financingId);
+    assertEquals(
+      [defaulted.status, Number(defaulted.late_charge_amount), Number(defaulted.outstanding)],
+      ["DEFAULTED_WITH_LATE_CHARGE", late, mv.principal - part + late],
+    );
+
+    // 7. the rest repaid: REPAID_LATE
+    const rest = await repay(mv.principal - part + late);
+    assertEquals([Number(rest.outstanding), rest.status], [0, "REPAID_LATE"]);
+
+    // readers over PostgREST (Review Focus 5): the TENANT_ADMIN reads the payment without
+    // Paystack's payload or any Monvelo column, the financing without its lender, and the ledger
+    const taUser = await createUser(81);
+    await must(admin.from("tenant_users").insert(
+      { tenant_id: ids.tenant, profile_id: taUser.id, role: "TENANT_ADMIN", status: "ACTIVE", is_primary: true },
+    ));
+    const ta = await asUser(taUser.email);
+    const paid = await must(ta.db.from("payments").select("id, amount, payment_status, paystack_reference, order_id")
+      .eq("paystack_reference", fund.reference)) as Array<Record<string, unknown>>;
+    assertEquals(paid.map((p) => [p.payment_status, Number(p.amount), p.order_id]), [["SUCCESS", mv.principal, mv.orderId]]);
+    for (const column of ["gateway_response_payload", "monvelo_financing_id", "monvelo_agent_id", "monvelo_started_by"]) {
+      const { error } = await ta.db.from("payments").select(column).eq("paystack_reference", fund.reference);
+      assertEquals(error?.code, "42501", `${column}: ${JSON.stringify(error)}`);
+    }
+    const { error: lenderColumn } = await ta.db.from("monvelo_financings").select("funder_agent_id").eq("id", mv.financingId);
+    assertEquals(lenderColumn?.code, "42501");
+    const [seen] = await must(ta.db.from("monvelo_financings").select("status, outstanding").eq("id", mv.financingId)) as Array<Record<string, unknown>>;
+    assertEquals([seen.status, Number(seen.outstanding)], ["REPAID_LATE", 0]);
+    const gross = await must(ta.db.from("monvelo_tenant_ledger_entries").select("amount")
+      .eq("financing_id", mv.financingId).eq("entry_type", "FUNDED_GROSS")) as Array<{ amount: number }>;
+    assertEquals(gross.map((e) => Number(e.amount)), [mv.principal]);
   },
 });
 
@@ -1355,5 +1550,6 @@ Deno.test({
   sanitizeResources: false,
   fn: async () => {
     await fakePaystack.shutdown();
+    await pg?.end();
   },
 });
