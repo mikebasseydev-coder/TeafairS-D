@@ -80,15 +80,17 @@ select tables_are('public', array[
   -- the shop owner's one-time codes for delivery and repayment (1, addendum A6 §4.4)
   'monvelo_owner_challenges',
   -- repayments recorded by the funder's member and confirmed by the shop owner (1, addendum A6 §4.4, §5 step 9)
-  'monvelo_repayments'
-], 'public holds exactly the 86 tables');
+  'monvelo_repayments',
+  -- claims held for a market maker (1, addendum A6 §20)
+  'monvelo_claim_holds'
+], 'public holds exactly the 87 tables');
 
 -- every table has RLS enabled, even before Phase 2 adds policies:
 -- no table is ever readable by accident between phases
 select is(
   (select count(*)::int from pg_tables
     where schemaname = 'public' and rowsecurity),
-  86, 'RLS is enabled on all 86 tables');
+  87, 'RLS is enabled on all 87 tables');
 
 -- enums (§6.2)
 select enum_has_labels('public', 'platform_role_enum', array['PLATFORM_SUPER_ADMIN','MONVELO_OPERATOR','MONVELO_FINANCE']);

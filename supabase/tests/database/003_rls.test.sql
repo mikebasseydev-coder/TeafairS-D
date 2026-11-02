@@ -94,6 +94,8 @@ select is(
      and t.tablename <> 'monvelo_consent_challenges'
      -- A6 Step 3: the owner's delivery and repayment codes, likewise
      and t.tablename <> 'monvelo_owner_challenges'
+     -- A6 §20: claim holds are read only through SECURITY DEFINER RPCs (the market maker never sees the agent)
+     and t.tablename <> 'monvelo_claim_holds'
      and not exists (select 1 from pg_policies p
                      where p.schemaname = 'public' and p.tablename = t.tablename and p.cmd = 'SELECT')),
   0, 'every public table has a SELECT policy');

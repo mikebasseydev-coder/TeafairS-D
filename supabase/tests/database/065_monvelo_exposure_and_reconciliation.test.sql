@@ -306,12 +306,16 @@ select is(pg_temp.exposure(31), 99000::numeric, 'fixture: X holds 99000 open');
 select pg_temp.raise('E1', 100, 2, 'TIGER-1', 2);
 select is((select principal from public.monvelo_financings where id = pg_temp.f('E1')), 2000.00::numeric(15,2),
   'fixture: E1 asks for 2000');
-select pg_temp.act_as(pg_temp.u(31), null);
-select throws_ok(format('select public.claim_monvelo_financing(%L, %L, %L)', pg_temp.k(102), pg_temp.f('E1'), pg_temp.ag(31)),
-  'P0001', 'this request would take your open exposure above ₦100,000', '99000 open + a 2000 claim is refused');
-reset role;
+-- A6 §20: blocked only by the cap and within ₦300,000, the claim is held, not
+-- refused (066 covers holds); nobody decides, so the hold lapses
+select is(pg_temp.claim(102, 31, 'E1') ->> 'held', 'true', '99000 open + a 2000 claim passes the cap: held (A6 §20)');
+set local session_replication_role = replica;
+update public.monvelo_claim_holds set created_at = now() - interval '16 minutes', expires_at = now() - interval '1 minute'
+ where financing_id = pg_temp.f('E1');
+set local session_replication_role = origin;
+select public.monvelo_sweep_offers();
 select is(pg_temp.status('E1') || ':' || (select count(*) from public.monvelo_financing_claims where financing_id = pg_temp.f('E1')),
-  'OFFERED:0', 'E1 stays OFFERED with no claim');
+  'OFFERED:0', 'the hold lapses: E1 is OFFERED with no claim');
 
 -- a part repayment on XD frees room
 set local session_replication_role = replica;
