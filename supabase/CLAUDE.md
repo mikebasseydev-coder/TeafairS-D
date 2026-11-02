@@ -27,6 +27,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) Step 1c: tenant representation | done (local) |
 | Monvelo (A6) Step 2: financing ledger and allocation | done (local) |
 | Monvelo (A6) Step 3: funding, delivery, repayment, the money sweep | done (local) |
+| Monvelo (A6) §19.4 exposure cap and §20 market-maker allowance | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -1051,12 +1052,79 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     is restored when the refund is confirmed: by `apply_monvelo_refund` for a
     REFUND_DUE financing, and by the sweep for a funding already refunded (R62).
     The exposure and the daily cap free at REFUND_DUE (R63).
-- **Next, designed not built: the market-maker allowance (A6 §20, 2026-11-02).**
-  A claim blocked only by the ₦100,000 exposure cap is held for 15 minutes
-  (exclusive); a ZSM or ASA in scope, never the request's raiser, may allow it
-  up to ₦300,000 of the agent's open exposure. The daily cap is never lifted.
-  The market maker never sees the agent. Read §20 before touching
-  `monvelo_claim_refusal`, `claim_monvelo_financing` or `monvelo_sweep_offers`.
+- **The market-maker allowance (A6 §20, user 2026-11-02):** migrations
+  `20261031120800` (the hold) and `20261031120900` (the market makers),
+  pgTAP 066. Read §20 before touching `monvelo_claim_refusal`,
+  `claim_monvelo_financing`, `monvelo_sweep_offers` or the LATE route of
+  `settle_monvelo_funding`.
+  - **The hold.** A claim refused only by the ₦100,000 cap
+    (`monvelo_open_exposure_ceiling()`) that passes at
+    `monvelo_allowance_ceiling()` (₦300,000, one constant, ungranted) is held
+    15 minutes instead: the financing goes `HELD` (exclusive), a
+    `monvelo_claim_holds` row records the block and the agent's figures (no API
+    role reads it: RLS on, no policy, nothing granted), and the claim replies
+    `{held, hold_id, expires_at}`. Every other refusal stands, the daily cap
+    included. A HELD request counts toward its agent's exposure at principal,
+    in the pledge (check 7) and in the day (check 8), and toward the shop's
+    brand limit. A declined agent is barred from that request; a lapsed hold
+    is never held again for that agent, who may still claim if the caps pass.
+  - **The market makers.** `list_monvelo_claim_holds()` (HELD first, then the
+    last 7 days), `get_monvelo_claim_hold(p_hold_id)` and
+    `decide_monvelo_claim_hold(p_idempotency_key, p_hold_id, p_allow, p_reason)`,
+    `authenticated`: an ACTIVE ZSM whose reach (§18.3) covers the request's
+    zone, or an ACTIVE ASA of its area, in the active tenant, never the
+    request's raiser (42501; everyone else 42501 too). The view is anonymous
+    (call 9): the request, the shop's record and limits in this tenant, the
+    block, `within_limit` and `ready`; never the agent or its figures. An
+    allow needs a reason of 10+ characters (22023) and re-runs every check at
+    ₦300,000 under the agent's advisory lock (R13); a refusal raises P0001
+    with its text and the hold stays HELD. Success: HELD -> CLAIMED for the
+    hold's member with a fresh 15-minute window, then funding as usual. A
+    decline: HELD -> OFFERED.
+  - **The sweep** lapses a hold at 15 minutes (HELD -> OFFERED), and returns a
+    HELD request with no HELD hold to OFFERED. The supply-day end, the stock
+    sweep's cancellation and `cancel_monvelo_financing` end a HELD request and
+    its hold (LAPSED).
+  - **Notices.** `MONVELO_HOLD` (tenant row) to every market maker in scope
+    except the raiser: hold, reference and expiry only. `MONVELO_HOLD_DECIDED`
+    (tenant-null) to the agent's ACTIVE members on allow, decline and lapse;
+    it never names the market maker.
+  - **The late route (call 7).** When the paying agent holds an ALLOWED hold
+    on the financing, `settle_monvelo_funding` checks the caps at ₦300,000;
+    otherwise as before. The late route never holds (call 5).
+  - Audit rows naming the agent are tenant-null (R15). `monvelo_open_offers`
+    skips a request declined for the agent and nets its pledge of its holds.
+  - **Rulings (cost if wrong):**
+    - R64: a lapsed-hold agent still capped gets "this request was already
+      held for you". If wrong: the exposure message instead.
+    - R65: hold lapses count in the offers sweep's `lapsed` key (053 pins the
+      reply). If wrong: a new key.
+    - R66: `monvelo_brand_exposure` counts HELD. If wrong: a shop could be
+      over-committed during a hold.
+    - R67: the refusal counts the held financing once. If wrong: allows near
+      ₦300,000 refused.
+    - R68: scope is the ZSM's §18.3 reach (`zsm_reach_zone_ids`: covered zones
+      plus zones no ACTIVE ZSM covers), not strict coverage. If wrong: in an
+      uncovered zone every ZSM of the tenant is told and may decide.
+    - R69: a hold past `expires_at` that the sweep has not reached is refused
+      as lapsed (P0001). If wrong: a decision in the sweep's minute.
+    - R70: `settle_monvelo_funding` is recreated from `20261031120050` (its
+      latest body; the plan named `120500`, which only comments it).
+    - R71: the shop record: repaid within the window, repaid late, defaulted
+      now (`DEFAULTED_WITH_LATE_CHARGE`), open now (`FUNDED`, `DELIVERED`),
+      in the hold's tenant. If wrong: a count's definition.
+    - R72: `within_limit` is live while HELD, as recorded once decided.
+    - R73: the decided notice is tenant-null and never names the market
+      maker. If wrong: one payload key.
+    - R74: decide locks the agent's advisory lock, the agent, the financing,
+      the pledge, then the hold (the claim's order; the hold after the
+      financing as in the sweep).
+    - R75: `cancel_monvelo_financing` accepts HELD; its hold ends LAPSED with
+      a tenant-null row and the agent's notice. If wrong: a HELD request
+      waits up to 15 minutes to be cancelled.
+    - R76: a second ASA of the same area is a market maker for a request the
+      first ASA raised.
+    - R77: `p_allow` null is 22023; a reason over 1000 characters is 22023.
 - **Integration.** `gateway.integration.ts` continues the Step 2 test's
   CLAIMED financing: funding, a lapsed claim that still funds, a payer
   mismatch, dispatch, the delivery code, a part repayment, the late charge and

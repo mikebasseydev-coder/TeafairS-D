@@ -1181,9 +1181,9 @@ backdoors"; user, 2026-10-29).
 - **045's boundary guard names `get_lender_reconciliation_summary` as an exception.** The guard asserts that no function without "monvelo" in its name reads a Monvelo table. The function name is the approved one.
   - **Cost if wrong:** rename the function `get_monvelo_lender_reconciliation_summary` and drop the exception.
 
-## 20. Amendment 2026-11-02: the market-maker allowance (design, not built)
+## 20. Amendment 2026-11-02: the market-maker allowance
 
-**Status:** design written 2026-11-02 from the user's answers; the builder-check questions answered by the user the same day (1A, 2A, 3A: decisions 5–7 below). Awaiting the user's approval of the whole section. Nothing is built.
+**Status:** design written 2026-11-02 from the user's answers; the builder-check questions answered by the user the same day (1A, 2A, 3A: decisions 5–7 below); approved by the user 2026-11-02. **Built locally, not pushed:** migrations `20261031120800` (the hold) and `20261031120900` (the market makers), pgTAP 066. The builder's rulings are in `supabase/CLAUDE.md` (R64–R77).
 
 ### 20.1 Intent
 
