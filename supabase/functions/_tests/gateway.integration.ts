@@ -1409,9 +1409,14 @@ Deno.test({
     const sql = asPostgres();
 
     // 1. the member starts the bank transfer: Teafair's main account, no split, no callback, transfer only
-    const fundRes = await lender.post("monvelo-fund", { idempotency_key: crypto.randomUUID(), financing_id: mv.financingId, agent_id: mv.agentId });
+    const fundKey = crypto.randomUUID();
+    const fundRes = await lender.post("monvelo-fund", { idempotency_key: fundKey, financing_id: mv.financingId, agent_id: mv.agentId });
     const fund = await fundRes.json();
     assertEquals(fundRes.status, 200, JSON.stringify(fund));
+    // R53: a retried key gets the stored checkout back; Paystack is not asked again
+    const inits = initialized.length;
+    const replayRes = await lender.post("monvelo-fund", { idempotency_key: fundKey, financing_id: mv.financingId, agent_id: mv.agentId });
+    assertEquals([replayRes.status, await replayRes.json(), initialized.length], [200, fund, inits]);
     assert(fund.reference.startsWith(`${mv.reference}-`), fund.reference);
     const init = initialized.find((b) => b.reference === fund.reference)!;
     assertEquals(
@@ -1549,7 +1554,13 @@ Deno.test({
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
-    await fakePaystack.shutdown();
-    await pg?.end();
+    // R58: the postgres connection closes even if the fake's shutdown throws
+    try {
+      await fakePaystack.shutdown();
+    } finally {
+      const sql = pg;
+      pg = undefined;
+      await sql?.end({ timeout: 5 });
+    }
   },
 });

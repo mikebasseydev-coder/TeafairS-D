@@ -915,7 +915,7 @@ rulings is in `.superpowers/sdd/` (git-ignored).
 
 ### Monvelo (A6) Step 3: funding, delivery, repayment, the money sweep
 
-Migrations `20261031120000`-`20261031120400`, pgTAP 061-064, the functions
+Migrations `20261031120000`-`20261031120500`, pgTAP 061-064, the functions
 `monvelo-fund`, `monvelo-confirm-delivery` and `monvelo-confirm-repayment`,
 local only. The plan is
 `docs/superpowers/plans/2026-10-31-monvelo-step3-funding-repayment.md`. Its
@@ -928,8 +928,9 @@ calls, as amended, and the material rulings are recorded in A6 §19.
   hours; the agent's members and Monvelo staff), `monvelo_owner_challenges`
   (the shop owner's DELIVERY and REPAYMENT codes; no reader at all),
   `monvelo_repayments` (the funder's members, the shop owner and Monvelo
-  staff). `payments` gains `monvelo_financing_id`, `monvelo_agent_id` and
-  `monvelo_started_by`, none granted to `authenticated`.
+  staff). `payments` gains `monvelo_financing_id`, `monvelo_agent_id`,
+  `monvelo_started_by`, `monvelo_authorization_url` and
+  `monvelo_access_code`, none granted to `authenticated`.
 - **RPCs:** `start_monvelo_funding` (the claimant's member; the reference is
   `MV-<financing>-<n>`), `settle_monvelo_funding` (service_role; the webhook
   and the sweep), `dispatch_monvelo_financing` (whoever passes
@@ -966,7 +967,8 @@ calls, as amended, and the material rulings are recorded in A6 §19.
      cancelled, its reservations released, the payable cancelled, and a HIGH
      ticket asks staff to refund.
   2. DELIVERED past `due_at` → the one late charge (DEFAULTED_WITH_LATE_CHARGE).
-  3. Repayments PENDING for 24 h → EXPIRED, with a flag and a HIGH ticket.
+  3. Repayments PENDING for 24 h → EXPIRED, with a flag and a HIGH ticket
+     (orphans quietly, R54).
 - **Calls and rulings (cost if wrong):**
   - `payments` gains `monvelo_agent_id` and `monvelo_started_by` as well as
     `monvelo_financing_id`, all ungranted. Plan call 12 said one column; the
@@ -976,9 +978,10 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     falls due, at the same instant (`monvelo_delivery_cutoff`).
   - R9: the lender columns of `monvelo_financings` are out of the tenant's
     column grant. If wrong: tenants would see the lender.
-  - R15/R19: every audit row naming an agent, a pledge, a payer, a Monvelo
-    payment, a payable or a repayment is written with `tenant_id` null,
-    including the four recruitment rows. If wrong: ZSMs lose those rows.
+  - R15/R19 (as reworded by R55): audit rows naming an agent, a pledge, a
+    payer, a payable, a repayment or its recorder are tenant-null; payment
+    rows carry no lender id and stay with the tenant. The four recruitment
+    rows are tenant-null too. If wrong: ZSMs lose those rows.
   - R20: only a `fulfilment_delivery_path` holder confirms a delivery; a code
     alone never does. If wrong: a field user without the order in scope
     cannot confirm.
@@ -995,9 +998,26 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     live financing whose funding was refunded; a funding already refunded
     closes at once with no ticket; unconfirmed-repayment tickets are HIGH; a
     repayment expires at 24 h. If wrong: a line each.
+  - R53: `monvelo-fund` stores the checkout after Initialize
+    (`payments.monvelo_authorization_url`, `monvelo_access_code`, ungranted;
+    `record_monvelo_checkout`, service_role, the gateway's one service-role
+    write) and a replay returns it without calling Paystack. A replay with
+    nothing stored that Paystack refuses as a duplicate is 409
+    `MONVELO_CHECKOUT_LOST`: **the client starts again with a new key.**
+  - R54: recording again ends the recorder's own dead-code PENDING
+    repayments quietly; the sweep expires orphans (financing closed, or a
+    later CONFIRMED repayment by the same recorder) with no flag or ticket.
+    The sweep returns `repayments_superseded` beside `repayments_expired`.
+  - R56: the refund closing a REFUND_DUE financing resolves its
+    `monvelo-refund:<financing>` ticket with a SYSTEM message.
+  - R57: `start_monvelo_funding` refuses a suspended agent (42501).
+  - R58: the CLAIM route of `settle_monvelo_funding` has no supply-day bound
+    by design (the stock sweep cancels an unpaid order; the agent held the
+    claim).
 - **Open for later:**
-  - The `monvelo-refund:<financing>` ticket stays open after the refund closes
-    the financing, so staff could refund twice by hand.
+  - Step 5 must not pay a rebate payable whose funding was refunded
+    (`FUNDING_REFUNDED` leaves it DUE).
+  - Partial refunds are not summed (same as web).
   - REFUND_DUE does not restore the agent's pledge `remaining` or its
     daily-cap headroom. Whether pledges recycle is a business question.
 - **Integration.** `gateway.integration.ts` continues the Step 2 test's
@@ -1104,7 +1124,9 @@ one responsibility per file. Third-party versions appear only in
   exception (A5, R22):** user gateways use the service role only to sign and
   remove Storage objects (`_shared/storage/`) and for the message router's
   `log_message_delivery` write. Every RPC that does the user's work still runs
-  on the caller's JWT.
+  on the caller's JWT. **Monvelo R53** adds one more: `monvelo-fund` stores
+  the Paystack checkout with the service-role `record_monvelo_checkout`
+  after Initialize.
 - **PIN-gated operations** call `requirePin(rpc, body.pin)` (from
   `_shared/auth/pin.ts`) before their RPC.
 - **System functions** use `serviceRpc()` and authenticate the caller

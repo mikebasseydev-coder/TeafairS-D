@@ -1077,7 +1077,7 @@ backdoors"; user, 2026-10-29).
 
 - **The lender columns are out of the tenant's grant** (§16.2.2). `monvelo_financings` is granted column by column, without `preferred_agent_id`, `claimed_by_agent_id`, `claimed_by`, `pledge_id`, `funder_agent_id` and `paystack_reference`. Agents and staff read them through RPCs.
   - **Cost if wrong:** tenants would see the lender's id, which the binding rule forbids.
-- **Audit rows that name a lender are tenant-null.** Every Monvelo audit row naming an agent, a pledge, a payer, a Monvelo payment, a payable, a repayment or its recorder is written with `tenant_id` null: claims, offer lapses, funding, repayments, the money sweep and refunds. The four recruitment rows were made tenant-null too (user, 2026-10-31).
+- **Audit rows that name a lender are tenant-null.** Audit rows naming an agent, a pledge, a payer, a payable, a repayment or its recorder are tenant-null; payment rows carry no lender id and stay with the tenant. This covers claims, offer lapses, funding, repayments, the money sweep and refunds. The four recruitment rows were made tenant-null too (user, 2026-10-31).
   - **Cost if wrong:** ZSMs lose those rows from their audit view, which §16.2.2 requires anyway.
 - **Only a delivery-path holder confirms a delivery.** `confirm_monvelo_delivery` requires a `fulfilment_delivery_path` for the order, as starting a code does. A code alone never confirms: the deliverer types in the code the owner reads out.
   - **Cost if wrong:** a field user without the order in scope cannot confirm.
@@ -1097,8 +1097,16 @@ backdoors"; user, 2026-10-29).
   - unconfirmed-repayment tickets are HIGH;
   - a repayment expires once `recorded_at` is 24 hours old.
   - **Cost if wrong:** a line each.
+- **A retried funding never initialises its reference twice (R53).** Paystack refuses a duplicate reference, and the Spec B queue fixes keys at enqueue time. After Initialize succeeds, `monvelo-fund` stores the checkout on the payment (`payments.monvelo_authorization_url` and `monvelo_access_code`, ungranted; `record_monvelo_checkout`, service_role only, keyed on the payment). A replay of `start_monvelo_funding` returns it, and the gateway answers without calling Paystack. A replay that finds nothing stored initialises again; if Paystack refuses the duplicate, the answer is 409 `MONVELO_CHECKOUT_LOST` and the client starts again with a new key (a new payment and reference).
+  - **Cost if wrong:** two columns and one RPC to drop; the gateway's one service-role write goes with them.
+- **Orphaned repayments raise no dispute (R54).** Recording again ends the recorder's own PENDING repayments on the financing whose code is dead (expired or locked), with one tenant-null audit row each and no flag or ticket. The money sweep expires, quietly, a PENDING repayment whose financing is closed or which the same recorder followed with a CONFIRMED one; only a genuinely unconfirmed repayment on a live financing raises `REPAYMENT_UNCONFIRMED` and a HIGH ticket.
+  - **Cost if wrong:** a forgotten repayment on a closed financing is never disputed; the record is still in the table.
+- **The refund ticket is resolved when the refund lands (R56).** `apply_monvelo_refund`, closing a REFUND_DUE financing, resolves its `monvelo-refund:<financing>` ticket with a SYSTEM message ("Refund received in Paystack; financing closed."). The A3 cron closes it after 7 days.
+- **A suspended agent starts no funding (R57).** `start_monvelo_funding` refuses an agent that is not ACTIVE (42501), as it refuses a non-member.
+- **The CLAIM route has no supply-day bound, by design (R58).** The agent held the claim when it paid; an unpaid trade order is cancelled by the stock sweep at its next run.
 
 ### 19.3 Open for later
 
-- The `monvelo-refund:<financing>` system ticket stays open after `apply_monvelo_refund` closes the financing, so staff could refund twice by hand.
+- Step 5 must not pay a rebate payable whose funding was refunded: `FUNDING_REFUNDED` leaves the payable DUE.
+- Partial refunds are not summed (as on the web): two partial refunds that add up to the payment change no status.
 - REFUND_DUE does not restore the agent's pledge `remaining` or its daily-cap headroom. Whether pledges recycle is a business question.
