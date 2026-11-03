@@ -1290,3 +1290,13 @@ Delivery and its 23-hour cutoff, repayment, the late charge, the money sweep, re
   - **Cost if wrong:** to test at the real scale, the fixtures' pledges, caps and order sizes would all need rescaling.
 - **The agents' own caps are now the binding limit for most agents.** `daily_cap` and `per_financing_cap` default to 0 and are set per agent by Monvelo staff; with the cap at ₦1,000,000, an agent whose `daily_cap` is below that is held back by it first, and no market maker can lift it.
 
+### 21.3 The agent's exposure meter (2026-11-03, audit finding G1)
+
+**Built locally, not pushed:** migration `20261031121200_get_monvelo_agent_exposure`, pgTAP 067.
+
+- **`get_monvelo_agent_exposure(p_agent_id uuid default null)`** is read-only and granted to `authenticated`. It returns the agent's open exposure, both ceilings, the room left under the platform ceiling, the count of open commitments, the agent's own daily and per-financing limits, and today's use of the daily limit.
+- **Only the agent's ACTIVE members and Monvelo staff may read it.** Every tenant role gets 42501, ZSM and ASA included. A tenant never sees a lender (§16.2.2), and a market maker never sees the agent or its figures (§20.2 decision 3, call 9). The audit task that commissioned it proposed ZSM and admin access; that would break both rules, so it was not built.
+- **The figures are the claim's own.** The exposure is `monvelo_agent_open_exposure` (REFUND_DUE counts nothing, R63), the ceilings are the §21 constants, the personal limits are `monvelo_agents.daily_cap` and `per_financing_cap` (0 until staff set them, §21.2), and today's use mirrors check 8 of the claim refusal through the internal `monvelo_agent_day_used`.
+  - **Cost if wrong:** if the two ever disagree, the meter would show room the claim then refuses; 067 pins the definition.
+- **`p_agent_id` names a Monvelo agent, not a person.** Null resolves to the caller's agent when they belong to exactly one; a member of several must name one (22023).
+

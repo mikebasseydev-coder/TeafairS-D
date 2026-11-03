@@ -28,6 +28,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) Step 2: financing ledger and allocation | done (local) |
 | Monvelo (A6) Step 3: funding, delivery, repayment, the money sweep | done (local) |
 | Monvelo (A6) §19.4 exposure cap and §20 market-maker allowance | done (local) |
+| Monvelo (A6) §21 limits ₦1,000,000 / ₦3,000,000 and the agent exposure meter RPC | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -1141,6 +1142,31 @@ calls, as amended, and the material rulings are recorded in A6 §19.
       accepts any verified profile, tenant staff included, so without this
       an ASA in the agent could allow its own claim. If wrong: a member of
       the agent decides its hold.
+- **The agent's exposure meter (audit finding G1, A6 §21.3, 2026-11-03):**
+  migration `20261031121200`, pgTAP 067.
+  - `get_monvelo_agent_exposure(p_agent_id uuid default null)`, `authenticated`,
+    STABLE SECURITY DEFINER, returns one row: `agent_id`, `agent_status`,
+    `open_exposure`, `platform_ceiling`, `allowance_ceiling`, `remaining_room`,
+    `active_commitments_count`, `personal_daily_limit`, `per_financing_limit`,
+    `today_utilized_limit`, `today_remaining_limit` (both remainders floor at 0).
+  - `p_agent_id` is a `monvelo_agents.id`, not a profile id. Null means the
+    caller's agent when they are an ACTIVE member of exactly one; a member of
+    several gets 22023 "name the agent"; a member of none gets 42501.
+  - **Callers:** ACTIVE members of the agent and Monvelo staff
+    (`is_monvelo_staff()`). Everyone else, every tenant role included (ZSM,
+    ASA, ZSA, TM, CSM, TENANT_ADMIN), and an unknown agent alike, gets 42501
+    "Unauthorized access to agent exposure metrics" (§16.2.2; §20.2
+    decision 3). Staff naming an unknown agent get no row.
+  - **Figures** come from the claim's own functions: `open_exposure` is
+    `monvelo_agent_open_exposure` (REFUND_DUE counts nothing, R63); the
+    ceilings are the constants; the personal limits are
+    `monvelo_agents.daily_cap` and `per_financing_cap` (default 0, §21.2;
+    there is no limits table); `today_utilized_limit` is the new internal
+    `monvelo_agent_day_used(agent)` (ungranted), which mirrors check 8 of
+    `monvelo_claim_refusal`: CLAIMED and HELD now plus funded this Lagos day
+    unless REFUND_DUE. **Keep the two in step** when either changes.
+  - 047 test 10 is intermittent (seen once 2026-11-03): its `[0-9]{10}`
+    can match ten digits inside a random UUID in the stored response.
 - **Integration.** `gateway.integration.ts` continues the Step 2 test's
   CLAIMED financing: funding, a lapsed claim that still funds, a payer
   mismatch, dispatch, the delivery code, a part repayment, the late charge and

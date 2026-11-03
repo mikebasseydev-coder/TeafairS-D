@@ -11,6 +11,7 @@ export function buildMobile(r, s) {
   const ALLOW = naira(s.constant('monvelo_allowance_ceiling'));
   const holdCols = s.returnCols('list_monvelo_claim_holds');
   const sumCols = s.returnCols('get_lender_reconciliation_summary');
+  const expCols = s.returnCols('get_monvelo_agent_exposure');
 
   // ── 1 ─────────────────────────────────────────────────────────────────
   r.h1('Executive Summary');
@@ -32,7 +33,7 @@ export function buildMobile(r, s) {
   r.table(['#', 'The brief expected', 'The schema does', 'Resolution'], [
     ['F1', 'ZSA and ASA as the Monvelo deciders.', 'Market makers are the **ZSM and the ASA** (A6 §20.2 decision 1). The ZSA recruits and raises requests, and reads the lender summary, but cannot allow a hold.', 'The ZSA build gets no hold queue.'],
     ['F2', 'Client-side four-eyes enforcement.', 'Four eyes is enforced **in the database**: the raiser and any member of the held agent get 42501 and never see the hold (decision 6, R78).', 'The client only reflects the rule; it is never the control.'],
-    ['F3', 'A live exposure meter.', '`monvelo_agent_open_exposure` and both ceilings are **ungranted**. No RPC returns an agent\'s open exposure to the app.', '**Gap G1:** a read RPC is needed before the meter can be built (§7.3).'],
+    ['F3', 'A live exposure meter.', '`monvelo_agent_open_exposure` and both ceilings stay **ungranted**; since 2026-11-03 the read-only `get_monvelo_agent_exposure` returns them to the agent\'s members.', '**G1 resolved** (migration `20261031121200`): the meter reads that one RPC (§7.3).'],
     ['F4', 'Password login for field roles, PIN login for shop owners and agents.', 'The only sign-in route built is the **phone + WhatsApp code** for everyone. Email serves recovery and invites; passwords are at least 12 characters. The 4-digit PIN is a **transaction control**, not a login.', 'Proposal in §4.2; the login method is an open Spec B decision.'],
     ['F5', 'Break-bulk pricing on the web.', 'Break-bulk applies only to **app (trade) sales**, at the wholesale price; the web sells single units at retail.', 'Covered here in §8.'],
     ['F6', 'One "POS agent" persona.', 'There are two: the web `POS_AGENT` tenant role (referral links, no Monvelo) and the **Monvelo agent**, a platform entity whose members are people.', 'They get separate workspaces, and web never touches Monvelo (A6 §15).'],
@@ -238,18 +239,31 @@ export function buildMobile(r, s) {
     ['OFFERED, REPAID_*, EXPIRED, CANCELLED', 'nothing', 'No agent owns it, or it is closed.'],
   ], { widths: [0.32, 0.25, 0.43], caption: 'Exposure is summed across every tenant the agent funds.' });
   r.p(`The ceiling is one platform constant (\`monvelo_open_exposure_ceiling()\` = ${CAP}); the allowance ceiling is \`monvelo_allowance_ceiling()\` = ${ALLOW}. Both are changed by migration only. The claim refusal text is built from the constant: "this request would take your open exposure above ${CAP}".`);
+  r.callout('warn', 'The agent\'s own caps bind first (A6 §21.2)', [
+    `From 2026-11-03 the platform ceiling is ${CAP} and the allowance ceiling ${ALLOW} (migration \`20261031121100\`, ten times the original limits, keeping the 1:3 ratio).`,
+    'An agent\'s `daily_cap` and `per_financing_cap` start at ₦0.00 (`monvelo_agents` defaults) and are provisioned per agent by Monvelo staff with `set_monvelo_agent_caps`. Until they are raised, an agent hits its personal limit long before the platform ceiling.',
+    'A market maker cannot lift a personal cap (rule 3A, A6 §20.2 decision 7): only the exposure ceiling can be allowed past. Provisioning caps is therefore part of onboarding every agent, not an optional tuning step.',
+  ]);
   r.h2('The exposure meter (component spec)');
   r.bullets([
     '**Audience:** members of a Monvelo agent, for their own agent only. Never market makers, tenants or ZSAs.',
     `**Visual:** a horizontal meter from ₦0 to ${CAP}, with a marker for the ${ALLOW} allowance zone shown as a dashed extension. Segments are stacked by status (HELD, CLAIMED, FUNDED, DELIVERED/DEFAULTED at the least of outstanding and principal), each with a legend and amount.`,
     `**Headroom line:** "₦X left under the cap". At or above the cap: "New claims above this need a market maker's allowance, up to ${ALLOW}".`,
     '**Daily cap:** a second, separate meter for today\'s funding against `daily_cap` (Lagos day, REFUND_DUE excluded). It is never merged with exposure, because it can never be allowed past.',
+    '**Unprovisioned caps:** while `daily_cap` or `per_financing_cap` is ₦0.00, show an empty state instead of the meters: "Your funding limits have not been set yet. Monvelo will set them before you can claim." Never suggest asking a market maker.',
     '**Freshness:** money class, never stale. Refresh on focus and after every claim, funding, repayment or notice. Show "as of hh:mm" on any cached value.',
   ]);
-  r.h2('Gap G1: no read path for exposure');
-  r.callout('finding', 'Finding G1 — blocking for the meter', [
+  r.h2('The meter\'s read path: get_monvelo_agent_exposure (G1, resolved)');
+  r.p(`\`${s.sig('get_monvelo_agent_exposure')}\` is read-only (STABLE, SECURITY DEFINER), granted to ${s.callers('get_monvelo_agent_exposure')} only (migration \`${s.fn('get_monvelo_agent_exposure').file}\`, pgTAP 067). \`p_agent_id\` is a \`monvelo_agents.id\`; null means the caller\'s only agent, and a member of several agents must name one (22023). It returns one row:`);
+  r.table(['Column', 'Type'], expCols, { widths: [0.4, 0.6], mono: [0, 1], size: 8.2 });
+  r.bullets([
+    '**Who may call:** an ACTIVE member of the agent, or Monvelo staff (MONVELO_OPERATOR, MONVELO_FINANCE). Everyone else, a ZSM, ASA, ZSA, TM, CSM or TENANT_ADMIN included, and an unknown agent alike, gets 42501 "Unauthorized access to agent exposure metrics". A market maker never sees the agent (§20.2 decision 3) and a tenant never sees a lender (§16.2.2).',
+    '**Figures:** `open_exposure` is `monvelo_agent_open_exposure` (REFUND_DUE counts nothing, R63); the ceilings are read from the constants; `personal_daily_limit` and `per_financing_limit` are the agent\'s own caps, 0.00 until Monvelo staff set them (§21.2); `today_utilized_limit` is the claim\'s check 8 (claimed and held now, plus funded this Lagos day unless REFUND_DUE). Both remaining figures floor at 0.00.',
+    '**The app** shows these numbers as given and never recomputes a limit. A claim can still be refused after a fresh read, because the database re-checks every limit under the agent\'s lock.',
+  ]);
+  r.callout('note', 'Finding G1 as first raised (kept for the record)', [
     '`monvelo_agent_open_exposure(p_agent_id)`, `monvelo_open_exposure_ceiling()` and `monvelo_allowance_ceiling()` hold no EXECUTE grant for `authenticated` (verified from the grants), and no granted RPC returns them. The agent\'s members cannot compute it client-side either: the lender columns of `monvelo_financings` are outside the column grant (R9), and HELD holds are unreadable (`monvelo_claim_holds` has no policy).',
-    '**Recommendation:** a read-only SECURITY DEFINER RPC, for example `get_monvelo_agent_exposure(p_agent_id uuid)`, granted to `authenticated`. It checks live that the caller is an ACTIVE member of the agent and returns `{open_exposure, ceiling, allowance_ceiling, by_status[], funded_today, daily_cap}`. This needs a migration and a pgTAP file, so it is a backend change for the owner to approve, not part of this report.',
+    '**Recommendation (done 2026-11-03):** a read-only SECURITY DEFINER RPC, `get_monvelo_agent_exposure(p_agent_id uuid)`, granted to `authenticated`, checking live that the caller is an ACTIVE member of the agent. Built as migration `20261031121200` with pgTAP 067; Monvelo staff may call it too. The per-status breakdown was left out: `active_commitments_count` gives the count, and the status list is the agent\'s own financings.',
   ]);
   r.h2('Weekly lender reconciliation (get_lender_reconciliation_summary)');
   r.p('`get_lender_reconciliation_summary(p_weeks integer default 12)` returns one row per agent and **Lagos week of `funded_at`**. Weeks are `date_trunc(\'week\', funded_at at time zone \'Africa/Lagos\')`, so each week starts on a **Monday** in Lagos. The window runs from this week back `p_weeks − 1` weeks; a `p_weeks` outside 1–52 is 22023. Every figure belongs to its funding week.');
@@ -309,7 +323,7 @@ export function buildMobile(r, s) {
   // ── 10 ────────────────────────────────────────────────────────────────
   r.h1('Audit Findings and Gaps');
   r.table(['ID', 'Severity', 'Finding', 'Recommendation'], [
-    ['G1', 'High', 'No granted RPC returns an agent\'s open exposure, the ceilings or today\'s funding against `daily_cap`.', 'Add `get_monvelo_agent_exposure` (read-only, member-only) with pgTAP; owner approval needed.'],
+    ['G1', 'High (resolved)', 'No granted RPC returned an agent\'s open exposure, the ceilings or today\'s funding against `daily_cap`.', '**Resolved 2026-11-03:** `get_monvelo_agent_exposure` (read-only; members and Monvelo staff; migration `20261031121200`, pgTAP 067).'],
     ['G2', 'High', 'The login method is unspecified in Spec A; the brief\'s password login for field roles conflicts with the hardened phone-only route.', 'Decide in Spec B (§4.2 proposal).'],
     ['G3', 'Medium', 'The claim is a direct RPC; A6 §20.9 left open whether the held reply needs a gateway. The app must branch on `held` in the RPC result.', 'Keep it direct; document `held` in the Spec B API layer.'],
     ['G4', 'Medium', 'Notices (`MONVELO_HOLD`, `MONVELO_HOLD_DECIDED`) are `notifications` rows. Push delivery needs `register_device` push tokens and a sender, which do not exist yet.', 'Spec B: Realtime on `notifications` while foregrounded; push sender in a later addendum.'],

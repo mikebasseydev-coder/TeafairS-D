@@ -189,14 +189,19 @@ export function buildWeb(r, s) {
   r.h2('Liquidity health (proposal)');
   r.table(['Metric', 'Definition', 'Backend source today'], [
     ['Capital deployed', 'Σ principal FUNDED + DELIVERED + DEFAULTED (open)', '`monvelo_financings` (operator reads all)'],
-    ['Open exposure by agent', `The §19.4 formula per agent; distribution against ${CAP} and ${ALLOW}`, '`monvelo_agent_open_exposure` is ungranted. **Needs an operator RPC** (same gap as mobile G1).'],
+    ['Open exposure by agent', `The §19.4 formula per agent; distribution against ${CAP} and ${ALLOW}`, '`get_monvelo_agent_exposure(p_agent_id)` serves Monvelo staff one agent at a time (mobile G1, resolved 2026-11-03). A fleet-wide distribution still **needs an operator list RPC**.'],
     ['Pledged vs used', 'Σ pledges.amount vs amount − remaining, by supply day and area', '`monvelo_pledges`'],
     ['Holds', 'HELD now; allowed, declined and lapsed rates; time to decision', '`monvelo_claim_holds` has no policy. **Needs an operator read RPC.**'],
     ['Refund exposure', 'REFUND_DUE count and principal; age of each', '`monvelo_financings`, the refund tickets'],
     ['Credit quality', 'Repaid within the window, repaid late, defaulted; PAR30 by raiser', '`monvelo_financings`, `monvelo_repayments`'],
     ['Flags', 'Open PAYER_MISMATCH, LATE_PAYMENT, AMOUNT_MISMATCH, REPAYMENT_REJECTED, REPAYMENT_UNCONFIRMED, FUNDING_REFUNDED', '`monvelo_flags`'],
+    ['Unprovisioned agents', `ACTIVE agents whose \`daily_cap\` or \`per_financing_cap\` is ₦0.00 or below the ${CAP} ceiling`, '`monvelo_agents` (operator reads all); set with `set_monvelo_agent_caps`'],
     ['Lender reconciliation', 'Weekly capital funded, outstanding, repaid, refunded, rebates per agent', '`get_lender_reconciliation_summary` serves agents, ZSAs and ASAs only; operators **need their own RPC** (A6 §9 `monvelo_finance_overview`, not built)'],
   ], { widths: [0.2, 0.42, 0.38], caption: 'The A6 §9 finance dashboard RPCs (`monvelo_finance_overview`, `monvelo_payables`, `monvelo_tenant_settlement_statement`, `monvelo_exceptions`) are specified but not built.' });
+  r.callout('warn', 'Provision agent caps at onboarding (A6 §21.2)', [
+    `The platform ceiling is ${CAP} and the market-maker allowance ${ALLOW} (migration \`20261031121100\`). An agent's \`daily_cap\` and \`per_financing_cap\` start at ₦0.00 and bind first.`,
+    'The operator console must show unprovisioned agents and set their caps with `set_monvelo_agent_caps`. A market maker cannot override a personal cap (rule 3A); only the exposure ceiling can be allowed past.',
+  ]);
 
   // ── 7 ─────────────────────────────────────────────────────────────────
   r.h1('Design System and Quality Bar');
