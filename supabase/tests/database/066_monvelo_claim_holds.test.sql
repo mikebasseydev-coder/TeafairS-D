@@ -448,7 +448,7 @@ select throws_ok(format($$delete from public.monvelo_claim_holds where financing
 insert into auth.users (id, phone, phone_confirmed_at)
 select pg_temp.u(n), '234800000' || lpad(n::text, 4, '0'), now()
   from unnest(array[2, 5, 6, 41, 42, 43, 44, 45, 46, 47, 48, 49, 52, 53, 54, 55, 60]) n;
-update public.profiles set full_name = 'Zara Market' where id = pg_temp.u(1);
+update public.profiles set full_name = 'Zara Market' where id = pg_temp.u(11);
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, area_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000002', pg_temp.t1(), pg_temp.u(2), 'ZSM', null, null, null, null, 'ACTIVE', true);
 insert into public.zones (id, tenant_id, zone_name, state_code, zsm_id) values
@@ -558,20 +558,20 @@ select ok(has_function_privilege('authenticated', 'public.list_monvelo_claim_hol
   'the three market-maker RPCs are granted to authenticated; the notices are internal');
 select is((select array_agg(a order by a)::text from pg_proc p, unnest(p.proargnames) a
             where p.oid = 'public.list_monvelo_claim_holds()'::regprocedure),
-  '{area_name,blocks,brand_lines,decided_at,decided_by_name,expires_at,financing_reference,hold_id,principal,ready,reason,shop_code,shop_defaulted,shop_limits,shop_name,shop_open,shop_repaid_in_window,shop_repaid_late,status,within_limit}',
-  'the view has no agent column (call 9)');
+  '{area_name,blocks,brand_lines,can_decide,decided_at,decided_by_name,expires_at,financing_reference,hold_id,principal,ready,reason,shop_code,shop_defaulted,shop_limits,shop_name,shop_open,shop_repaid_in_window,shop_repaid_late,status,within_limit}',
+  'the view has no agent column (call 9); A6 §22 adds can_decide');
 
 -- ── zsm_and_asa_see_the_hold_anonymously (A on S8) ─────────────────────
 select pg_temp.raise('MA', 300, 8, 20);
 select is(pg_temp.claim(302, 41, 'MA') ->> 'held', 'true', 'fixture: A at 90000 claiming 20000 is held');
-select is(pg_temp.notices('MONVELO_HOLD', 'MA'), '01,06', 'the zone''s ZSM and the area''s ASA are told; not the raiser, not out of scope');
+select is(pg_temp.notices('MONVELO_HOLD', 'MA'), '06,11', 'A6 §22: the deciders, the area''s ASA and the zone''s ZSA, are told; not the overseeing ZSM, not the raiser, not out of scope');
 select ok((select bool_and(n.tenant_id = pg_temp.t1()
                            and (select array_agg(k order by k) from jsonb_object_keys(n.payload) k) = '{expires_at,financing_reference,hold_id}'
                            and (n.title || coalesce(n.body, '') || n.payload::text) not like '%' || pg_temp.ag(41)::text || '%'
                            and (n.title || coalesce(n.body, '') || n.payload::text) not like '%POS 41%')
              from public.notifications n where n.kind = 'MONVELO_HOLD' and (n.payload ->> 'hold_id')::uuid = pg_temp.hid('MA')),
   'the notice is the tenant''s and carries the hold, the reference and the expiry only');
-select is(pg_temp.listed(1, 'MA') || ':' || pg_temp.listed(6, 'MA'), '1:1', 'the ZSM and the ASA list it');
+select is(pg_temp.listed(1, 'MA') || ':' || pg_temp.listed(6, 'MA') || ':' || pg_temp.listed(11, 'MA'), '1:1:1', 'the ZSM, the ASA and the ZSA list it');
 select pg_temp.act_as(pg_temp.u(1), pg_temp.t1());
 select is((select financing_reference = (select reference from public.monvelo_financings where id = pg_temp.f('MA'))
                   and shop_name = 'Shop 8' and shop_code = 'SH-AAAAAI' and area_name = 'Allen' and principal = 20000
@@ -607,7 +607,9 @@ select is(pg_temp.refusals(3, pg_temp.t1(), 'MA'), '42501,42501,42501', 'a TM: 4
 select is(pg_temp.refusals(18, pg_temp.t1(), 'MA'), '42501,42501,42501', 'a CSM: 42501 on all three');
 select is(pg_temp.refusals(7, pg_temp.t1(), 'MA'), '42501,42501,42501', 'a TENANT_ADMIN: 42501 on all three');
 select is(pg_temp.refusals(8, pg_temp.t1(), 'MA'), '42501,42501,42501', 'an LM: 42501 on all three');
-select is(pg_temp.refusals(11, pg_temp.t1(), 'MA'), '42501,42501,42501', 'a ZSA: 42501 on all three');
+select is((select string_agg(pg_temp.listed(n, 'MA')::text, ':' order by n) from unnest(array[1, 11]) n)
+          || ':' || (select count(*) from public.monvelo_hold_market_makers(pg_temp.t1(), '60000000-0000-0000-0000-000000000001', pg_temp.u(4), pg_temp.ag(41)) m where m = pg_temp.u(1)),
+  '1:1:0', 'A6 §22: the ZSA lists it as a decider; the ZSM lists it but is not a decider');
 select is(pg_temp.refusals(41, null, 'MA'), '42501,42501,42501', 'the agent''s member: 42501 on all three');
 
 -- ── four_eyes (Review Focus 5) ──────────────────────────────────────────
@@ -621,7 +623,7 @@ set local session_replication_role = origin;
 select is(pg_temp.claim(312, 42, 'MZ') ->> 'held', 'true', 'fixture: B holds MZ');
 select is(pg_temp.listed(1, 'MZ') || ':' || pg_temp.refusals(1, pg_temp.t1(), 'MZ') || ':' || pg_temp.listed(6, 'MZ')
           || ':' || pg_temp.notices('MONVELO_HOLD', 'MZ'),
-  '0:ok,42501,42501:1:04,06', 'a ZSM who raised it can neither see nor decide it; the area''s ASAs are told');
+  '0:ok,42501,42501:1:04,06,11', 'a ZSM who raised it can neither see nor decide it; the area''s ASAs and the zone''s ZSA are told');
 -- MR: in Wuse (zone 2), raised by zone 2's ZSM, with no ASA: nobody else is in scope
 select pg_temp.raise('MR', 320, 3, 20);
 set local session_replication_role = replica;
@@ -634,7 +636,7 @@ select is(pg_temp.notices('MONVELO_HOLD', 'MR') || ':' || pg_temp.listed(2, 'MR'
   ':0:ok,42501,42501', 'the raiser alone in scope: no notice, nothing to see, nothing to decide');
 
 -- ── allow_needs_a_reason ────────────────────────────────────────────────
-select pg_temp.act_as(pg_temp.u(1), pg_temp.t1());
+select pg_temp.act_as(pg_temp.u(11), pg_temp.t1());
 select throws_ok(pg_temp.decide_sql(330, 'MA', true, null), '22023', null, 'an allow without a reason: 22023');
 select throws_ok(pg_temp.decide_sql(331, 'MA', true, ' too short '), '22023', null, 'an allow with under 10 characters: 22023');
 reset role;
@@ -649,7 +651,7 @@ update public.monvelo_agents set status = 'SUSPENDED' where id = pg_temp.ag(44);
 update public.monvelo_agents set daily_cap = 105000, per_financing_cap = 100000 where id = pg_temp.ag(45);
 update public.monvelo_pledges set remaining = 5000 where agent_id = pg_temp.ag(46);
 set local session_replication_role = replica; select pg_temp.syn('N0', 'FUNDED', 47, 200000); set local session_replication_role = origin;
-select pg_temp.act_as(pg_temp.u(1), pg_temp.t1());
+select pg_temp.act_as(pg_temp.u(11), pg_temp.t1());
 select throws_ok(pg_temp.decide_sql(360, 'K1', true, 'known shop, pays well'), 'P0001', 'the agent is not active',
   'the agent was suspended after the hold: the allow is refused');
 select throws_ok(pg_temp.decide_sql(361, 'L1', true, 'known shop, pays well'), 'P0001', 'this request would pass your daily cap',
@@ -666,13 +668,13 @@ select is(pg_temp.hold_status('K1') || pg_temp.hold_status('L1') || pg_temp.hold
   'HELDHELDHELDHELD:HELDHELD', 'each refused hold stays HELD');
 
 -- ── allow_claims_for_the_agent (A, MA) ──────────────────────────────────
-insert into res values ('DA', pg_temp.decide(370, 1, 'MA', true, '  Shop 8 has paid every time  '));
+insert into res values ('DA', pg_temp.decide(370, 11, 'MA', true, '  Shop 8 has paid every time  '));
 select ok(pg_temp.r('DA') ->> 'status' = 'ALLOWED'
       and (pg_temp.r('DA') ->> 'claim_expires_at')::timestamptz = now() + interval '15 minutes',
   'allowed: the reply carries the claim''s 15-minute window');
-select is((select status || ':' || (decided_by = pg_temp.u(1)) || ':' || reason || ':' || (decided_at = now())
+select is((select status || ':' || (decided_by = pg_temp.u(11)) || ':' || reason || ':' || (decided_at = now())
              from public.monvelo_claim_holds where id = pg_temp.hid('MA')),
-  'ALLOWED:true:Shop 8 has paid every time:true', 'the hold is ALLOWED by the ZSM, with the trimmed reason');
+  'ALLOWED:true:Shop 8 has paid every time:true', 'the hold is ALLOWED by the ZSA, with the trimmed reason');
 select is((select status || ':' || (claimed_by_agent_id = pg_temp.ag(41)) || ':' || (claimed_by = pg_temp.u(41)) || ':'
                   || (pledge_id is not null) || ':' || (claim_expires_at = now() + interval '15 minutes')
              from public.monvelo_financings where id = pg_temp.f('MA')),
@@ -687,7 +689,7 @@ select is(pg_temp.notices('MONVELO_HOLD_DECIDED', 'MA')
           || ':' || (select bool_and(tenant_id is null and payload ->> 'status' = 'ALLOWED') from public.notifications
                       where kind = 'MONVELO_HOLD_DECIDED' and (payload ->> 'hold_id')::uuid = pg_temp.hid('MA')),
   '41,60:true', 'both of the agent''s members are told it is allowed');
-select is(pg_temp.decide(370, 1, 'MA', true, '  Shop 8 has paid every time  '), pg_temp.r('DA'), 'the same key replays');
+select is(pg_temp.decide(370, 11, 'MA', true, '  Shop 8 has paid every time  '), pg_temp.r('DA'), 'the same key replays');
 select pg_temp.act_as(pg_temp.u(6), pg_temp.t1());
 select throws_ok(pg_temp.decide_sql(371, 'MA', false, null), 'P0001', 'this hold has already been decided',
   'a decided hold cannot be decided again');
@@ -703,7 +705,7 @@ reset role;
 -- R67: the held financing is counted once (G: 200000 open + a 90000 hold)
 select pg_temp.raise('GA', 380, 2, 90);
 select is(pg_temp.claim(382, 53, 'GA') ->> 'held', 'true', 'fixture: G at 200000 claiming 90000 is held (290000)');
-select is(pg_temp.decide(384, 1, 'GA', true, 'well known shop owner') ->> 'status', 'ALLOWED',
+select is(pg_temp.decide(384, 11, 'GA', true, 'well known shop owner') ->> 'status', 'ALLOWED',
   'allowed at 290000: the held request is not counted twice');
 
 -- checks 7 and 8 count the agent's other HELD requests
@@ -751,7 +753,7 @@ select is(pg_temp.hold_status('K1') || ':' || pg_temp.notices('MONVELO_HOLD_DECI
 -- P: allowed, funding started, the claim lapses, the money arrives late
 select pg_temp.raise('LP', 430, 2, 20);
 select is(pg_temp.claim(432, 49, 'LP') ->> 'held', 'true', 'fixture: P holds LP');
-select is(pg_temp.decide(434, 1, 'LP', true, 'shop of long standing') ->> 'status', 'ALLOWED', 'fixture: LP allowed');
+select is(pg_temp.decide(434, 11, 'LP', true, 'shop of long standing') ->> 'status', 'ALLOWED', 'fixture: LP allowed');
 select pg_temp.act_as(pg_temp.u(49), null);
 insert into res values ('PP', public.start_monvelo_funding(pg_temp.k(436), pg_temp.f('LP'), pg_temp.ag(49)));
 reset role;
@@ -813,15 +815,15 @@ set local session_replication_role = origin;
 
 select pg_temp.raise('XO', 500, 8, 20);
 select is(pg_temp.claim(502, 56, 'XO') ->> 'held', 'true', 'fixture: O at 90000 claiming 20000 is held');
-select is(pg_temp.notices('MONVELO_HOLD', 'XO'), '01', 'the ASA who belongs to the held agent is not told');
+select is(pg_temp.notices('MONVELO_HOLD', 'XO'), '11', 'the ASA who belongs to the held agent is not told');
 select is(pg_temp.listed(6, 'XO'), 0, 'nor lists it');
 select is(pg_temp.refusals(6, pg_temp.t1(), 'XO'), 'ok,42501,42501', 'nor may get or decide it (42501)');
-select is(pg_temp.decide(504, 1, 'XO', true, 'shop of long standing') ->> 'status', 'ALLOWED',
-  'the ZSM, who does not belong to the agent, still decides it');
+select is(pg_temp.decide(504, 11, 'XO', true, 'shop of long standing') ->> 'status', 'ALLOWED',
+  'the ZSA, who does not belong to the agent, still decides it');
 
 select pg_temp.raise('XI', 510, 1, 20);
 select is(pg_temp.claim(512, 57, 'XI') ->> 'held', 'true', 'fixture: I at 90000 claiming 20000 is held');
-select is(pg_temp.notices('MONVELO_HOLD', 'XI') || ':' || pg_temp.refusals(6, pg_temp.t1(), 'XI'), '01:ok,42501,42501',
+select is(pg_temp.notices('MONVELO_HOLD', 'XI') || ':' || pg_temp.refusals(6, pg_temp.t1(), 'XI'), '11:ok,42501,42501',
   'a revoked membership bars the market maker too');
 
 select * from finish();

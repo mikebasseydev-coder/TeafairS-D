@@ -8,7 +8,7 @@
 
 Neighbourhood shops run out of stock because they have no cash, and street
 credit is expensive. Nigerian POS agents (OPay, Moniepoint and PalmPay agents)
-hold idle float. **Monvelo** connects the two:
+hold idle float. **Monvelo** connects the two.
 
 - the agent pays for the shop's stock up front;
 - the brand pays the agent a rebate as its cost of sale;
@@ -1193,7 +1193,7 @@ The principle of §19.4 still governs: **the central truth is funded order fulfi
 
 ### 20.2 Decisions (user, 2026-11-02; binding)
 
-1. **The market makers are the ZSM and the ASA.** The ZSA is not one; it keeps its read of the lender summary (§19.4.3) and nothing more.
+1. **The market makers are the ZSM and the ASA.** The ZSA is not one; it keeps its read of the lender summary (§19.4.3) and nothing more. *Amended by §22 (2026-11-03): the field agents (ZSA and ASA) decide; the ZSM oversees read-only and decides only when no field agent can.*
 2. **The readiness is about the funding agent**: the agent who tried to claim and was blocked. The market maker judges the **shop's** capacity to repay within the agreed one month.
 3. **The ZSM never sees which agent is funding** (the user's "no"). The market maker sees whether the funding side is ready, what blocks it and the figures, never the agent's name, id, phone, network or location. §16.2.2 and R19 stand.
 4. **An allowance may take the agent's open exposure, including this financing, up to ₦300,000** ("any amount up to ₦300,000"). Above that, nobody can allow. *Amended by §21 (2026-11-03): up to ₦3,000,000, over a ₦1,000,000 cap.*
@@ -1299,4 +1299,26 @@ Delivery and its 23-hour cutoff, repayment, the late charge, the money sweep, re
 - **The figures are the claim's own.** The exposure is `monvelo_agent_open_exposure` (REFUND_DUE counts nothing, R63), the ceilings are the §21 constants, the personal limits are `monvelo_agents.daily_cap` and `per_financing_cap` (0 until staff set them, §21.2), and today's use mirrors check 8 of the claim refusal through the internal `monvelo_agent_day_used`.
   - **Cost if wrong:** if the two ever disagree, the meter would show room the claim then refuses; 067 pins the definition.
 - **`p_agent_id` names a Monvelo agent, not a person.** Null resolves to the caller's agent when they belong to exactly one; a member of several must name one (22023).
+
+## 22. Amendment 2026-11-03: field agents decide holds
+
+**Status:** user decisions 2026-11-03, replacing §20.2 decision 1. **Built locally, not pushed:** migration `20261031121300_monvelo_field_agents_decide_holds`, pgTAP 068.
+
+### 22.1 Decisions (user, 2026-11-03; binding)
+
+1. **The deciders are the field agents: the ZSA of the request's zone and the ASA of its area.** Either may allow or decline a hold in their scope.
+2. **The ZSM oversees, read-only.** A ZSM whose reach (§18.3) covers the request's zone sees the hold in the anonymous view (§20.6), with `can_decide` false, and gets 42501 on decide.
+3. **The ZSM steps in when no field agent can decide.** If no ACTIVE ZSA of the zone and no ACTIVE ASA of the area is eligible (none exists, or each is the raiser or a member of the held agent), the ZSMs in reach decide that hold. Eligibility is checked live, so the fallback ends as soon as an eligible field agent is ACTIVE.
+4. **The agent's recruiter may decide.** `monvelo_agents.recruited_by` is not a bar. The raiser and anyone with a membership row in the held agent (R78) still are, for deciding and for seeing.
+
+Everything else in §20 stands: the 15-minute exclusive hold, the ₦3,000,000 allowance ceiling (§21), the reason of 10+ characters, the anonymous view (no agent, no agent figures, §20.2 decision 3), and the agent's own caps never lifted.
+
+### 22.2 Calls made while building
+
+- **`monvelo_hold_market_makers` now returns the deciders** (the field agents, else the ZSMs in reach), so notices and `decide_monvelo_claim_hold` follow it unchanged. A new internal `monvelo_hold_viewers` adds the ZSMs in reach for the read path.
+  - **Cost if wrong:** a ZSM watching a hold is not notified of it; they see it in the list.
+- **The view gains `can_decide boolean`** so the app shows the allow and decline buttons only to a decider. `list_monvelo_claim_holds`, `get_monvelo_claim_hold` and the internal `monvelo_claim_hold_rows` are dropped and recreated (the return type changed); grants are unchanged.
+  - **Cost if wrong:** clients that select `*` get one more column.
+- **The ZSA's zone is its own `tenant_users.zone_id`,** matched to the zone of the request's territory, as `start_monvelo_consent` does.
+- **A ZSA who raised the request is the raiser,** so it is barred like an ASA raiser; a second field agent (the area's ASA, or another ZSA of the zone) decides.
 

@@ -29,6 +29,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) Step 3: funding, delivery, repayment, the money sweep | done (local) |
 | Monvelo (A6) §19.4 exposure cap and §20 market-maker allowance | done (local) |
 | Monvelo (A6) §21 limits ₦1,000,000 / ₦3,000,000 and the agent exposure meter RPC | done (local) |
+| Monvelo (A6) §22 field agents (ZSA, ASA) decide holds; the ZSM oversees | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -1142,6 +1143,23 @@ calls, as amended, and the material rulings are recorded in A6 §19.
       accepts any verified profile, tenant staff included, so without this
       an ASA in the agent could allow its own claim. If wrong: a member of
       the agent decides its hold.
+- **Field agents decide holds (A6 §22, user 2026-11-03):** migration
+  `20261031121300`, pgTAP 068 (066 updated). Replaces §20.2 decision 1;
+  where the §20 notes above say "the ZSM and the ASA decide", read this.
+  - `monvelo_hold_market_makers(t, area, raiser, agent)` returns the
+    **deciders**: ACTIVE ZSAs whose `tenant_users.zone_id` is the request's
+    zone and ACTIVE ASAs of its area; only if none is eligible, the ZSMs in
+    reach (`zsm_reach_zone_ids`). Notices and `decide_monvelo_claim_hold` use
+    it, so a watching ZSM is not notified and gets 42501 "this hold is not
+    yours to decide". Live: the fallback ends once a field agent is ACTIVE.
+  - `monvelo_hold_viewers(...)` (internal) = the deciders plus the ZSMs in
+    reach; `monvelo_claim_hold_rows` filters on it. The view gains
+    `can_decide boolean` (HELD, not past expiry, and the caller decides);
+    `list_monvelo_claim_holds`, `get_monvelo_claim_hold` and the rows helper
+    were dropped and recreated (grants unchanged); the three RPCs accept
+    ZSA, ASA and ZSM.
+  - Bars: the raiser and anyone with a membership row in the held agent
+    (R78), for deciding and seeing. The agent's recruiter is not barred.
 - **The agent's exposure meter (audit finding G1, A6 §21.3, 2026-11-03):**
   migration `20261031121200`, pgTAP 067.
   - `get_monvelo_agent_exposure(p_agent_id uuid default null)`, `authenticated`,

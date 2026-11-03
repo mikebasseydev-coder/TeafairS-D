@@ -198,6 +198,13 @@ export function buildWeb(r, s) {
     ['Unprovisioned agents', `ACTIVE agents whose \`daily_cap\` or \`per_financing_cap\` is ₦0.00 or below the ${CAP} ceiling`, '`monvelo_agents` (operator reads all); set with `set_monvelo_agent_caps`'],
     ['Lender reconciliation', 'Weekly capital funded, outstanding, repaid, refunded, rebates per agent', '`get_lender_reconciliation_summary` serves agents, ZSAs and ASAs only; operators **need their own RPC** (A6 §9 `monvelo_finance_overview`, not built)'],
   ], { widths: [0.2, 0.42, 0.38], caption: 'The A6 §9 finance dashboard RPCs (`monvelo_finance_overview`, `monvelo_payables`, `monvelo_tenant_settlement_statement`, `monvelo_exceptions`) are specified but not built.' });
+  r.h2('One agent\'s exposure: get_monvelo_agent_exposure');
+  r.p(`\`${s.sig('get_monvelo_agent_exposure')}\` (migration \`${s.fn('get_monvelo_agent_exposure').file}\`, pgTAP 067) is read-only and granted to ${s.callers('get_monvelo_agent_exposure')} only. In the Monvelo console, staff name the agent; it returns one row:`);
+  r.table(['Column', 'Type'], s.returnCols('get_monvelo_agent_exposure'), { widths: [0.4, 0.6], mono: [0, 1], size: 8.2 });
+  r.bullets([
+    '**Callers:** the agent\'s ACTIVE members and Monvelo staff (MONVELO_OPERATOR, MONVELO_FINANCE). Every tenant role (ZSM, ASA, ZSA, TM, CSM, TENANT_ADMIN) gets 42501 "Unauthorized access to agent exposure metrics", so the tenant operations console must never call it: a tenant never sees a lender (§16.2.2) and a market maker never sees the agent (§20.2 decision 3). Staff naming an unknown agent get no row.',
+    '**Figures:** CLAIMED, HELD and FUNDED count their full principal, DELIVERED and DEFAULTED_WITH_LATE_CHARGE count `least(outstanding, principal)`, and REFUND_DUE counts nothing (R63). The ceilings are read from the constants; `personal_daily_limit` and `per_financing_limit` are 0.00 until Monvelo staff set them (§21.2).',
+  ]);
   r.callout('warn', 'Provision agent caps at onboarding (A6 §21.2)', [
     `The platform ceiling is ${CAP} and the market-maker allowance ${ALLOW} (migration \`20261031121100\`). An agent's \`daily_cap\` and \`per_financing_cap\` start at ₦0.00 and bind first.`,
     'The operator console must show unprovisioned agents and set their caps with `set_monvelo_agent_caps`. A market maker cannot override a personal cap (rule 3A); only the exposure ceiling can be allowed past.',

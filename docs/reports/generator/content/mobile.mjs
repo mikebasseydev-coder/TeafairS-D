@@ -31,7 +31,7 @@ export function buildMobile(r, s) {
   r.h2('Key audit findings');
   r.p('The brief behind this document set out several expectations. Six of them differ from what the schema actually does. The app must follow the schema, so each difference is resolved below and in Section 10.');
   r.table(['#', 'The brief expected', 'The schema does', 'Resolution'], [
-    ['F1', 'ZSA and ASA as the Monvelo deciders.', 'Market makers are the **ZSM and the ASA** (A6 §20.2 decision 1). The ZSA recruits and raises requests, and reads the lender summary, but cannot allow a hold.', 'The ZSA build gets no hold queue.'],
+    ['F1', 'ZSA and ASA as the Monvelo deciders.', '**Now matches the brief (A6 §22, 2026-11-03):** the field agents decide: the ZSA of the request\'s zone and the ASA of its area. The ZSM oversees read-only and decides only when no field agent is eligible. (Until 2026-11-03 the ZSM and the ASA decided, §20.2 decision 1.)', 'ZSA and ASA builds get the hold queue with allow and decline; the ZSM build gets it read-only, with the buttons driven by `can_decide`.'],
     ['F2', 'Client-side four-eyes enforcement.', 'Four eyes is enforced **in the database**: the raiser and any member of the held agent get 42501 and never see the hold (decision 6, R78).', 'The client only reflects the rule; it is never the control.'],
     ['F3', 'A live exposure meter.', '`monvelo_agent_open_exposure` and both ceilings stay **ungranted**; since 2026-11-03 the read-only `get_monvelo_agent_exposure` returns them to the agent\'s members.', '**G1 resolved** (migration `20261031121200`): the meter reads that one RPC (§7.3).'],
     ['F4', 'Password login for field roles, PIN login for shop owners and agents.', 'The only sign-in route built is the **phone + WhatsApp code** for everyone. Email serves recovery and invites; passwords are at least 12 characters. The 4-digit PIN is a **transaction control**, not a login.', 'Proposal in §4.2; the login method is an open Spec B decision.'],
@@ -162,7 +162,7 @@ export function buildMobile(r, s) {
 
   // ── 6 ─────────────────────────────────────────────────────────────────
   r.h1('Monvelo Market-Maker Allowance UI');
-  r.p(`A claim blocked **only** by the ${CAP} open exposure cap is held for 15 minutes instead of being refused, provided the agent's open exposure including this financing stays within ${ALLOW}. During the hold no other agent can claim the request. A market maker in scope (a ZSM whose reach covers the zone, or the area's ASA) may allow it with a reason or decline it. Approved 2026-11-02 (A6 §20; decisions 1A, 2A, 3A).`);
+  r.p(`A claim blocked **only** by the ${CAP} open exposure cap is held for 15 minutes instead of being refused, provided the agent's open exposure including this financing stays within ${ALLOW}. During the hold no other agent can claim the request. A field agent in scope (the ZSA of the request's zone, or the ASA of its area) may allow it with a reason or decline it; the ZSM whose reach covers the zone watches read-only and decides only when no field agent is eligible. Approved 2026-11-02 (A6 §20; decisions 1A, 2A, 3A); deciders amended 2026-11-03 (A6 §22).`);
   r.flow([
     ['Agent claims', 'OFFERED request'],
     ['Only the exposure cap blocks', `≤ ${ALLOW} incl. this one`],
@@ -174,9 +174,10 @@ export function buildMobile(r, s) {
   r.h2('Who sees what');
   r.table(['Actor', 'Sees', 'Never sees'], [
     ['Agent member (claimant)', 'Claim reply `{held: true, hold_id, expires_at, financing_id, reference, status, principal}`; then a `MONVELO_HOLD_DECIDED` notice (allowed, declined or lapsed).', 'Who decided.'],
-    ['Market maker: ZSM in reach, or the area\'s ASA', 'The hold list and detail: the request, the shop\'s record and limits **in this tenant**, the blocks, `within_limit`, `ready`, and once decided their own name, time and reason.', 'The agent\'s name, id, phone, network, location and own figures (exposure, pledge left).'],
+    ['Decider: the zone\'s ZSA or the area\'s ASA (A6 §22)', 'The hold list and detail with `can_decide` true: the request, the shop\'s record and limits **in this tenant**, the blocks, `within_limit`, `ready`, and once decided the decider\'s name, time and reason. A `MONVELO_HOLD` notice.', 'The agent\'s name, id, phone, network, location and own figures (exposure, pledge left).'],
+    ['ZSM in reach (oversight)', 'The same list and detail with `can_decide` false and no notice; decide is 42501. When no field agent is eligible (none ACTIVE, or each is the raiser or a member of the agent), the ZSM becomes the decider for that hold, live.', 'The agent, as above.'],
     ['The request\'s raiser; any member of the held agent (R78)', 'Nothing. The hold is not listed, no notice is sent, and get or decide returns 42501.', 'The hold.'],
-    ['ZSA, TM, CSM, TENANT_ADMIN, LM', 'Nothing (42501 on the three RPCs).', 'The hold.'],
+    ['TM, CSM, TENANT_ADMIN, LM', 'Nothing (42501 on the three RPCs).', 'The hold.'],
   ], { widths: [0.24, 0.48, 0.28], caption: 'Visibility (A6 §20.6, call 9, R78).' });
 
   r.h2('Component: HoldCard and the countdown');
@@ -217,11 +218,11 @@ export function buildMobile(r, s) {
     ['42501 "this hold is not yours to decide"', 'Out of scope, the raiser, or a member of the agent.', 'Remove the card; neutral message.'],
   ], { widths: [0.36, 0.32, 0.32], mono: [0], size: 8.3 });
   r.h2('Four-eyes segregation of duties (choice 2A)');
-  r.p('The rule: **whoever raised the request (`monvelo_financings.raised_by`) can never allow or decline its hold**, and neither can anyone with a membership row in the held agent, ACTIVE or REVOKED (R78). The database enforces it three times. The raiser is excluded from the market makers notified (`monvelo_hold_market_makers`), excluded from the list (`monvelo_claim_hold_rows`), and refused by `decide_monvelo_claim_hold` with 42501.');
+  r.p('The rule: **whoever raised the request (`monvelo_financings.raised_by`) can never allow or decline its hold**, and neither can anyone with a membership row in the held agent, ACTIVE or REVOKED (R78). The database enforces it three times. The raiser is excluded from the deciders notified (`monvelo_hold_market_makers`), excluded from the list (`monvelo_hold_viewers`, used by `monvelo_claim_hold_rows`), and refused by `decide_monvelo_claim_hold` with 42501. The agent\'s recruiter is not barred (A6 §22.1 decision 4).');
   r.bullets([
     '**The client mirrors the rule and never replaces it.** The hold list comes from the server already filtered, so the app never needs to know who the raiser was, and must not try to compute it.',
     '**Raiser-side UX.** An ASA who raised a request that is now held sees on their own request: "Waiting for another market maker (you raised this request)". The status comes from `monvelo_order_financing_status`; no hold id is exposed.',
-    '**When nobody else is in scope**, the hold can only lapse. The app does not offer an escalation that would bypass this.',
+    '**When no field agent is eligible**, the zone\'s ZSM decides (A6 §22.1 decision 3); when nobody at all is in scope, the hold can only lapse. The app does not offer an escalation that would bypass this, and it shows the buttons only when `can_decide` is true.',
     '**Testing.** Keep a UI test that signs in as the raiser and asserts the hold is absent, alongside pgTAP 066, which proves the server side.',
   ]);
   r.h2('Hold result contract');
@@ -258,7 +259,7 @@ export function buildMobile(r, s) {
   r.table(['Column', 'Type'], expCols, { widths: [0.4, 0.6], mono: [0, 1], size: 8.2 });
   r.bullets([
     '**Who may call:** an ACTIVE member of the agent, or Monvelo staff (MONVELO_OPERATOR, MONVELO_FINANCE). Everyone else, a ZSM, ASA, ZSA, TM, CSM or TENANT_ADMIN included, and an unknown agent alike, gets 42501 "Unauthorized access to agent exposure metrics". A market maker never sees the agent (§20.2 decision 3) and a tenant never sees a lender (§16.2.2).',
-    '**Figures:** `open_exposure` is `monvelo_agent_open_exposure` (REFUND_DUE counts nothing, R63); the ceilings are read from the constants; `personal_daily_limit` and `per_financing_limit` are the agent\'s own caps, 0.00 until Monvelo staff set them (§21.2); `today_utilized_limit` is the claim\'s check 8 (claimed and held now, plus funded this Lagos day unless REFUND_DUE). Both remaining figures floor at 0.00.',
+    '**Figures:** `open_exposure` is `monvelo_agent_open_exposure`: CLAIMED, HELD and FUNDED count their full principal, DELIVERED and DEFAULTED_WITH_LATE_CHARGE count `least(outstanding, principal)`, and REFUND_DUE counts nothing (R63); the ceilings are read from the constants; `personal_daily_limit` and `per_financing_limit` are the agent\'s own caps, 0.00 until Monvelo staff set them (§21.2); `today_utilized_limit` is the claim\'s check 8 (claimed and held now, plus funded this Lagos day unless REFUND_DUE). Both remaining figures floor at 0.00.',
     '**The app** shows these numbers as given and never recomputes a limit. A claim can still be refused after a fresh read, because the database re-checks every limit under the agent\'s lock.',
   ]);
   r.callout('note', 'Finding G1 as first raised (kept for the record)', [
