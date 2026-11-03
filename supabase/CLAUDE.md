@@ -1018,14 +1018,16 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     by design (the stock sweep cancels an unpaid order; the agent held the
     claim).
 - **Exposure cap, pledge restoration, lender summary (A6 §19.4, user
-  2026-11-02):** migration `20261031120700`, pgTAP 065.
-  - `monvelo_open_exposure_ceiling()` is one constant, `100000.00`; a
-    migration changes it. `monvelo_agent_open_exposure(agent)` counts
+  2026-11-02):** migration `20261031120700` (limits scaled by
+  `20261031121100`), pgTAP 065.
+  - `monvelo_open_exposure_ceiling()` is one constant, `1000000.00`
+    (₦1,000,000; it was `100000.00` until `20261031121100`, user
+    2026-11-03); a migration changes it. `monvelo_agent_open_exposure(agent)` counts
     CLAIMED and FUNDED at principal, and DELIVERED and
     DEFAULTED_WITH_LATE_CHARGE at `least(outstanding, principal)`. Both are
     ungranted.
   - `monvelo_claim_refusal` refuses past the ceiling ("this request would
-    take your open exposure above ₦100,000"), after the daily cap: the claim
+    take your open exposure above ₦1,000,000"), after the daily cap: the claim
     gets a P0001, and the late route gets `late_payment` and a flag.
   - R63 (the user's principle, 2026-11-02: "the central truth is funded order
     fulfilment"): REFUND_DUE counts toward neither the exposure nor the daily
@@ -1057,9 +1059,17 @@ calls, as amended, and the material rulings are recorded in A6 §19.
   `20261031121000` (R78: never a member of the held agent), pgTAP 066. Read §20 before touching `monvelo_claim_refusal`,
   `claim_monvelo_financing`, `monvelo_sweep_offers` or the LATE route of
   `settle_monvelo_funding`.
-  - **The hold.** A claim refused only by the ₦100,000 cap
+  - **The limits (user 2026-11-03, `20261031121100`):** the cap is
+    ₦1,000,000 and the allowance ceiling ₦3,000,000, ten times the original
+    ₦100,000 and ₦300,000, keeping the 1:3 ratio. The agent's own `daily_cap`
+    and `per_financing_cap` are untouched and still never overridden. Holds
+    decided before the change keep their recorded `exposure_after` and
+    `within_limit` (R72). 065 and 066 assert the shipped values, then pin
+    ₦100,000 and ₦300,000 in their own transaction because their scenarios
+    are sized to them.
+  - **The hold.** A claim refused only by the ₦1,000,000 cap
     (`monvelo_open_exposure_ceiling()`) that passes at
-    `monvelo_allowance_ceiling()` (₦300,000, one constant, ungranted) is held
+    `monvelo_allowance_ceiling()` (₦3,000,000, one constant, ungranted) is held
     15 minutes instead: the financing goes `HELD` (exclusive), a
     `monvelo_claim_holds` row records the block and the agent's figures (no API
     role reads it: RLS on, no policy, nothing granted), and the claim replies
@@ -1077,7 +1087,7 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     (call 9): the request, the shop's record and limits in this tenant, the
     block, `within_limit` and `ready`; never the agent or its figures. An
     allow needs a reason of 10+ characters (22023) and re-runs every check at
-    ₦300,000 under the agent's advisory lock (R13); a refusal raises P0001
+    ₦3,000,000 under the agent's advisory lock (R13); a refusal raises P0001
     with its text and the hold stays HELD. Success: HELD -> CLAIMED for the
     hold's member with a fresh 15-minute window, then funding as usual. A
     decline: HELD -> OFFERED.
@@ -1090,7 +1100,7 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     (tenant-null) to the agent's ACTIVE members on allow, decline and lapse;
     it never names the market maker.
   - **The late route (call 7).** When the paying agent holds an ALLOWED hold
-    on the financing, `settle_monvelo_funding` checks the caps at ₦300,000;
+    on the financing, `settle_monvelo_funding` checks the caps at ₦3,000,000;
     otherwise as before. The late route never holds (call 5).
   - Audit rows naming the agent are tenant-null (R15). `monvelo_open_offers`
     skips a request declined for the agent and nets its pledge of its holds.
@@ -1102,7 +1112,7 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     - R66: `monvelo_brand_exposure` counts HELD. If wrong: a shop could be
       over-committed during a hold.
     - R67: the refusal counts the held financing once. If wrong: allows near
-      ₦300,000 refused.
+      ₦3,000,000 refused.
     - R68: scope is the ZSM's §18.3 reach (`zsm_reach_zone_ids`: covered zones
       plus zones no ACTIVE ZSM covers), not strict coverage. If wrong: in an
       uncovered zone every ZSM of the tenant is told and may decide.

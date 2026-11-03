@@ -1120,7 +1120,7 @@ backdoors"; user, 2026-10-29).
 
 #### 19.4.1 The open exposure cap
 
-- **`monvelo_open_exposure_ceiling()`** is one platform constant, `100000.00` (naira), IMMUTABLE and ungranted. A migration changes it.
+- **`monvelo_open_exposure_ceiling()`** is one platform constant, `100000.00` (naira), IMMUTABLE and ungranted. A migration changes it. *Amended by §21 (2026-11-03): `1000000.00`.*
 - **`monvelo_agent_open_exposure(agent)`** (STABLE, ungranted) sums what the agent has open across every tenant:
   - CLAIMED (by `claimed_by_agent_id`) and FUNDED (by `funder_agent_id`) count their `principal`;
   - REFUND_DUE counts nothing, closed or not (R63);
@@ -1196,7 +1196,7 @@ The principle of §19.4 still governs: **the central truth is funded order fulfi
 1. **The market makers are the ZSM and the ASA.** The ZSA is not one; it keeps its read of the lender summary (§19.4.3) and nothing more.
 2. **The readiness is about the funding agent**: the agent who tried to claim and was blocked. The market maker judges the **shop's** capacity to repay within the agreed one month.
 3. **The ZSM never sees which agent is funding** (the user's "no"). The market maker sees whether the funding side is ready, what blocks it and the figures, never the agent's name, id, phone, network or location. §16.2.2 and R19 stand.
-4. **An allowance may take the agent's open exposure, including this financing, up to ₦300,000** ("any amount up to ₦300,000"). Above that, nobody can allow.
+4. **An allowance may take the agent's open exposure, including this financing, up to ₦300,000** ("any amount up to ₦300,000"). Above that, nobody can allow. *Amended by §21 (2026-11-03): up to ₦3,000,000, over a ₦1,000,000 cap.*
 5. **The hold is exclusive (1A).** A blocked claim is held, not refused, for 15 minutes, the same as a claim's payment window. While it is held, no other agent can claim the financing. The user accepts the timing cost: the preferred window (10 min), the hold (15 min) and the payment window (15 min) can keep a request from being paid for about 40 minutes.
 6. **Four eyes (2A).** The person who raised the request (`monvelo_financings.raised_by`) can never allow or decline its hold. An ASA who raised it cannot decide; the decision falls to a ZSM whose zone covers the area. If no other market maker is in scope, the hold lapses at 15 minutes. *Claude's call: the rule binds any raiser, not only an ASA, so a ZSM who raised a request cannot decide it either.* *Final review 2026-11-02 (R78): nor can anyone who belongs to the held agent (a membership row, ACTIVE or REVOKED); such a person is not told, does not see the hold, and gets 42501.*
 7. **Only the ₦100,000 exposure cap can be lifted (3A).** The agent's own `daily_cap`, set by Monvelo staff, is never overridden. A claim blocked by the daily cap (alone or together with the exposure cap) is refused exactly as today.
@@ -1269,3 +1269,24 @@ Delivery and its 23-hour cutoff, repayment, the late charge, the money sweep, re
 - The notification channel for steps 3 and 6 (the existing staff and agent notice paths; no agent identity in the staff notice).
 - Whether the claim reply change needs a gateway (today the claim is a direct RPC).
 - Index choices and the exact wording of the readiness labels.
+
+## 21. Amendment 2026-11-03: the limits scale tenfold
+
+**Status:** user decision 2026-11-03. **Built locally, not pushed:** migration `20261031121100_monvelo_exposure_limits_scaled`.
+
+### 21.1 Decision (user, 2026-11-03; binding)
+
+- **The open exposure cap (§19.4.1) is ₦1,000,000** (`monvelo_open_exposure_ceiling()` = `1000000.00`), up from ₦100,000. The user's reasons: wholesale stock runs for Purerigin oils in the commercial hubs (Lagos, Abuja, Onitsha) need more working capital than ₦100,000, and inflation has moved the realistic figure.
+- **The market-maker allowance ceiling (§20.2 decision 4) is ₦3,000,000** (`monvelo_allowance_ceiling()` = `3000000.00`), up from ₦300,000, so the allowance stays three times the cap.
+- **Nothing else changes.** An allowance still lifts only the exposure cap (§20.2 decision 7): the agent's own `daily_cap` and `per_financing_cap`, set by Monvelo staff, are never overridden. Every other §19.4 and §20 rule stands, and wherever those sections say ₦100,000 or ₦300,000 they now mean ₦1,000,000 and ₦3,000,000.
+
+### 21.2 Calls made while building
+
+- **Only the two constants are recreated.** Every caller reads them at run time and the refusal text is built from the ceiling (§19.4.5), so it now reads "this request would take your open exposure above ₦1,000,000". No other function body changes.
+  - **Cost if wrong:** none known; a caller that had copied the figure would be caught by 065 and 066.
+- **History is left as it was.** A hold decided before the change keeps its recorded `exposure_after` and `within_limit` (R72), judged under the old limits.
+  - **Cost if wrong:** a report reading old holds against the new ceiling would need the decision date.
+- **pgTAP 065 and 066 assert the shipped values, then pin ₦100,000 and ₦300,000 inside their own transaction**, as 061–064 already pin a high ceiling. Their scenarios are sized to the 1:3 ratio at the original figures, and the logic does not depend on the scale.
+  - **Cost if wrong:** to test at the real scale, the fixtures' pledges, caps and order sizes would all need rescaling.
+- **The agents' own caps are now the binding limit for most agents.** `daily_cap` and `per_financing_cap` default to 0 and are set per agent by Monvelo staff; with the cap at ₦1,000,000, an agent whose `daily_cap` is below that is held back by it first, and no market maker can lift it.
+

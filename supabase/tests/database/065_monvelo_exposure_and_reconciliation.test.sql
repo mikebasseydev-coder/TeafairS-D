@@ -8,6 +8,17 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(72);
 
+-- The limits are ₦1,000,000 and ₦3,000,000 (20261031121100, user 2026-11-03);
+-- the next assertion proves the shipped values. The scenarios below are sized
+-- to the 1:3 ratio at the original ₦100,000 / ₦300,000, so this transaction
+-- pins those figures (as 061-064 pin a high ceiling); every message reads the
+-- ceiling, so the text follows the pinned value.
+select is(public.monvelo_open_exposure_ceiling()::text || ' / ' || public.monvelo_allowance_ceiling()::text, '1000000.00 / 3000000.00', 'shipped: the ceiling 1000000.00 and the market-maker limit 3000000.00');
+create or replace function public.monvelo_open_exposure_ceiling() returns numeric language sql immutable
+set search_path = public, pg_temp as $$ select 100000.00::numeric(15,2) $$;
+create or replace function public.monvelo_allowance_ceiling() returns numeric language sql immutable
+set search_path = public, pg_temp as $$ select 300000.00::numeric(15,2) $$;
+
 -- A6 Task 6b: placing an order reserves stock. This file is not about stock,
 -- so every ordered line finds ample stock in its order's fulfilment warehouse.
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
@@ -259,7 +270,6 @@ begin
 end; $$;
 
 -- ── shape and security ──────────────────────────────────────────────────
-select is(public.monvelo_open_exposure_ceiling(), 100000.00::numeric, 'the ceiling is one platform constant: 100000.00');
 select ok((select provolatile = 'i' from pg_proc where oid = 'public.monvelo_open_exposure_ceiling()'::regprocedure)
       and (select provolatile = 's' and proconfig @> array['search_path=public, pg_temp']
              from pg_proc where oid = 'public.monvelo_agent_open_exposure(uuid)'::regprocedure),

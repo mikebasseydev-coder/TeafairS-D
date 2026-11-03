@@ -1,0 +1,8 @@
+{
+  "name": "teafair-audit-reports",
+  "private": true,
+  "type": "module",
+  "description": "Builds the Teafair mobile and Teafairweb audit PDFs from the local migrations",
+  "scripts": { "build": "node generate-reports.mjs" },
+  "dependencies": { "pdfkit": "0.15.2" }
+}
