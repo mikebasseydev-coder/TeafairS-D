@@ -60,7 +60,7 @@ await make({
   docId: 'TF-RPT-MOB-001',
   kicker: 'Systems architecture · Audit report',
   scope: [
-    `Audits the backend at migration ${schema.latest.slice(0, 14)} (A6 §20, R78) and specifies the mobile client that will consume it.`,
+    `Audits the backend at migration ${schema.latest.slice(0, 14)} (A6 §22 and the 2026-11-04 deferred minors) and specifies the mobile client that will consume it.`,
     'An input to Spec B, not Spec B. Items marked Proposal need the owner\'s decision; everything else is quoted from the schema and the approved specs.',
   ],
   highlights: stats,

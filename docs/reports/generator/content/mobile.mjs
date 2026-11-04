@@ -159,6 +159,10 @@ export function buildMobile(r, s) {
     ['Trade order', s.sig('place_trade_order'), 'Quantity steppers move in **break-bulk packs** (§8). Prices are wholesale and read-only.'],
     ['Financing request', s.sig('request_monvelo_financing'), 'Result OFFERED (within the shop\'s limit) or AWAITING_APPROVAL (the TM approves). A raiser whose PAR30 is above 10% is refused, with a message.'],
   ], { widths: [0.22, 0.43, 0.35], mono: [1], size: 8.3 });
+  r.callout('rule', 'The supply day closes at Lagos midnight, live (2026-11-04)', [
+    'From midnight Lagos after `supply_date`, `claim_monvelo_financing`, an allow through `decide_monvelo_claim_hold` and the TM\'s `approve_monvelo_financing` refuse the request at once: P0001 "this request\'s supply day has ended". The minute sweep then expires it. The app shows the message and refreshes the list; it never waits for the sweep. A decline still works. Funding a claim already held is unaffected (R58).',
+    '**Nominations by zone.** A ZSM reads a nomination only when the shop\'s enrolment area lies in a zone they reach (the zones they cover, plus zones no ACTIVE ZSM covers). ZSAs, ASAs and TMs read the tenant\'s nominations as before; a TENANT_ADMIN reads none.',
+  ]);
 
   // ── 6 ─────────────────────────────────────────────────────────────────
   r.h1('Monvelo Market-Maker Allowance UI');

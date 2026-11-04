@@ -30,6 +30,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) §19.4 exposure cap and §20 market-maker allowance | done (local) |
 | Monvelo (A6) §21 limits ₦1,000,000 / ₦3,000,000 and the agent exposure meter RPC | done (local) |
 | Monvelo (A6) §22 field agents (ZSA, ASA) decide holds; the ZSM oversees | done (local) |
+| Monvelo deferred minors: live supply-day end, zone-scoped ZSM nomination reads | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -1185,6 +1186,25 @@ calls, as amended, and the material rulings are recorded in A6 §19.
     unless REFUND_DUE. **Keep the two in step** when either changes.
   - 047 test 10 is intermittent (seen once 2026-11-03): its `[0-9]{10}`
     can match ten digits inside a random UUID in the stored response.
+- **Deferred minors (Step 1c/2 final review, 2026-11-04):** migration
+  `20261031121400`, pgTAP 069.
+  - **The supply day ends live.** `monvelo_supply_day_ended(date)` (internal,
+    STABLE; true from midnight Lagos after the date, the sweep's instant, and
+    for a null date) closes the minute before `monvelo-offer-sweep` runs.
+    `monvelo_claim_refusal` gains check 1b, so `claim_monvelo_financing` and an
+    allow through `decide_monvelo_claim_hold` refuse P0001 "this request's
+    supply day has ended"; `approve_monvelo_financing` refuses the same. The
+    request is left for the sweep to expire. A decline still works. The late
+    route (`p_late`) and the CLAIM route of `settle_monvelo_funding` keep no
+    supply-day bound (R58).
+  - **ZSM nomination reads by zone.** `my_monvelo_nomination_tenant_ids()` now
+    covers ZSA, ASA and TM only (tenant-wide, unchanged). A ZSM reads a
+    nomination through `my_zsm_monvelo_nomination_ids()` (`authenticated`):
+    its shop's enrolment area (in the nomination's tenant, any enrolment
+    status) lies in a territory of `my_zsm_territory_ids()`, the §18.3 reach
+    (covered zones plus zones no ACTIVE ZSM covers, R68). TENANT_ADMIN reads
+    no nomination (it names a candidate agent, §16.2.2). Nominations have no
+    ZSM writer.
 - **Integration.** `gateway.integration.ts` continues the Step 2 test's
   CLAIMED financing: funding, a lapsed claim that still funds, a payer
   mismatch, dispatch, the delivery code, a part repayment, the late charge and
