@@ -1191,6 +1191,64 @@ calls, as amended, and the material rulings are recorded in A6 §19.
   REPAID_LATE, and the TENANT_ADMIN's reads. It moves time as postgres through
   `DB_URL`.
 
+### Service-role key standard (Ruling 46, 2026-11-04)
+
+A security standard, not a Monvelo ruling (the A6 rulings skip 46). Three
+rules, each enforced by a test.
+
+1. **New-format keys, read in one place.** `_shared/core/keys.ts` is the only
+   reader of Supabase API keys. `secretKey()` takes the `sb_secret_…` key
+   from `SUPABASE_SECRET_KEYS` (JSON keyed by name, injected by Supabase),
+   picking `TEAFAIR_SECRET_KEY_NAME` (default `default`). `publishableKey()`
+   does the same for `sb_publishable_…`. Both fall back to the legacy
+   `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_ANON_KEY` only while the dictionary
+   is absent; if it is present but lacks the name, they fail closed. An
+   `sb_` key is sent on `apikey` only, never as `Bearer`
+   (`secretKeyHeaders`). **Every secret key carries the same `service_role`
+   privilege (BYPASSRLS).** A key name such as `gateway` is a label: you can
+   revoke that key alone, but it is not a narrower scope. Narrowing stays in
+   the database. Supabase deprecates the legacy keys by the end of 2026.
+   Disable them in the dashboard only after the staging check below.
+   Guard: `keys.test.ts`, plus the last test of `service-role-guard.test.ts`.
+2. **Imperative guards before the secret key.**
+   `_tests/service-role-guard.test.ts` lists every function that calls
+   `serviceRpc()`, with the check it runs first:
+   - a hook signature;
+   - the Paystack signature;
+   - `x-cron-secret`;
+   - Turnstile;
+   - a capability pair;
+   - or, for the storefront reads, a read-only RPC.
+
+   It also lists every function that signs Storage with the key (R22). A new
+   caller fails the test until it is reviewed. No `monvelo-*` gateway holds
+   the key. The router's service client calls only `log_message_delivery`.
+   The only Monvelo RPCs reachable with the key are `settle_monvelo_funding`
+   and `apply_monvelo_refund`, from `process-payment` (after the signature)
+   and `reconcile-funds` (after the cron secret). This adds to the database
+   rule, it does not replace it. `service_role` holds no write on any Monvelo
+   table (pgTAP 054, 061). Every Monvelo user RPC derives the actor from
+   `auth.uid()` and runs its role, R78 and raiser bars itself, so the gateway
+   never re-implements them: claims propose, the database decides.
+3. **No secret in a client bundle.** `_tests/secret-scoping.test.ts` scans
+   the repository, skipping gitignored local env files, `.git` and
+   `node_modules`. It fails on:
+   - a client-prefixed secret name (`EXPO_PUBLIC_`, `NEXT_PUBLIC_`, `VITE_`,
+     `REACT_APP_` or `PUBLIC_` plus SECRET, SERVICE_ROLE or PRIVATE);
+   - a literal `sb_secret_` key;
+   - a committed `service_role` JWT;
+   - any server key name inside a client tree (`src/`, `app/`, `apps/`,
+     `frontend/`, `web/`).
+
+   Spec B's app may hold only the publishable key. teafairweb lives in its
+   own repository and needs the same scan there.
+
+**Staging check before disabling the legacy keys.** Create a secret key, then
+confirm that `serviceRpc()` (supabase-js) and the Storage signing calls work
+with it and with `SUPABASE_SERVICE_ROLE_KEY` unset. Only then disable the
+legacy keys. Locally the CLI may inject only the legacy keys, so that path is
+the one the integration run proves.
+
 ## Layout
 
 ```
@@ -1315,7 +1373,7 @@ one responsibility per file. Third-party versions appear only in
 
 ```bash
 supabase functions serve --env-file supabase/functions/.env     # serve locally
-deno test --allow-env supabase/functions/                       # unit tests
+deno test --allow-env --allow-read supabase/functions/         # unit tests (+ R46 guards)
 supabase status -o env > supabase/.env.test.local               # then:
 deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
   --env-file=supabase/functions/.env supabase/functions/_tests/gateway.integration.ts

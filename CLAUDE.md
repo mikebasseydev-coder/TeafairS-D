@@ -82,6 +82,15 @@ Android only at launch; the Windows HQ client is deferred.
 - Workflow statuses are `text` + `CHECK`; stable sets are enums.
 - Money `NUMERIC(15,2)`, quantities `NUMERIC(14,3)`, timestamps `timestamptz`.
 - `.env` / `.env*.local` are gitignored. Never hardcode Supabase URLs or keys.
+- **Ruling 46 (service-role key standard)**, detailed in `supabase/CLAUDE.md`:
+  (1) API keys are read only through `_shared/core/keys.ts`, which prefers the
+  `sb_secret_` / `sb_publishable_` keys and falls back to the legacy keys.
+  Every secret key has full `service_role` power: a key's name is for
+  revocation, not scope. (2) Only reviewed system and public functions reach
+  the secret key, each authenticating its caller first. No Monvelo gateway
+  holds it, and the database still decides every write. (3) No secret is ever
+  under `EXPO_PUBLIC_`, `NEXT_PUBLIC_` or `VITE_`, or in a client tree. The
+  tests `service-role-guard`, `secret-scoping` and `keys` enforce all three.
 
 ## Commands
 

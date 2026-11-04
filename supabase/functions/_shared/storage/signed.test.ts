@@ -21,6 +21,13 @@ Deno.test("signed upload URL uses the upload/sign endpoint with the service key,
   assertEquals([h.get("authorization"), h.get("apikey"), h.get("x-upsert")], ["Bearer svc-key", "svc-key", null]);
 });
 
+Deno.test("an sb_secret_ key is sent on apikey only, never as a Bearer token (R46)", async () => {
+  const { cfg, calls } = fake(200, { url: "/object/upload/sign/b/p?token=abc" });
+  await createSignedUploadUrl({ ...cfg, serviceKey: "sb_secret_abc" }, "b", "p");
+  const h = new Headers(calls[0].init.headers);
+  assertEquals([h.get("authorization"), h.get("apikey")], [null, "sb_secret_abc"]);
+});
+
 Deno.test("download URL expires in 600 seconds", async () => {
   const { cfg, calls } = fake(200, { signedURL: "/object/sign/support-attachments/t/a.jpg?token=xyz" });
   const url = await createSignedDownloadUrl(cfg, "support-attachments", "t/a.jpg");
@@ -51,7 +58,14 @@ Deno.test("removeObjects sends the prefixes as a DELETE body", async () => {
 
 Deno.test("storageConfigFromEnv reads the two variables", () => {
   Deno.env.set("SUPABASE_URL", "http://u");
+  Deno.env.delete("SUPABASE_SECRET_KEYS");
   Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "k");
   const c = storageConfigFromEnv();
   assertEquals([c.url, c.serviceKey], ["http://u", "k"]);
+  Deno.env.set("SUPABASE_SECRET_KEYS", JSON.stringify({ default: "sb_secret_new" }));
+  try {
+    assertEquals(storageConfigFromEnv().serviceKey, "sb_secret_new");
+  } finally {
+    Deno.env.delete("SUPABASE_SECRET_KEYS");
+  }
 });

@@ -4,6 +4,7 @@
 import { createClient, type SupabaseClient } from "./deps.ts";
 import { requireEnv } from "./env.ts";
 import { mapPostgresError } from "./errors.ts";
+import { publishableKey, secretKey } from "./keys.ts";
 import { annotateSpan, traced } from "./observability.ts";
 
 export type Rpc = <T = unknown>(fn: string, args: Record<string, unknown>) => Promise<T>;
@@ -28,14 +29,18 @@ export function rpcFrom(client: SupabaseClient): Rpc {
 }
 
 export function userRpc(authorization: string): Rpc {
-  return rpcFrom(createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_ANON_KEY"), {
+  return rpcFrom(createClient(requireEnv("SUPABASE_URL"), publishableKey(), {
     global: { headers: { Authorization: authorization } },
     auth: noSession,
   }));
 }
 
+// R46: only the functions listed in `_tests/service-role-guard.test.ts` may
+// call this, each having authenticated its caller first (signature, cron
+// secret, hook secret, Turnstile or a capability) — and the RPCs it reaches
+// still decide for themselves.
 export function serviceRpc(): Rpc {
-  return rpcFrom(createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
+  return rpcFrom(createClient(requireEnv("SUPABASE_URL"), secretKey(), {
     auth: noSession,
   }));
 }

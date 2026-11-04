@@ -3,6 +3,7 @@
 import { createClient } from "./deps.ts";
 import { requireEnv } from "./env.ts";
 import { GatewayError } from "./errors.ts";
+import { publishableKey } from "./keys.ts";
 
 export type Caller = {
   userId: string;
@@ -42,7 +43,7 @@ export async function authenticate(req: Request, verify: TokenVerifier): Promise
 // getClaims verifies asymmetric tokens locally against the project's JWKS and
 // falls back to the Auth server for symmetric ones.
 export function supabaseTokenVerifier(): TokenVerifier {
-  const client = createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_ANON_KEY"), {
+  const client = createClient(requireEnv("SUPABASE_URL"), publishableKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   return async (token) => {

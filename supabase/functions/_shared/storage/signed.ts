@@ -2,11 +2,12 @@
 // only place the service key is used for Storage; paths and signed URLs are
 // never logged and never put in an error message.
 import { requireEnv } from "../core/env.ts";
+import { secretKey, secretKeyHeaders } from "../core/keys.ts";
 
 export type StorageConfig = { url: string; serviceKey: string; fetch?: typeof globalThis.fetch };
 
 export function storageConfigFromEnv(): StorageConfig {
-  return { url: requireEnv("SUPABASE_URL"), serviceKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY") };
+  return { url: requireEnv("SUPABASE_URL"), serviceKey: secretKey() };
 }
 
 const base = (cfg: StorageConfig) => `${cfg.url.replace(/\/+$/, "")}/storage/v1`;
@@ -16,8 +17,7 @@ async function call(cfg: StorageConfig, method: string, endpoint: string, body?:
   const res = await (cfg.fetch ?? fetch)(`${base(cfg)}${endpoint}`, {
     method,
     headers: {
-      authorization: `Bearer ${cfg.serviceKey}`,
-      apikey: cfg.serviceKey,
+      ...secretKeyHeaders(cfg.serviceKey), // R46: an sb_secret_ key goes on apikey only
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
