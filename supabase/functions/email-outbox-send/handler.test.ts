@@ -49,8 +49,8 @@ Deno.test("claims a batch of 50 and sends with the row id as the idempotency key
   assertEquals(s.completions(), ["r1:SENT"]);
 });
 
-Deno.test("Resend 400, 403 and 422 are permanent", async () => {
-  for (const status of [400, 403, 422]) {
+Deno.test("Resend 400 and 422 are permanent", async () => {
+  for (const status of [400, 422]) {
     const s = setup(() => Promise.reject(new EmailDeliveryError(status)));
     await (await post(s.handler)).body?.cancel();
     assertEquals(s.completions(), ["r1:PERMANENT"], `status ${status}`);
@@ -95,4 +95,13 @@ Deno.test("no recipient address in any log line", async () => {
   }
   assertEquals(logged.length > 0, true);
   assertEquals(logged.some((a) => a.map(String).join(" ").includes("person@example.com")), false);
+});
+
+Deno.test("Resend 401 and 403 (key or sender misconfigured) defer without spending attempts", async () => {
+  for (const status of [401, 403]) {
+    const s = setup(() => Promise.reject(new EmailDeliveryError(status)), [row("r1"), row("r2")]);
+    const res = await post(s.handler);
+    assertEquals(await res.json(), { claimed: 2, sent: 0, retried: 2, failed: 0 }, `status ${status}`);
+    assertEquals(s.completions(), ["r1:DEFER", "r2:DEFER"], `status ${status}`);
+  }
 });

@@ -260,6 +260,10 @@ revoke all on function public.tenant_ticket_notify_teafair(public.tenant_support
 revoke all on function public.tenant_ticket_notify_opener(public.tenant_support_tickets, text) from public, anon, authenticated, service_role;
 revoke all on function public.tenant_ticket_email(public.tenant_support_tickets, text) from public, anon, authenticated, service_role;
 
+-- Audit rows of tenant tickets are tenant-null (as A6 R15): audit_logs is
+-- read tenant-wide by the tenant's ZSMs and TMs, who see no tenant ticket
+-- (§4.2). The entity id still names the ticket for platform staff.
+
 -- ── open_tenant_ticket ──────────────────────────────────────────────────
 create or replace function public.open_tenant_ticket(
   p_idempotency_key uuid,
@@ -315,7 +319,7 @@ begin
   perform public.tenant_ticket_notify_teafair(v_t);
   perform public.tenant_ticket_email(v_t, 'TENANT_TICKET_OPENED');
 
-  perform public.write_audit(v_t.tenant_id, 'open_tenant_ticket', 'tenant_support_tickets', v_t.id::text, null,
+  perform public.write_audit(null, 'open_tenant_ticket', 'tenant_support_tickets', v_t.id::text, null,
                              jsonb_build_object('category', v_t.category, 'assigned_csm_id', v_t.assigned_csm_id),
                              p_idempotency_key);
 
@@ -387,7 +391,7 @@ begin
     perform public.tenant_ticket_email(v_t, 'TENANT_TICKET_REPLY');
   end if;
 
-  perform public.write_audit(v_t.tenant_id, 'reply_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
+  perform public.write_audit(null, 'reply_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
                              jsonb_build_object('status', v_before),
                              jsonb_build_object('status', v_t.status, 'message_id', v_msg, 'sender_side', v_side),
                              p_idempotency_key);
@@ -432,7 +436,7 @@ begin
   v_before := v_t.assigned_csm_id;
   update public.tenant_support_tickets set assigned_csm_id = v_uid where id = v_t.id returning * into v_t;
 
-  perform public.write_audit(v_t.tenant_id, 'claim_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
+  perform public.write_audit(null, 'claim_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
                              jsonb_build_object('assigned_csm_id', v_before),
                              jsonb_build_object('assigned_csm_id', v_t.assigned_csm_id), p_idempotency_key);
   return public.idempotency_complete(p_idempotency_key, jsonb_build_object(
@@ -470,7 +474,7 @@ begin
   update public.tenant_support_tickets set assigned_csm_id = null where id = v_t.id returning * into v_t;
   perform public.tenant_ticket_notify_teafair(v_t);
 
-  perform public.write_audit(v_t.tenant_id, 'release_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
+  perform public.write_audit(null, 'release_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
                              jsonb_build_object('assigned_csm_id', v_uid),
                              jsonb_build_object('assigned_csm_id', null), p_idempotency_key);
   return public.idempotency_complete(p_idempotency_key, jsonb_build_object(
@@ -512,7 +516,7 @@ begin
   update public.tenant_support_tickets set assigned_csm_id = p_csm_profile_id where id = v_t.id returning * into v_t;
   perform public.tenant_ticket_notify_teafair(v_t);
 
-  perform public.write_audit(v_t.tenant_id, 'assign_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
+  perform public.write_audit(null, 'assign_tenant_ticket', 'tenant_support_tickets', v_t.id::text,
                              jsonb_build_object('assigned_csm_id', v_before),
                              jsonb_build_object('assigned_csm_id', v_t.assigned_csm_id), p_idempotency_key);
   return public.idempotency_complete(p_idempotency_key, jsonb_build_object(
@@ -563,7 +567,7 @@ begin
   perform public.tenant_ticket_notify_opener(v_t, 'Ticket ' || lower(v_t.status));
   perform public.tenant_ticket_email(v_t, 'TENANT_TICKET_STATUS');
 
-  perform public.write_audit(v_t.tenant_id, 'update_tenant_ticket_status', 'tenant_support_tickets', v_t.id::text,
+  perform public.write_audit(null, 'update_tenant_ticket_status', 'tenant_support_tickets', v_t.id::text,
                              jsonb_build_object('status', v_before), jsonb_build_object('status', v_t.status),
                              p_idempotency_key);
   return public.idempotency_complete(p_idempotency_key, jsonb_build_object(
@@ -591,7 +595,7 @@ begin
     v_count := v_count + 1;
     perform public.tenant_ticket_notify_opener(v_t, 'Ticket closed');
     perform public.tenant_ticket_email(v_t, 'TENANT_TICKET_STATUS');
-    perform public.write_audit(v_t.tenant_id, 'close_resolved_tenant_tickets', 'tenant_support_tickets',
+    perform public.write_audit(null, 'close_resolved_tenant_tickets', 'tenant_support_tickets',
                                v_t.id::text, jsonb_build_object('status', 'RESOLVED'),
                                jsonb_build_object('status', 'CLOSED'), null, 'CRON', null);
   end loop;

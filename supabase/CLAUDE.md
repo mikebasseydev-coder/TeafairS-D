@@ -1236,7 +1236,8 @@ and uses the A6 CSM role).
   `update_tenant_ticket_status` (the assignee or an operator; A3's
   transitions). An assignee who is no longer ACTIVE counts as unassigned.
   A ticket outside the caller's JWT tenant is P0001 "ticket not found";
-  operators reach every tenant. The cron `close-resolved-tenant-tickets`
+  operators reach every tenant. **Audit rows are tenant-null** (as A6 R15),
+  because the tenant's ZSMs and TMs read `audit_logs` tenant-wide. The cron `close-resolved-tenant-tickets`
   (00:35) closes RESOLVED tickets after 7 days.
 - **Reads:** the JWT tenant's ACTIVE `TENANT_ADMIN`s and CSMs
   (`my_tenant_ticket_tenant_ids()`) and `MONVELO_OPERATOR`
@@ -1258,10 +1259,15 @@ and uses the A6 CSM role).
   min), sends through Resend with the row id as `Idempotency-Key`, and
   completes each row (`complete_email_outbox`): SENT; RETRY with back-off
   1, 5, 15, 60 min and FAILED after 5 attempts (429, 5xx, network);
-  PERMANENT (400, 403, 422); DEFER (no `WEB_SUPPORT_TICKET_URL`: back in 5
-  min, the attempt given back). Cron `purge-email-outbox` (00:45) deletes
+  PERMANENT (400, 422); DEFER (no `WEB_SUPPORT_TICKET_URL`, or Resend 401/403
+  for a bad key or sender domain: back in 5 min, the attempt given back). Cron `purge-email-outbox` (00:45) deletes
   SENT and FAILED rows after 30 days. The Resend transport now lives in
   `_shared/messaging/resend.ts` (shared with `send-auth-email`).
+- **Migration rule.** The buyer triggers fire on any write. A migration that
+  backfills `support_tickets.status`, or inserts contacts or STAFF messages,
+  must disable `support_tickets_email_status`,
+  `support_ticket_contacts_email_opened` or `support_messages_email_staff_reply`
+  for that statement, or it emails buyers.
 - **The buyer link** is `<WEB_SUPPORT_TICKET_URL>?ref=TK-XXXXXX`; the buyer
   still types the ticket secret on the page. `support-ticket-read` is
   unchanged.

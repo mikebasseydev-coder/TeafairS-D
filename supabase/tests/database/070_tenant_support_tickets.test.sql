@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(71);
+select plan(74);
 
 -- ── fixtures (as postgres), tenant TEAFAIR (T1) plus T2 ─────────────────
 -- 08 TENANT_ADMIN T1 · 09 TENANT_ADMIN T2 · 12 CSM T1 · 13 CSM T1 (INVITED)
@@ -295,6 +295,17 @@ select pg_temp.open_as('d', pg_temp.u(17), pg_temp.t1(), pg_temp.k(19), 'TENANT_
 reset role;
 select is((select count(*)::int from public.email_outbox where source_id = pg_temp.t('d')), 0,
   'an opener with no email enqueues nothing');
+
+-- ── audit rows stay out of the tenant's audit_logs (spec §4.2) ─────────
+select ok((select count(*) from public.audit_logs where entity_type = 'tenant_support_tickets') > 0,
+  'tenant ticket writes are audited');
+select is((select count(*)::int from public.audit_logs
+            where entity_type = 'tenant_support_tickets' and tenant_id is not null), 0,
+  'tenant ticket audit rows are tenant-null');
+select pg_temp.act_as(pg_temp.u(1), pg_temp.t1());
+select is((select count(*)::int from public.audit_logs where entity_type = 'tenant_support_tickets'), 0,
+  'a ZSM reads no tenant ticket audit rows');
+reset role;
 
 select * from finish();
 rollback;

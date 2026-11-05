@@ -23,10 +23,14 @@ type ClaimedRow = { id: string; template: string; to_email: string; payload: Rec
 type Result = "SENT" | "RETRY" | "PERMANENT" | "DEFER";
 
 // Resend will never accept these, so retrying wastes five attempts.
-const PERMANENT_STATUSES = new Set([400, 403, 422]);
+const PERMANENT_STATUSES = new Set([400, 422]);
+// The key or the sender domain is wrong: the deployment is misconfigured, not
+// the email. Wait without spending attempts, as for a missing ticket URL.
+const CONFIG_STATUSES = new Set([401, 403]);
 
 function classify(e: unknown): Result {
   if (e instanceof EmailDeliveryError && PERMANENT_STATUSES.has(e.status)) return "PERMANENT";
+  if (e instanceof EmailDeliveryError && CONFIG_STATUSES.has(e.status)) return "DEFER";
   return "RETRY";
 }
 
@@ -52,6 +56,12 @@ export function createEmailOutboxSendHandler(deps: EmailOutboxSendDeps): (req: R
             if (!configLogged) console.error("email-outbox-send: WEB_SUPPORT_TICKET_URL is not set; buyer emails wait");
             configLogged = true;
             // a config gap must not spend the row's attempts
+            result = "DEFER";
+          } else if (classify(e) === "DEFER") {
+            if (!configLogged) {
+              console.error(`email-outbox-send: Resend refused the key or sender (HTTP ${(e as EmailDeliveryError).status}); emails wait`);
+            }
+            configLogged = true;
             result = "DEFER";
           } else {
             result = classify(e);
