@@ -16,7 +16,7 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { json } from "../_shared/core/http.ts";
 import { reportError, tagRequest, tagUserId } from "../_shared/core/observability.ts";
-import type { EmailSender } from "./resend.ts";
+import type { EmailSender } from "../_shared/messaging/resend.ts";
 import { type EmailKind, renderEmail } from "./templates.ts";
 
 export type SendAuthEmailConfig = {

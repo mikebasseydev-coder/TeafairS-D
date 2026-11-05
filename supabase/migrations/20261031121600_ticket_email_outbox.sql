@@ -143,7 +143,9 @@ end;
 $$;
 
 -- SENT; RETRY (back off 1, 5, 15, 60 minutes; FAILED after the fifth
--- attempt); PERMANENT (FAILED now: Resend will never accept it). Only a
+-- attempt); PERMANENT (FAILED now: Resend will never accept it); DEFER (the
+-- sender is misconfigured, e.g. no ticket URL: back in 5 minutes and the
+-- attempt is given back, so a config gap never fails an email). Only a
 -- SENDING row moves.
 create or replace function public.complete_email_outbox(p_id uuid, p_result text)
 returns void
@@ -152,15 +154,18 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
-  if p_result is null or p_result not in ('SENT', 'RETRY', 'PERMANENT') then
+  if p_result is null or p_result not in ('SENT', 'RETRY', 'PERMANENT', 'DEFER') then
     raise exception 'unknown result %', p_result using errcode = '22023';
   end if;
   update public.email_outbox o
      set status = case when p_result = 'SENT' then 'SENT'
+                       when p_result = 'DEFER' then 'PENDING'
                        when p_result = 'PERMANENT' or o.attempts >= 5 then 'FAILED'
                        else 'PENDING' end,
+         attempts = case when p_result = 'DEFER' then greatest(o.attempts - 1, 0) else o.attempts end,
          sent_at = case when p_result = 'SENT' then now() else o.sent_at end,
-         next_attempt_at = case when p_result = 'RETRY' and o.attempts < 5
+         next_attempt_at = case when p_result = 'DEFER' then now() + interval '5 minutes'
+                                when p_result = 'RETRY' and o.attempts < 5
                                 then now() + make_interval(mins => (array[1, 5, 15, 60])[greatest(o.attempts, 1)])
                                 else o.next_attempt_at end
    where o.id = p_id and o.status = 'SENDING';

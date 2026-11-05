@@ -2,7 +2,7 @@ import { hookVerifierFromEnv } from "../_shared/auth/hook.ts";
 import { requireEnv } from "../_shared/core/env.ts";
 import { observe } from "../_shared/core/observability.ts";
 import { createSendAuthEmailHandler } from "./handler.ts";
-import { resendSender } from "./resend.ts";
+import { resendSender } from "../_shared/messaging/resend.ts";
 
 const verifyHook = hookVerifierFromEnv("SEND_EMAIL_HOOK_SECRET");
 const siteUrl = requireEnv("AUTH_SITE_URL").replace(/\/$/, "");

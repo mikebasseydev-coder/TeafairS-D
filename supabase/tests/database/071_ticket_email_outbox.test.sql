@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(42);
+select plan(43);
 
 -- ── fixtures (as postgres): TEAFAIR, one ZSM ────────────────────────────
 insert into auth.users (id, phone, phone_confirmed_at) values
@@ -182,6 +182,12 @@ select is((select status from public.email_outbox where id = (select id from ids
 select public.complete_email_outbox((select id from ids where n = 'stale'), 'PERMANENT');
 select is((select status from public.email_outbox where id = (select id from ids where n = 'stale')), 'FAILED',
   'PERMANENT is FAILED at once');
+update public.email_outbox set status = 'SENDING', attempts = 2 where id = (select id from ids where n = 'p1');
+select public.complete_email_outbox((select id from ids where n = 'p1'), 'DEFER');
+select ok((select status = 'PENDING' and attempts = 1
+                  and next_attempt_at between now() + interval '299 seconds' and now() + interval '301 seconds'
+             from public.email_outbox where id = (select id from ids where n = 'p1')),
+  'DEFER waits 5 minutes and gives the attempt back');
 select public.complete_email_outbox((select id from ids where n = 'future'), 'SENT');
 select is((select status from public.email_outbox where id = (select id from ids where n = 'future')), 'PENDING',
   'completing a row that is not SENDING does nothing');

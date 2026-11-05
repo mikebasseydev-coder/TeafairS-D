@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { hookResultCode } from "../_shared/auth/hook.ts";
 import { createSendAuthEmailHandler, safeRedirect } from "./handler.ts";
-import { type Email, EmailDeliveryError, resendSender } from "./resend.ts";
+import { type Email, EmailDeliveryError, resendSender } from "../_shared/messaging/resend.ts";
 
 const USER = "20000000-0000-0000-0000-000000000003";
 const SITE = "https://teafair.example";

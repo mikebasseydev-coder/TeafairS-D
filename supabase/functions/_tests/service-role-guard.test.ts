@@ -19,6 +19,7 @@ const SERVICE_RPC: Record<string, string> = {
   "reconcile-funds": "system: x-cron-secret (constant time)",
   "web-commission-release": "system: x-cron-secret (constant time)",
   "storage-purge": "system: x-cron-secret (constant time)",
+  "email-outbox-send": "system: x-cron-secret (constant time)",
   "storefront-catalogue": "public: read-only, CORS-limited",
   "storefront-locations": "public: read-only, CORS-limited",
   "storefront-refund-policy": "public: read-only, CORS-limited",
