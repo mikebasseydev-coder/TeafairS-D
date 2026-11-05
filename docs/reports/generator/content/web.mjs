@@ -17,7 +17,7 @@ export function buildWeb(r, s) {
   ]);
   r.table(['Surface', 'Users', 'Auth', 'Backend path'], [
     ['**Teafairweb storefront**', 'anonymous consumers', 'none; Turnstile and a WhatsApp phone check at checkout', 'public gateways → service_role RPCs'],
-    ['**Tenant operations console**', 'ZSM, TM, CSM, LOGISTICS_MANAGER, TENANT_ADMIN (read-only), warehouse staff', 'Supabase Auth session, active tenant in the JWT', 'PostgREST `rpc()` and user gateways with the user\'s JWT'],
+    ['**Tenant operations console**', 'ZSM, TM, CSM, LOGISTICS_MANAGER, TENANT_ADMIN (read-only except support tickets), warehouse staff', 'Supabase Auth session, active tenant in the JWT', 'PostgREST `rpc()` and user gateways with the user\'s JWT'],
     ['**Monvelo console**', 'MONVELO_OPERATOR, MONVELO_FINANCE; PLATFORM_SUPER_ADMIN', 'Supabase Auth, platform role checked live', '`monvelo_*` RPCs only'],
   ], { widths: [0.22, 0.26, 0.26, 0.26], caption: 'Web surfaces and their trust boundaries.' });
   r.h2('Key audit findings');
@@ -62,7 +62,7 @@ export function buildWeb(r, s) {
     ['checkout-phone-verify-start / -confirm', 'POST', 'Turnstile, then a WhatsApp code; returns the single-use verification token (30 min)', 'none'],
     ['web-checkout', 'POST', 'Quote, initialise Paystack, place the order; replay returns the original URL', 'none'],
     ['web-order-status', 'POST', 'Callback page status for a matching (public_reference, paystack_reference) pair', 'none'],
-    ['support-ticket-open / -read / -message / -attachment', 'POST', 'Buyer support with a (public_reference, secret) capability', 'none'],
+    ['support-ticket-open / -read / -message / -attachment', 'POST', 'Buyer support with a (public_reference, secret) capability. Ticket emails (A7) link to the ticket page with `?ref=TK-…` pre-filled; the buyer still types the secret', 'none'],
   ], { widths: [0.3, 0.12, 0.42, 0.16], mono: [0], caption: 'Public gateways the storefront calls.' });
 
   r.h2('Location: routing and the fare, not pricing');
@@ -105,9 +105,19 @@ export function buildWeb(r, s) {
   r.h2('Isolation model');
   r.bullets([
     '**One session, one active tenant.** The console reads `active_tenant_id` from the JWT and switches with `set_active_tenant`, then refreshes the session. It never passes a tenant id to an RPC (the only exceptions are platform-admin calls such as `appoint_zone_manager`).',
-    '**Reads** go through RLS `FOR SELECT` policies and `my_*_ids()` helpers. A ZSM sees the zones they cover (§18.3). TENANT_ADMIN is read-only: every write RPC refuses it with 42501, so the console hides write controls for that role and still handles the 42501.',
+    '**Reads** go through RLS `FOR SELECT` policies and `my_*_ids()` helpers. A ZSM sees the zones they cover (§18.3). TENANT_ADMIN is read-only: every write RPC refuses it with 42501, so the console hides write controls for that role and still handles the 42501. The one exception (A7) is support: a TENANT_ADMIN opens tickets and replies on them.',
     '**Writes that change a tenant agreement cite a contact-report decision** ("zero backdoors", A6 §16): catalogue (`CATALOGUE`), stock (`STOCK`), brand terms, settings and fees, and operational state (`DISTRIBUTION`). Every such form has a required "Decision" picker listing citable decisions: current, ZSM-reviewed and hard-copied.',
   ]);
+  r.h2('Tenant support tickets (A7)');
+  r.p('A TENANT_ADMIN raises a `TS-` ticket to the CSM of the tenant. When the tenant has exactly one ACTIVE CSM the ticket is assigned to them; otherwise it waits in the MONVELO_OPERATOR pool. Every CSM of the tenant reads its tickets; only the assigned CSM or an operator replies for Teafair or changes the status. The tables are `tenant_support_tickets` and `tenant_support_ticket_messages`, readable only in the JWT tenant (and by operators).');
+  r.table(['Action', 'Who', 'Call'], [
+    ['Open (settlement discrepancy, stock shortage, onboarding issue, general inquiry)', 'TENANT_ADMIN', s.sig('open_tenant_ticket')],
+    ['Reply (a tenant reply reopens a RESOLVED ticket; CLOSED refuses)', 'TENANT_ADMIN, the assigned CSM, MONVELO_OPERATOR', s.sig('reply_tenant_ticket')],
+    ['Claim an unassigned ticket / hand it back', 'a CSM of the tenant / the assigned CSM', '`claim_tenant_ticket`, `release_tenant_ticket`'],
+    ['Assign to a CSM of the tenant, or back to the pool', 'MONVELO_OPERATOR', s.sig('assign_tenant_ticket')],
+    ['Resolve or close (auto-close 7 days after RESOLVED)', 'the assigned CSM, MONVELO_OPERATOR', s.sig('update_tenant_ticket_status')],
+  ], { widths: [0.38, 0.22, 0.4], mono: [2], size: 8.3 });
+  r.p('Ticket emails go through `email_outbox`, written in the same transaction and sent every minute by the cron function `email-outbox-send` (Resend). The person who opened the ticket gets an email on opening, on a Teafair reply and on RESOLVED or CLOSED, at their profile email. No email carries a message body or a ticket secret.');
   r.h2('Contact reports (the source of truth)');
   r.table(['Step', 'Who', 'Call'], [
     ['File the report (attendees, decisions, recipients); corrections supersede', 'CSM', s.sig('file_contact_report')],

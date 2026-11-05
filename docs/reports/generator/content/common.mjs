@@ -11,7 +11,7 @@ export function baselineSection(r, s, { audience }) {
     ['pgTAP coverage', `${s.tests.assertions.toLocaleString('en-US')} assertions in ${s.tests.files} files`],
     ['Edge Functions', `${s.edgeFunctions.length} gateways in supabase/functions`],
     ['Scheduled jobs (pg_cron)', `${s.cron.size} active jobs`],
-    ['Governing documents', 'Spec A (2026-10-05) and addenda A1–A6, including A6 §19.4–§22 (2026-11-02 to 2026-11-03) and the deferred minors of 2026-11-04'],
+    ['Governing documents', 'Spec A (2026-10-05) and addenda A1–A7, including A6 §19.4–§22 (2026-11-02 to 2026-11-03), the deferred minors of 2026-11-04 and A7 tenant support tickets and ticket emails (2026-11-05)'],
     ['Deployment state', 'The remote project holds the 29 migrations to 20261015130200 (A1, A2). Everything after, including all of Monvelo, is built and tested locally and is not pushed.'],
     ['Audience', audience],
   ]);

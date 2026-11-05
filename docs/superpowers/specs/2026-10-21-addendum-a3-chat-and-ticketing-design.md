@@ -358,6 +358,8 @@ buyer message → resolve → close.
 - Attachments and file storage.
 - The website chat widget and the staff app screens (Spec B hold).
 - Email or SMS notifications to buyers (they poll; no outbound channel).
+  *Email lifted by addendum A7 (2026-11-05): buyers get an email with the
+  reference and a pre-filled ticket link, never the secret. SMS stays out.*
 - Support for POS (`POS_AGENT`) orders, which have no Paystack reference to
   pair with — the buyer uses a pre-purchase ticket until D2.
 - SLAs, auto-assignment rotas, canned replies, satisfaction ratings.

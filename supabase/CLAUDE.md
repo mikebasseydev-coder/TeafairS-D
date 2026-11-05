@@ -31,6 +31,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) §21 limits ₦1,000,000 / ₦3,000,000 and the agent exposure meter RPC | done (local) |
 | Monvelo (A6) §22 field agents (ZSA, ASA) decide holds; the ZSM oversees | done (local) |
 | Monvelo deferred minors: live supply-day end, zone-scoped ZSM nomination reads | done (local) |
+| A7. Tenant support tickets and ticket emails (outbox, `email-outbox-send`) | done (local) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -816,7 +817,7 @@ rulings is in `.superpowers/sdd/` (git-ignored).
   house; appointed by a `PLATFORM_SUPER_ADMIN` with
   `appoint_client_service_manager`, one membership per tenant served),
   `TENANT_ADMIN` (the tenant's read-only login; every write RPC refuses it with
-  42501), `LOGISTICS_MANAGER` (Teafair staff under the CSM; dispatches and
+  42501, except the A7 support-ticket RPCs), `LOGISTICS_MANAGER` (Teafair staff under the CSM; dispatches and
   reads FUNDED financings).
 - **Contact reports are the source of truth.** The CSM files an insert-only
   report (`file_contact_report`) with attendees, decisions and recipients;
@@ -1210,6 +1211,68 @@ calls, as amended, and the material rulings are recorded in A6 §19.
   mismatch, dispatch, the delivery code, a part repayment, the late charge and
   REPAID_LATE, and the TENANT_ADMIN's reads. It moves time as postgres through
   `DB_URL`.
+
+### Addendum A7 (tenant support tickets and ticket emails)
+
+Migrations `20261031121500_tenant_support_tickets` and
+`20261031121600_ticket_email_outbox`, pgTAP 070 and 071, the function
+`email-outbox-send`, local only (branch `feature/addendum-a7-tenant-support`).
+The spec is `docs/superpowers/specs/2026-11-05-addendum-a7-tenant-support-and-ticket-emails-design.md`.
+**A7 deploys after A3, A5 and A6 Step 1c** (it adds triggers to A3's tables
+and uses the A6 CSM role).
+
+- **Tenant tickets** (`tenant_support_tickets`, `tenant_support_ticket_messages`;
+  `TS-` references; categories `TENANT_SETTLEMENT_DISCREPANCY`,
+  `TENANT_STOCK_SHORTAGE`, `TENANT_ONBOARDING_ISSUE`, `TENANT_GENERAL_INQUIRY`).
+  A `TENANT_ADMIN` opens and replies: **the one write exception to A6 §16**
+  (user, 2026-11-05). The ticket is assigned to the tenant's CSM when it has
+  exactly one ACTIVE CSM, otherwise it waits for the `MONVELO_OPERATOR` pool.
+- **RPCs** (`authenticated`): `open_tenant_ticket` (TENANT_ADMIN),
+  `reply_tenant_ticket` (the tenant's admin, the live assigned CSM, an
+  operator; a tenant reply reopens RESOLVED, CLOSED refuses),
+  `claim_tenant_ticket` (a CSM of the tenant, only while there is no live
+  assignee), `release_tenant_ticket` (the assignee), `assign_tenant_ticket`
+  (operator; an ACTIVE CSM of the ticket's tenant, or null),
+  `update_tenant_ticket_status` (the assignee or an operator; A3's
+  transitions). An assignee who is no longer ACTIVE counts as unassigned.
+  A ticket outside the caller's JWT tenant is P0001 "ticket not found";
+  operators reach every tenant. The cron `close-resolved-tenant-tickets`
+  (00:35) closes RESOLVED tickets after 7 days.
+- **Reads:** the JWT tenant's ACTIVE `TENANT_ADMIN`s and CSMs
+  (`my_tenant_ticket_tenant_ids()`) and `MONVELO_OPERATOR`
+  (`is_monvelo_operator()`). ZSMs, TMs, LMs and other tenants read nothing.
+- **The email outbox** (`email_outbox`; RLS on, no policy, no grant). Rows are
+  written in the transaction that caused them. Tenant emails come from the
+  tenant RPCs (opened, Teafair reply, RESOLVED/CLOSED) and go to the opener's
+  `profiles.email`. **Buyer emails come from triggers** on A3's tables
+  (contact insert, STAFF message insert, status to RESOLVED/CLOSED), so a
+  replay enqueues nothing and the A3 RPCs are unchanged. SYSTEM tickets and
+  redacted contacts get none. Redaction deletes the ticket's PENDING/SENDING
+  rows and nulls the address on the rest. **Payloads carry the reference
+  (and status, subject, category), never a message body or the ticket
+  secret.**
+- **The sender.** Cron `email-outbox-send` (every minute, `pg_net`, the
+  `functions_base_url` and `cron_secret` Vault secrets) calls the system
+  function, which checks `x-cron-secret`, claims up to 50 rows
+  (`claim_email_outbox`, SKIP LOCKED; a SENDING row is reclaimed after 10
+  min), sends through Resend with the row id as `Idempotency-Key`, and
+  completes each row (`complete_email_outbox`): SENT; RETRY with back-off
+  1, 5, 15, 60 min and FAILED after 5 attempts (429, 5xx, network);
+  PERMANENT (400, 403, 422); DEFER (no `WEB_SUPPORT_TICKET_URL`: back in 5
+  min, the attempt given back). Cron `purge-email-outbox` (00:45) deletes
+  SENT and FAILED rows after 30 days. The Resend transport now lives in
+  `_shared/messaging/resend.ts` (shared with `send-auth-email`).
+- **The buyer link** is `<WEB_SUPPORT_TICKET_URL>?ref=TK-XXXXXX`; the buyer
+  still types the ticket secret on the page. `support-ticket-read` is
+  unchanged.
+- **Env:** `CRON_SECRET`, `RESEND_API_KEY`, `SUPPORT_EMAIL_FROM` (a
+  Resend-verified sender), `WEB_SUPPORT_TICKET_URL`, optional
+  `RESEND_API_URL` (tests). `verify_jwt = false` in `config.toml`; listed in
+  the Ruling 46 guard as `system: x-cron-secret`.
+- **Deploy notes.** Set the four secrets, then deploy `email-outbox-send`
+  before pushing `20261031121600` (otherwise the cron job posts to a missing
+  function every minute; rows wait, nothing is lost). The teafairweb ticket
+  page must accept `?ref=` and pre-fill the reference.
 
 ### Service-role key standard (Ruling 46, 2026-11-04)
 
