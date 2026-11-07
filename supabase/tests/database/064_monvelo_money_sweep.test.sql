@@ -161,7 +161,7 @@ begin
           jsonb_build_array(jsonb_build_object('sku_code', 'PURERIGIN-COCONUT-OIL-200ML', 'qty', 12)))) ->> 'order_id')::uuid;
   v_f := (public.request_monvelo_financing(pg_temp.k(p_key + 1), v_o) ->> 'financing_id')::uuid;
   perform pg_temp.act_as(pg_temp.u(21), null);
-  perform public.claim_monvelo_financing(pg_temp.k(p_key + 2), v_f, pg_temp.ag());
+  perform public.claim_monvelo_financing(pg_temp.k(p_key + 2), v_f, pg_temp.ag(), (select o.net_yield_bps from public.get_monvelo_offer_cover(v_f, pg_temp.ag()) o));
   v_ref := public.start_monvelo_funding(pg_temp.k(p_key + 3), v_f, pg_temp.ag()) ->> 'reference';
   perform set_config('role', 'postgres', true);
   insert into fin values (p_n, v_f, v_ref);

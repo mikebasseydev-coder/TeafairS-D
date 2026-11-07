@@ -144,7 +144,7 @@ language plpgsql as $$
 declare v jsonb;
 begin
   perform pg_temp.act_as(pg_temp.u(p_agent), null);
-  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent));
+  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f(p_fin), pg_temp.ag(p_agent)) o));
   perform set_config('role', 'postgres', true);
   insert into res values (p_n, v) on conflict (n) do update set r = excluded.r;
   return v;
@@ -177,7 +177,7 @@ select ok(not has_table_privilege('authenticated', 'public.monvelo_financing_cla
 select ok(not has_function_privilege('authenticated', 'public.monvelo_sweep_offers()', 'execute')
       and not has_function_privilege('service_role', 'public.monvelo_sweep_offers()', 'execute'),
   'no API role can run the sweep');
-select ok(has_function_privilege('authenticated', 'public.claim_monvelo_financing(uuid,uuid,uuid)', 'execute')
+select ok(has_function_privilege('authenticated', 'public.claim_monvelo_financing(uuid,uuid,uuid,integer)', 'execute')
       and has_function_privilege('authenticated', 'public.monvelo_open_offers(uuid)', 'execute')
       and not has_function_privilege('anon', 'public.monvelo_open_offers(uuid)', 'execute'),
   'claim and open offers are for signed-in members');
@@ -191,10 +191,10 @@ select pg_temp.raise('A', 100, 3);
 select ok((select preferred_agent_id = pg_temp.ag(21) and preferred_window_ends_at > now()
              from public.monvelo_financings where id = pg_temp.f('A')), 'fixture: P has the window on A');
 select pg_temp.act_as(pg_temp.u(22), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(110), pg_temp.f('A'), pg_temp.ag(22))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(110), pg_temp.f('A'), pg_temp.ag(22), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('A'), pg_temp.ag(22)) o))$$,
   'P0001', pg_temp.claim_msg('A'), 'N cannot claim during P''s window; the message names the Lagos time');
 select pg_temp.act_as(pg_temp.u(28), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(111), pg_temp.f('A'), pg_temp.ag(21))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(111), pg_temp.f('A'), pg_temp.ag(21), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('A'), pg_temp.ag(21)) o))$$,
   '42501', null, 'a non-member cannot claim for P');
 select throws_ok($$select * from public.monvelo_open_offers(pg_temp.ag(21))$$,
   '42501', null, 'nor read P''s open offers');
@@ -208,7 +208,7 @@ select is((select row(claimed_by_agent_id = pg_temp.ag(21), claimed_by = pg_temp
              from public.monvelo_financings where id = pg_temp.f('A')),
   '(t,t,t,t)', 'the claim fields are set and the window is cleared');
 select pg_temp.act_as(pg_temp.u(21), null);
-select is(public.claim_monvelo_financing(pg_temp.k(112), pg_temp.f('A'), pg_temp.ag(21)), (select r from res where n = 'PA'),
+select is(public.claim_monvelo_financing(pg_temp.k(112), pg_temp.f('A'), pg_temp.ag(21), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('A'), pg_temp.ag(21)) o)), (select r from res where n = 'PA'),
   'P''s replay returns the same response');
 reset role;
 select is((select count(*)::int from public.audit_logs where operation = 'claim_monvelo_financing'
@@ -217,7 +217,7 @@ select is((select count(*)::int from public.audit_logs where operation = 'claim_
 
 -- ── one at a time ───────────────────────────────────────────────────────
 select pg_temp.act_as(pg_temp.u(22), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(120), pg_temp.f('A'), pg_temp.ag(22))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(120), pg_temp.f('A'), pg_temp.ag(22), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('A'), pg_temp.ag(22)) o))$$,
   'P0001', 'this request is no longer open', 'N cannot claim a claimed request');
 reset role;
 select is((select count(*)::int from public.monvelo_financing_claims where outcome is null and financing_id in (select id from fin)), 1,
@@ -237,7 +237,7 @@ select ok((select source = 'CRON' and teafair_agent_id = pg_temp.u(4) from publi
             where operation = 'monvelo_sweep_offers' and entity_id = pg_temp.f('A')::text limit 1),
   'the sweep audits as CRON on the raiser');
 select pg_temp.act_as(pg_temp.u(21), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(130), pg_temp.f('A'), pg_temp.ag(21))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(130), pg_temp.f('A'), pg_temp.ag(21), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('A'), pg_temp.ag(21)) o))$$,
   'P0001', 'your claim on this request lapsed; another agent may claim it', 'P cannot re-claim after its claim lapsed');
 reset role;
 select lives_ok($$select pg_temp.claim('NA', 131, 22, 'A')$$, 'N claims once the window is gone');
@@ -252,19 +252,19 @@ update public.monvelo_financings set preferred_window_ends_at = now() - interval
 select lives_ok($$select pg_temp.claim('CC', 210, 25, 'C')$$, 'C claims C (12000 of its 20000 pledge)');
 select lives_ok($$select pg_temp.claim('DD', 211, 27, 'D')$$, 'D claims D (12000 of its 20000 daily cap)');
 select pg_temp.act_as(pg_temp.u(23), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(212), pg_temp.f('B'), pg_temp.ag(23))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(212), pg_temp.f('B'), pg_temp.ag(23), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('B'), pg_temp.ag(23)) o))$$,
   'P0001', 'this shop is outside your area', 'F, 5 km away, is outside the radius');
 select pg_temp.act_as(pg_temp.u(24), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(213), pg_temp.f('B'), pg_temp.ag(24))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(213), pg_temp.f('B'), pg_temp.ag(24), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('B'), pg_temp.ag(24)) o))$$,
   'P0001', 'pledge enough funds for this area and day first', 'X has no pledge');
 select pg_temp.act_as(pg_temp.u(25), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(214), pg_temp.f('B'), pg_temp.ag(25))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(214), pg_temp.f('B'), pg_temp.ag(25), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('B'), pg_temp.ag(25)) o))$$,
   'P0001', 'pledge enough funds for this area and day first', 'C''s pledge is committed to its other CLAIMED financing');
 select pg_temp.act_as(pg_temp.u(26), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(215), pg_temp.f('B'), pg_temp.ag(26))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(215), pg_temp.f('B'), pg_temp.ag(26), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('B'), pg_temp.ag(26)) o))$$,
   'P0001', 'this request is above your per-financing cap', 'K''s per-financing cap is 10000');
 select pg_temp.act_as(pg_temp.u(27), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(216), pg_temp.f('B'), pg_temp.ag(27))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(216), pg_temp.f('B'), pg_temp.ag(27), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('B'), pg_temp.ag(27)) o))$$,
   'P0001', 'this request would pass your daily cap', 'D''s claimed 12000 + 12000 passes its 20000 daily cap');
 
 -- ── open offers ─────────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ update public.stock_reservations set expires_at = now() - interval '1 second' wh
 set local session_replication_role = origin;
 select is(public.stock_reservation_sweep(), 1, 'fixture: the stock sweep cancels H''s trade order');
 select pg_temp.act_as(pg_temp.u(22), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(310), pg_temp.f('H'), pg_temp.ag(22))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(310), pg_temp.f('H'), pg_temp.ag(22), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('H'), pg_temp.ag(22)) o))$$,
   'P0001', 'this request is no longer open', 'a request whose trade order is cancelled cannot be claimed');
 reset role;
 
@@ -346,7 +346,7 @@ select is(public.monvelo_sweep_offers(), '{"lapsed": 0, "expired": 0}'::jsonb, '
 select pg_temp.raise('P', 400, 3);
 select pg_temp.walk('P', 'DEFAULTED_WITH_LATE_CHARGE', now() - interval '31 days');
 select pg_temp.act_as(pg_temp.u(22), null);
-select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(410), pg_temp.f('B'), pg_temp.ag(22))$$,
+select throws_ok($$select public.claim_monvelo_financing(pg_temp.k(410), pg_temp.f('B'), pg_temp.ag(22), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f('B'), pg_temp.ag(22)) o))$$,
   'P0001', 'the shop has an overdue Monvelo financing; no new credit on the platform until it is cleared',
   'an open request for a frozen shop cannot be claimed');
 select is((select count(*)::int from public.monvelo_open_offers(pg_temp.ag(22)) where financing_id = pg_temp.f('B')), 0,

@@ -156,10 +156,10 @@ select is(public.monvelo_supply_day_ended(public.monvelo_today() - 1), true, 'ye
 select is(public.monvelo_supply_day_ended(null), true, 'a missing supply date counts as ended (fail closed)');
 
 select pg_temp.act_as(pg_temp.u(31), pg_temp.t1());
-select throws_ok(format($$select public.claim_monvelo_financing(%L, %L, %L)$$, pg_temp.k(1), pg_temp.f('F1'), pg_temp.agent()),
+select throws_ok(format($$select public.claim_monvelo_financing(%L, %L, %L, (select o.net_yield_bps from public.get_monvelo_offer_cover(%L, %L) o))$$, pg_temp.k(1), pg_temp.f('F1'), pg_temp.agent(), pg_temp.f('F1'), pg_temp.agent()),
   'P0001', 'this request''s supply day has ended',
   'a claim on yesterday''s request still OFFERED (the sweep has not run) is refused at once');
-select throws_ok(format($$select public.claim_monvelo_financing(%L, %L, %L)$$, pg_temp.k(2), pg_temp.f('F2'), pg_temp.agent()),
+select throws_ok(format($$select public.claim_monvelo_financing(%L, %L, %L, (select o.net_yield_bps from public.get_monvelo_offer_cover(%L, %L) o))$$, pg_temp.k(2), pg_temp.f('F2'), pg_temp.agent(), pg_temp.f('F2'), pg_temp.agent()),
   'P0001', 'pledge enough funds for this area and day first',
   'today''s request passes the supply-day check and meets the next one');
 reset role;

@@ -220,7 +220,7 @@ language plpgsql as $$
 declare v jsonb;
 begin
   perform pg_temp.act_as(pg_temp.u(p_agent), null);
-  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent));
+  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f(p_fin), pg_temp.ag(p_agent)) o));
   perform set_config('role', 'postgres', true);
   return v;
 end; $$;
@@ -368,7 +368,7 @@ select is(pg_temp.remaining(21) || ':' || pg_temp.exposure(21), '404000.00:96000
 update public.monvelo_agents set per_financing_cap = 50000, daily_cap = 90000 where id = pg_temp.ag(21);
 select pg_temp.raise('DC', 220, 2, 'PURERIGIN-COCONUT-OIL-200ML', 12);
 select pg_temp.act_as(pg_temp.u(21), null);
-select throws_ok(format('select public.claim_monvelo_financing(%L, %L, %L)', pg_temp.k(222), pg_temp.f('DC'), pg_temp.ag(21)),
+select throws_ok(format('select public.claim_monvelo_financing(%L, %L, %L, (select o.net_yield_bps from public.get_monvelo_offer_cover(%L, %L) o))', pg_temp.k(222), pg_temp.f('DC'), pg_temp.ag(21), pg_temp.f('DC'), pg_temp.ag(21)),
   'P0001', 'this request would pass your daily cap', 'fixture: RD and RE fill P''s daily cap');
 reset role;
 

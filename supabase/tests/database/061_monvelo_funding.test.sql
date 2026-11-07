@@ -155,7 +155,7 @@ language plpgsql as $$
 declare v jsonb;
 begin
   perform pg_temp.act_as(pg_temp.u(p_agent), null);
-  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent));
+  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f(p_fin), pg_temp.ag(p_agent)) o));
   perform set_config('role', 'postgres', true);
   return v;
 end; $$;
@@ -583,8 +583,11 @@ select is(pg_temp.settle('SK1', 'charge.success', 'K11', 'success', 4800000, pg_
 select is(pg_temp.flags('K1') || ':' || pg_temp.reason('K1'), '1:ORDER_NOT_PENDING', 'one flag, ORDER_NOT_PENDING');
 select is(pg_temp.state('K1'), (select s from st where n = 'K1'), 'financing, pledge and order unchanged');
 
--- the terms were withdrawn between the claim and the payment
+-- A8 §6.2: a live claim locks the terms, so a withdrawal after it no longer
+-- stops the funding (074). The late route (the claim lapsed) quotes at
+-- funding: the terms were withdrawn after the claim lapsed
 select pg_temp.ready('K2', 510);
+select pg_temp.lapse('K2');
 set local session_replication_role = replica;
 update public.monvelo_brand_terms set status = 'WITHDRAWN' where tenant_id = pg_temp.t1() and brand = 'Purerigin';
 set local session_replication_role = origin;

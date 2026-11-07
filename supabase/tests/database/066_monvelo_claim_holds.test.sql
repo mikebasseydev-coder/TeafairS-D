@@ -204,12 +204,12 @@ language plpgsql as $$
 declare v jsonb;
 begin
   perform pg_temp.act_as(pg_temp.u(p_agent), null);
-  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent));
+  v := public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f(p_fin), pg_temp.ag(p_agent)) o));
   perform set_config('role', 'postgres', true);
   return v;
 end; $$;
 create function pg_temp.claim_sql(p_key integer, p_agent integer, p_fin text) returns text language sql as $$
-  select format('select public.claim_monvelo_financing(%L, %L, %L)', pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent)) $$;
+  select format('select public.claim_monvelo_financing(%L, %L, %L, (select o.net_yield_bps from public.get_monvelo_offer_cover(%L, %L) o))', pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent), pg_temp.f(p_fin), pg_temp.ag(p_agent)) $$;
 grant execute on function pg_temp.claim_sql(integer, integer, text) to authenticated;
 
 -- ── shape and security ──────────────────────────────────────────────────

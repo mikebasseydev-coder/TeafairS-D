@@ -157,7 +157,7 @@ create function pg_temp.claim(p_key integer, p_agent integer, p_fin text) return
 language plpgsql as $$
 begin
   perform pg_temp.act_as(pg_temp.u(p_agent), null);
-  perform public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent));
+  perform public.claim_monvelo_financing(pg_temp.k(p_key), pg_temp.f(p_fin), pg_temp.ag(p_agent), (select o.net_yield_bps from public.get_monvelo_offer_cover(pg_temp.f(p_fin), pg_temp.ag(p_agent)) o));
   perform set_config('role', 'postgres', true);
 end; $$;
 -- P claims, starts the payment, and P's own transfer settles it: FUNDED, order PAID

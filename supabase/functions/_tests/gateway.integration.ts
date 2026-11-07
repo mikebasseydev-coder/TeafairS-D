@@ -1351,8 +1351,15 @@ Deno.test({
     const offer = offers.find((o) => o.financing_id === requested.financing_id);
     assert(offer, JSON.stringify(offers));
     assert(!/owner|phone/i.test(Object.keys(offer).join(",")), "no owner details in an offer");
+    // A8 §6.2: the agent reads its quoted yield, then claims acknowledging it
+    const quote = await must(lender.db.rpc("get_monvelo_offer_cover", {
+      p_financing_id: requested.financing_id, p_agent_id: agent.id,
+    })) as { cover_label: string; net_yield_bps: number }[];
+    assertEquals(quote.length, 1, JSON.stringify(quote));
+    assert(!/policy|shop/i.test(Object.keys(quote[0]).join(",")), "no policy details in a quote");
     const claimed = await must(lender.db.rpc("claim_monvelo_financing", {
       p_idempotency_key: crypto.randomUUID(), p_financing_id: requested.financing_id, p_agent_id: agent.id,
+      p_expected_net_yield_bps: quote[0].net_yield_bps,
     })) as { status: string; principal: number };
     assertEquals([claimed.status, Number(claimed.principal)], ["CLAIMED", Number(order.total_amount)]);
     claimedMv = {
@@ -1450,8 +1457,12 @@ Deno.test({
       p_idempotency_key: crypto.randomUUID(), p_order_id: order2.order_id,
     })) as { financing_id: string; status: string };
     assertEquals(fin2.status, "OFFERED");
+    const quote2 = await must(lender.db.rpc("get_monvelo_offer_cover", {
+      p_financing_id: fin2.financing_id, p_agent_id: mv.agentId,
+    })) as { net_yield_bps: number }[];
     await must(lender.db.rpc("claim_monvelo_financing", {
       p_idempotency_key: crypto.randomUUID(), p_financing_id: fin2.financing_id, p_agent_id: mv.agentId,
+      p_expected_net_yield_bps: quote2[0].net_yield_bps,
     }));
     const fund2Res = await lender.post("monvelo-fund", { idempotency_key: crypto.randomUUID(), financing_id: fin2.financing_id, agent_id: mv.agentId });
     const fund2 = await fund2Res.json();
