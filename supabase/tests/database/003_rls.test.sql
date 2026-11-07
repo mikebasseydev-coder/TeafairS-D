@@ -98,6 +98,9 @@ select is(
      and t.tablename <> 'monvelo_claim_holds'
      -- A7: the email outbox holds addresses and is touched only by SECURITY DEFINER functions
      and t.tablename <> 'email_outbox'
+     -- A8: the insurer declarations outbox and the insurer webhook events, likewise
+     and t.tablename <> 'monvelo_insurance_declarations'
+     and t.tablename <> 'monvelo_insurer_events'
      and not exists (select 1 from pg_policies p
                      where p.schemaname = 'public' and p.tablename = t.tablename and p.cmd = 'SELECT')),
   0, 'every public table has a SELECT policy');
