@@ -11,7 +11,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(14);
+select plan(16);
 
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
 begin
@@ -372,6 +372,34 @@ select public.monvelo_apply_declaration_outcome(
   'REJECTED', null, 'again', pg_temp.u(9));
 select is((select count(*)::int from public.monvelo_tenant_ledger_entries
             where financing_id = pg_temp.f('H') and entry_type = 'GIT_PREMIUM_REVERSAL'), 1, 'and only once');
+
+-- ── 7. second review of the fix pass (2) ────────────────────────────────
+-- J and K on S2 (agent 22), both delivered before J defaults (a default freezes the shop)
+select pg_temp.delivered('J', 400, 2, 22);
+select pg_temp.delivered('K', 410, 2, 22);
+-- J: past due with an open claim; 47000 then 1000 must not shrink the late charge
+select pg_temp.report('J', 420, 4, 'STORAGE', 'FIRE');
+update public.monvelo_financings set due_at = now() - interval '1 hour' where id = pg_temp.f('J');
+select pg_temp.repay('J', 421, 22, 47000);
+select pg_temp.repay('J', 423, 22, 1000);
+select ok((select late_charge_amount = 4800 and outstanding = 4800 and status = 'DEFAULTED_WITH_LATE_CHARGE'
+             from public.monvelo_financings where id = pg_temp.f('J'))
+          and (select status = 'WITHDRAWN' from public.monvelo_insurance_claims where id = pg_temp.c('J')),
+          'repaying in parts after the due date: the full 10 % charge applies, on what was outstanding at the due date');
+-- K: a repayment recorded but not yet confirmed when the insurer settles
+select pg_temp.report('K', 430, 4, 'STORAGE', 'FIRE');
+update public.monvelo_financing_cover set declared_status = 'ACCEPTED' where financing_id = pg_temp.f('K');
+select pg_temp.op(format('select public.file_monvelo_insurance_claim(pg_temp.k(431), %L)', pg_temp.c('K')));
+select pg_temp.act_as(pg_temp.u(22), null);
+select public.record_monvelo_repayment(pg_temp.k(432), 'test-gw-secret', pg_temp.f('K'), pg_temp.ag(22), 36000);
+reset role;
+select public.settle_monvelo_insurance_claim('MOCK',
+  (select reference from public.monvelo_insurance_claims where id = pg_temp.c('K')), 48000, 'PO-K');
+select ok((select settled_amount = 12000 from public.monvelo_insurance_claims where id = pg_temp.c('K'))
+          and exists (select 1 from public.monvelo_flags where kind = 'CLAIM_OVER_RECOVERY' and financing_id = pg_temp.f('K')
+                                                       and (details ->> 'pending_repayments')::numeric = 36000
+                                                       and (details ->> 'excess')::numeric = 36000),
+          'a pending 36000 repayment counts against the cap: 12000 recognised, 36000 flagged');
 
 select * from finish();
 rollback;
