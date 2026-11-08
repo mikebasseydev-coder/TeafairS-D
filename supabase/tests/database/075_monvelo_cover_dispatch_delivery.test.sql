@@ -13,6 +13,9 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(23);
 
+-- A8 fix pass: this file's MOCK insurer counts as an underwriter (mock insurers allowed here)
+update public.monvelo_platform_settings set allow_mock_insurers = true;
+
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
 begin
   insert into public.inventory_batches (tenant_id, warehouse_id, sku_code, batch_number, quantity)

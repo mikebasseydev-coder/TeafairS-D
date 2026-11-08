@@ -683,3 +683,74 @@ Migration split and names, index choices, the exact message wording, the
 retry schedule constants, the bucket's size and MIME limits (follow
 `contact-report-upload`), and the notification kinds' payload shapes beyond
 what §7.1 fixes.
+
+
+## 15. Pre-underwriter operating policy and the pre-merge fixes (user, 2026-11-08)
+
+### 15.1 Monvelo runs before an underwriter is signed
+
+Monvelo may launch and build a track record before a licensed underwriter is
+integrated. Until one is live:
+
+- **No premium is charged.** No STORAGE premium comes out of an agent's
+  rebate, and no GIT premium is billed to a tenant.
+- **No declaration is sent.**
+- **The quote is `NONE`.** The agent sees "No cover" and the full rebate
+  (§6.4).
+
+"Live" means an APPROVED product of an ACTIVE insurer that underwrites
+(`monvelo_insurer_underwrites`). A MANUAL insurer underwrites: it is a real
+insurer whose declarations an operator handles by hand. A MOCK insurer does
+not. Its products count only where `monvelo_platform_settings.allow_mock_insurers`
+is true (local and staging). The setting defaults to false and stays false in
+production.
+
+### 15.2 Onboarding terms: the clause users sign (wording for counsel)
+
+The system records no versioned onboarding terms for agents or tenants today.
+Shops sign only the data-sharing consent `MV-SHARE-2026-10`. Recording each
+signature needs its own small change, and that change is not built:
+
+- for an agent, a terms version and an acceptance time on `monvelo_agents`,
+  written by `register_monvelo_agent`;
+- for a tenant, a contact-report decision.
+
+Proposed wording, to be settled by counsel before it is used.
+
+**Agent onboarding terms (stock-financing agents):**
+
+> Stock cover. Monvelo may arrange fire and burglary cover for stock you
+> finance, through a licensed insurer. Until such an insurer is live on
+> Monvelo, no cover is in place and no premium is deducted from your rebate.
+> Once an insurer is live, financings you claim from then on are quoted with
+> cover. Where the shop has no verified policy of its own, the premium is
+> deducted from your rebate, and the net yield is shown before you claim.
+> Financings claimed earlier are not changed.
+
+**Tenant (brand) agreement:**
+
+> Goods in transit. If you opt in, Monvelo arranges goods-in-transit cover for
+> financed orders through a licensed insurer, and the premium is billed to your
+> Monvelo ledger at dispatch. Until such an insurer is live on Monvelo, no
+> cover is in place and nothing is billed. If the insurer declines a
+> shipment's cover, the premium is reversed.
+
+### 15.3 The pre-merge fixes (from the fresh review)
+
+1. **A settlement is recognised up to the principal still unpaid.** A
+   repayment made while a STORAGE claim is open lowers `claimed_amount` to the
+   unpaid principal. Anything an insurer pays above that is flagged
+   `CLAIM_OVER_RECOVERY` for recovery and is never credited to the loan.
+2. **A stalled claim can be closed.** An operator closes an open claim with
+   `close_monvelo_insurance_claim` (WITHDRAWN, with a reason). When the
+   insurer rejects a cover declaration, the REPORTED claims waiting on it are
+   rejected with it.
+3. **A claim never buys a late repayment.** A repayment that clears the
+   principal after `due_at` takes the late charge even while a claim is open,
+   and the claim ends. A financing that reaches zero after `due_at` is
+   `REPAID_LATE`, so the shop's limit does not grow.
+4. **One policy's room is spent once.** The cover lock takes the shop row and
+   re-quotes under it. A quote that relied on room a concurrent claim has
+   since used is refused.
+5. **No GIT cover, no GIT charge.** A rejected GIT declaration writes
+   `GIT_PREMIUM_REVERSAL` (+G) to the tenant ledger, once.

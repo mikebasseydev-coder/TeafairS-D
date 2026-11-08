@@ -1283,7 +1283,7 @@ and uses the A6 CSM role).
 
 ### Addendum A8 (Monvelo cover)
 
-Migrations `20261031121700`-`20261031122600`, pgTAP 072-078, the functions
+Migrations `20261031121700`-`20261031122700`, pgTAP 072-079, the functions
 `monvelo-insurance-declare`, `monvelo-insurance-webhook` and
 `monvelo-cover-upload` (and a changed `monvelo-shop-consent` and
 `email-outbox-send`), local only on branch `feature/addendum-a8-monvelo-cover`.
@@ -1371,6 +1371,20 @@ delivery, repayment, sweep and summary functions and uses A7's `email_outbox`).
   that call `serviceRpc()`, and pins the RPCs each may call. `monvelo-cover-upload`
   signs Storage with the secret key (A5 R22, as `contact-report-upload`) and
   still runs its RPC on the caller's JWT.
+- **Pre-underwriter policy (user, 2026-11-08; spec §15).** No premium is
+  charged and no declaration is sent until a live underwriter's product is
+  APPROVED (`monvelo_insurer_underwrites`: an ACTIVE non-MOCK insurer, MANUAL
+  included). A MOCK insurer counts only where
+  `monvelo_platform_settings.allow_mock_insurers` is true: **leave it false in
+  production**; set it true locally or on staging to exercise cover (tests
+  074-079 do so in their own transaction).
+- **Pre-merge fix pass (122700, test 079):** the settlement is capped at the
+  unpaid principal (excess flagged `CLAIM_OVER_RECOVERY`); `claimed_amount`
+  follows repayments; `close_monvelo_insurance_claim` (operator) and a rejected
+  cover end stalled REPORTED claims; a principal-clearing repayment after
+  `due_at` takes the late charge and is never REPAID_WITHIN_WINDOW;
+  `monvelo_lock_cover` locks the shop row and re-quotes; a rejected GIT
+  declaration writes `GIT_PREMIUM_REVERSAL` (+G).
 - **No real insurer.** Adapters are `MOCK` and `MANUAL` only (user decision,
   2026-11-07); `MYCOVER` is allowed by the CHECK but has no adapter (its rows
   retry until an operator acts).

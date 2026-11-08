@@ -9,6 +9,9 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(27);
 
+-- A8 fix pass: this file's MOCK insurer counts as an underwriter (mock insurers allowed here)
+update public.monvelo_platform_settings set allow_mock_insurers = true;
+
 -- A6 Task 6b: placing an order reserves stock. This file is not about stock,
 -- so every ordered line finds ample stock in its order's fulfilment warehouse.
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
