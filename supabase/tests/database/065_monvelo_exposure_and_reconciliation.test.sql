@@ -484,7 +484,8 @@ select is((select count(*)::int from q where j ->> 'agent_id' <> pg_temp.ag(41):
 select is((select j - 'mv_references' from q where (j ->> 'week_start')::date = (select mon from wk)),
   jsonb_build_object('agent_id', pg_temp.ag(41), 'agent_name', 'Lender Q', 'week_start', (select mon from wk),
                      'capital_funded', 108000.00, 'outstanding', 50000.00, 'repaid', 4000.00, 'refunded', 20000.00,
-                     'rebates_owed', 8000.00, 'rebates_paid', 0.00),
+                     'rebates_owed', 8000.00, 'rebates_paid', 0.00,
+                     'closed_by_claim_amount', 0.00, 'late_charge_waived', 0.00),
   'this week''s totals: funded, outstanding, confirmed repayments, refunded, rebates owed and paid');
 select is((select j -> 'mv_references' from q where (j ->> 'week_start')::date = (select mon from wk)),
   pg_temp.refs('Q1', 'Q2', 'Q3', 'Q4', 'Q8'), 'this week''s funding references, sorted, including the second tenant''s');
