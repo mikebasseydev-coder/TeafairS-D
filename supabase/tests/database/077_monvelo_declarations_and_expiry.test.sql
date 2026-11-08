@@ -9,7 +9,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(38);
+select plan(40);
 
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
 begin
@@ -457,6 +457,16 @@ select ok(pg_temp.can(4, pg_temp.t1(), 'CLAIM_EVIDENCE', pg_temp.f('B'))
 select ok(has_function_privilege('authenticated', 'public.can_upload_monvelo_cover(text,uuid)', 'execute')
           and not has_function_privilege('anon', 'public.can_upload_monvelo_cover(text,uuid)', 'execute'),
           'the check is the gateway''s, on the caller''s JWT');
+
+-- ── 13. final review: an operator resolves a FAILED declaration (2) ─────
+select ok((public.complete_monvelo_declaration((select id from d where n = 'X2'), 'ACCEPTED', 'late', null) ->> 'ignored')::boolean,
+          'the declare function cannot reopen a FAILED declaration');
+select pg_temp.act_as(pg_temp.u(9), null);
+select public.record_monvelo_declaration_outcome(pg_temp.k(400), (select id from d where n = 'X2'), 'ACCEPTED', 'POL-BY-HAND');
+reset role;
+select ok((select status = 'ACCEPTED' and insurer_reference = 'POL-BY-HAND'
+             from public.monvelo_insurance_declarations where id = (select id from d where n = 'X2')),
+          'an operator records the insurer''s answer on a FAILED declaration');
 
 select * from finish();
 rollback;

@@ -1283,7 +1283,7 @@ and uses the A6 CSM role).
 
 ### Addendum A8 (Monvelo cover)
 
-Migrations `20261031121700`-`20261031122500`, pgTAP 072-078, the functions
+Migrations `20261031121700`-`20261031122600`, pgTAP 072-078, the functions
 `monvelo-insurance-declare`, `monvelo-insurance-webhook` and
 `monvelo-cover-upload` (and a changed `monvelo-shop-consent` and
 `email-outbox-send`), local only on branch `feature/addendum-a8-monvelo-cover`.
