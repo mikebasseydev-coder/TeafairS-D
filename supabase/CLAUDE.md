@@ -1283,7 +1283,7 @@ and uses the A6 CSM role).
 
 ### Addendum A8 (Monvelo cover)
 
-Migrations `20261031121700`-`20261031122700`, pgTAP 072-079, the functions
+Migrations `20261031121700`-`20261031122900`, pgTAP 072-080, the functions
 `monvelo-insurance-declare`, `monvelo-insurance-webhook` and
 `monvelo-cover-upload` (and a changed `monvelo-shop-consent` and
 `email-outbox-send`), local only on branch `feature/addendum-a8-monvelo-cover`.
@@ -1385,6 +1385,22 @@ delivery, repayment, sweep and summary functions and uses A7's `email_outbox`).
   `due_at` takes the late charge and is never REPAID_WITHIN_WINDOW;
   `monvelo_lock_cover` locks the shop row and re-quotes; a rejected GIT
   declaration writes `GIT_PREMIUM_REVERSAL` (+G).
+- **Fix-pass review (122800):** any repayment confirmed after `due_at` applies
+  the late charge first, on the whole outstanding (an open claim pauses only
+  the sweep); PENDING repayments count against the settlement cap.
+- **Onboarding sign-off (122900, test 080; spec §15.2):** `monvelo_terms_versions`
+  (wording immutable; DRAFT -> PUBLISHED -> RETIRED; the two §15.2 clauses are
+  seeded DRAFT until counsel settles them and a migration publishes them) and
+  insert-only `monvelo_terms_acceptances` (SHA-256 of the text shown).
+  `accept_monvelo_agent_terms` (an ACTIVE member of the agent) and
+  `accept_monvelo_tenant_terms` (the tenant's CSM, citing a MONVELO_SETTINGS
+  decision). Tenants never read an agent's acceptance. **Recorded, not yet
+  enforced:** `monvelo_terms_accepted(audience, agent, tenant)` is the gate to
+  add once the terms are published.
+- **Integration:** `gateway.integration.ts` has an A8 case (upload, declare,
+  webhook); serve the functions with `MONVELO_MOCK_INSURER_SECRET` set, and
+  `db reset` afterwards before `supabase test db` (the run leaves rows that
+  exact-count pgTAP tests trip on).
 - **No real insurer.** Adapters are `MOCK` and `MANUAL` only (user decision,
   2026-11-07); `MYCOVER` is allowed by the CHECK but has no adapter (its rows
   retry until an operator acts).
