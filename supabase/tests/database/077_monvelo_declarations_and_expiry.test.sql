@@ -9,7 +9,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(22);
+select plan(24);
 
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
 begin
@@ -367,6 +367,16 @@ select ok(not has_function_privilege('authenticated', 'public.claim_monvelo_decl
 select ok(exists (select 1 from cron.job where jobname = 'monvelo-shop-policy-sweep' and schedule = '0 5 * * *')
           and exists (select 1 from cron.job where jobname = 'monvelo-declaration-sweep' and schedule = '*/15 * * * *'),
           'the two sweeps are scheduled');
+
+-- ── 10. Task 7: a MANUAL insurer's row waits for the operator (2) ────────
+select public.complete_monvelo_declaration((select id from d where n = 'X3'), 'MANUAL', null, null);
+select ok((select status = 'PENDING' and next_attempt_at = 'infinity'::timestamptz
+             from public.monvelo_insurance_declarations where id = (select id from d where n = 'X3'))
+          and not exists (select 1 from public.claim_monvelo_declarations(50) j where (j ->> 'id')::uuid = (select id from d where n = 'X3')),
+          'MANUAL: back to PENDING, never claimed again, waiting for record_monvelo_declaration_outcome');
+select ok(exists (select 1 from cron.job where jobname = 'monvelo-insurance-declare' and schedule = '* * * * *'
+                                         and command like '%invoke_system_function(''monvelo-insurance-declare''%'),
+          'monvelo-insurance-declare runs every minute');
 
 select * from finish();
 rollback;

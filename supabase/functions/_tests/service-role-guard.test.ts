@@ -20,6 +20,7 @@ const SERVICE_RPC: Record<string, string> = {
   "web-commission-release": "system: x-cron-secret (constant time)",
   "storage-purge": "system: x-cron-secret (constant time)",
   "email-outbox-send": "system: x-cron-secret (constant time)",
+  "monvelo-insurance-declare": "system: x-cron-secret (constant time)",
   "storefront-catalogue": "public: read-only, CORS-limited",
   "storefront-locations": "public: read-only, CORS-limited",
   "storefront-refund-policy": "public: read-only, CORS-limited",
@@ -48,6 +49,14 @@ const STORAGE_SIGNING = new Set([
 // The only Monvelo RPCs reachable with the secret key: the Paystack webhook
 // and the reconcile sweep, after the signature or cron-secret check.
 const SERVICE_MONVELO_RPCS = new Set(["settle_monvelo_funding", "apply_monvelo_refund"]);
+
+// A8 §7.2-§7.3: the insurer functions are system/public functions, not user
+// gateways. Each authenticates its caller first (the cron secret, the
+// insurer's HMAC) and may reach only these RPCs with the secret key. Every
+// other monvelo-* function is a user gateway and never holds the key.
+const MONVELO_SYSTEM: Record<string, string[]> = {
+  "monvelo-insurance-declare": ["claim_monvelo_declarations", "complete_monvelo_declaration"],
+};
 
 function functionDirs(): string[] {
   return [...Deno.readDirSync(root)]
@@ -85,10 +94,20 @@ Deno.test("R46: Storage signing with the secret key is limited to the reviewed f
 });
 
 Deno.test("R46: no Monvelo gateway calls serviceRpc() or signs Storage with the secret key", () => {
-  for (const d of functionDirs().filter((d) => d.startsWith("monvelo-"))) {
+  for (const d of functionDirs().filter((d) => d.startsWith("monvelo-") && !(d in MONVELO_SYSTEM))) {
     const src = sourceOf(d);
     assert(!/\bserviceRpc\b/.test(src), `${d} must run its RPCs on the caller's JWT`);
     assert(!/\bstorageConfigFromEnv\b/.test(src), `${d} must not hold the secret key`);
+  }
+});
+
+Deno.test("R46: the Monvelo insurer functions call only their reviewed RPCs, and sign no Storage", () => {
+  for (const [d, allowed] of Object.entries(MONVELO_SYSTEM)) {
+    const src = sourceOf(d);
+    assert(!/\bstorageConfigFromEnv\b/.test(src), `${d} must not sign Storage`);
+    const calls = [...src.matchAll(/\brpc(?:<[^>]*>)?\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    assert(calls.length > 0, `${d}: no rpc call found`);
+    assertEquals([...new Set(calls)].sort(), [...allowed].sort(), `${d}: review the RPCs, then update MONVELO_SYSTEM`);
   }
 });
 
