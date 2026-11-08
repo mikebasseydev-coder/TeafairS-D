@@ -32,6 +32,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) §22 field agents (ZSA, ASA) decide holds; the ZSM oversees | done (local) |
 | Monvelo deferred minors: live supply-day end, zone-scoped ZSM nomination reads | done (local) |
 | A7. Tenant support tickets and ticket emails (outbox, `email-outbox-send`) | done (local) |
+| A8. Monvelo cover (GIT, stock cover, loss claims, declarations, insurer webhook) | done (local, branch) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -1279,6 +1280,115 @@ and uses the A6 CSM role).
   before pushing `20261031121600` (otherwise the cron job posts to a missing
   function every minute; rows wait, nothing is lost). The teafairweb ticket
   page must accept `?ref=` and pre-fill the reference.
+
+### Addendum A8 (Monvelo cover)
+
+Migrations `20261031121700`-`20261031122500`, pgTAP 072-078, the functions
+`monvelo-insurance-declare`, `monvelo-insurance-webhook` and
+`monvelo-cover-upload` (and a changed `monvelo-shop-consent` and
+`email-outbox-send`), local only on branch `feature/addendum-a8-monvelo-cover`.
+The spec is `docs/superpowers/specs/2026-11-07-addendum-a8-monvelo-cover-design.md`,
+the plan `docs/superpowers/plans/2026-11-07-addendum-a8-monvelo-cover.md`.
+**A8 deploys after A6 Step 3 and A7** (it recreates Step 3's dispatch,
+delivery, repayment, sweep and summary functions and uses A7's `email_outbox`).
+
+- **Two covers.** GIT (goods in transit) is the tenant's, opted into with
+  `monvelo_tenant_settings.git_cover_enabled`: at dispatch, a
+  `monvelo_order_git_cover` row, a GIT premium payable (24 h) and a
+  `GIT_PREMIUM` tenant-ledger line (negative, the Lagos dispatch day), kept on
+  a refund. STORAGE (fire and burglary in the shop) protects the funding
+  agent's capital: a shop with its own VERIFIED policy (with a lender-interest
+  endorsement, enough sum insured across **all** tenants' open principal) pays
+  nothing; otherwise an approved STORAGE product is an auto-policy whose
+  premium (rate per 30-day block) comes out of the agent's rebate. With no
+  approved product the cover is `NONE` and the full rebate is paid.
+- **The quote locks at claim** (§13 call 1, a change to A6). The agent reads
+  `get_monvelo_offer_cover(financing, agent)` (net yield) and claims with
+  `p_expected_net_yield_bps`; a different quote refuses (P0001 "cover changed;
+  review the new yield"). The claim writes `monvelo_financing_cover` and its
+  line rows (the brand terms too); funding pays exactly the locked net rebate.
+  A brand whose rebate is below the premium is refused at request.
+- **The STORAGE payable is created at delivery** (`declared_status` PENDING
+  and a `STORAGE_DECLARE`), so a REFUND_DUE financing never has one.
+- **The declarations outbox** (`monvelo_insurance_declarations`, no API
+  reader): `GIT_DECLARE`, `STORAGE_DECLARE`, `CLAIM_FILE`, written in the
+  transaction that caused them; payloads carry references, amounts and dates,
+  never a person, contact, account (except a CLAIM_FILE payee's settlement
+  account, nested) or lender id (`monvelo_enqueue_declaration` refuses those
+  keys). Cron `monvelo-insurance-declare` (every minute, `pg_net`,
+  `functions_base_url` + `cron_secret`) claims 20 (`claim_monvelo_declarations`),
+  sends each through its insurer's adapter and completes it
+  (`complete_monvelo_declaration`: ACCEPTED, REJECTED, RETRY with 2^n min
+  back-off up to 6 h for 24 h then FAILED + flag, or MANUAL: parked PENDING
+  at `infinity` for `record_monvelo_declaration_outcome`, operator).
+- **A rejected storage declaration** (§6.4): cover REJECTED (the financing
+  continues uncovered; no STORAGE claim), the DUE premium CANCELLED (a PAID one
+  flags `PREMIUM_RECOVERY`), a `monvelo_rebate_topups` row returns the premium
+  to the agent (`record_monvelo_topup_paid`, MONVELO_FINANCE), the agent's
+  members and the operators are told (`MONVELO_COVER_REJECTED`).
+- **Loss claims.** `report_monvelo_loss` (STORAGE: the area's ZSA/ASA or an
+  operator, DELIVERED or DEFAULTED, incident between delivery and due date, for
+  the unpaid principal; GIT: the tenant's LM or CSM or an operator, FUNDED or
+  REFUND_DUE, after dispatch, for the insured value), `file_monvelo_insurance_claim`
+  (operator; waits for an ACCEPTED declaration; shop-policy claims are filed
+  by hand), `set_monvelo_claim_status`, `record_monvelo_claim_settlement`
+  (operator; MANUAL insurers and shop policies) and the webhook. A STORAGE
+  settlement closes the financing **`CLOSED_BY_CLAIM`** whatever the amount,
+  waives the late charge (`late_charge_waived`), frees the exposure and flags a
+  shortfall (`CLAIM_SHORTFALL`; the agent bears it). An open STORAGE claim
+  pauses the late charge (sweep and repayment); a full repayment withdraws it;
+  a settlement after that is ignored and flagged `CLAIM_SETTLED_AFTER_CLOSE`.
+  `get_lender_reconciliation_summary` gains `closed_by_claim_amount` and
+  `late_charge_waived` (appended; the function was dropped and recreated).
+- **The webhook** `POST /functions/v1/monvelo-insurance-webhook?insurer=<CODE>`
+  (public, Ruling 46): a read-only provider lookup, then the adapter's HMAC
+  (MOCK: hex HMAC-SHA256 of `"<x-insurer-timestamp>.<raw body>"` with
+  `MONVELO_MOCK_INSURER_SECRET`, header `x-insurer-signature`, 5-minute
+  window), then Zod (amounts `^\d{1,13}\.\d{2}$`), then one RPC,
+  `apply_monvelo_insurer_event`, which records `(insurer, event_id)` and
+  applies it in one transaction, scoped to that insurer. A duplicate is 200
+  `{duplicate: true}`; an unknown target refuses the whole event (422) so the
+  retry still applies. A MANUAL or unknown insurer is 401.
+- **Uploads.** `monvelo-cover-upload` signs `monvelo-shop-policies/<shop>/…`
+  or `monvelo-claim-evidence/<financing>/…` (PDF, JPEG, PNG, 10 MB) after
+  `can_upload_monvelo_cover` on the caller's JWT. The consent gateway gains
+  `start_policy` and `submit_policy` (the owner's WhatsApp code, then the
+  policy PENDING for an operator's `review_monvelo_shop_policy`).
+- **Sweeps (pure SQL).** `monvelo-shop-policy-sweep` (05:00 UTC): VERIFIED
+  past expiry -> EXPIRED; expiring within 15 days -> an
+  `MONVELO_SHOP_COVER_EXPIRING` email (shop name and date only) to each area
+  ZSA/ASA with an email, and an in-app notice. `monvelo-declaration-sweep`
+  (every 15 min): `DECLARATION_STALE` once per storage declaration still
+  pending 24 h after delivery.
+- **Privacy (§16.2.2).** STORAGE cover, payables, top-ups and STORAGE claims
+  are Monvelo staff only (top-ups also the agent's members); their audit rows
+  and notices are tenant-null. GIT cover and GIT claims are the tenant's
+  (TENANT_ADMIN, CSM, LM). 078 proves a TENANT_ADMIN reads no row naming the
+  agent.
+- **Ruling 46 changes (review before merge).** The guard now names the two
+  insurer system functions (`MONVELO_SYSTEM`: the declare function on the cron
+  secret, the webhook on the insurer HMAC) as the only `monvelo-*` functions
+  that call `serviceRpc()`, and pins the RPCs each may call. `monvelo-cover-upload`
+  signs Storage with the secret key (A5 R22, as `contact-report-upload`) and
+  still runs its RPC on the caller's JWT.
+- **No real insurer.** Adapters are `MOCK` and `MANUAL` only (user decision,
+  2026-11-07); `MYCOVER` is allowed by the CHECK but has no adapter (its rows
+  retry until an operator acts).
+- **Env:** `MONVELO_MOCK_INSURER_SECRET` (webhook HMAC, MOCK only; unset means
+  every MOCK webhook is 401), `CRON_SECRET`. `verify_jwt = false` for the three
+  functions in `config.toml`.
+- **Deploy notes.** Deploy `monvelo-insurance-declare` before pushing
+  `20261031122300` (its cron job posts every minute). Register insurers and
+  products with the operator RPCs (two-person approval). Until an insurer is
+  approved, every new financing is `NONE` and pays the full rebate.
+- **Tests:** Deno runs here with `--node-modules-dir=none` while the
+  repository root has an untracked `package.json`.
+- **Rulings** are in the plan's ledger (`.superpowers/sdd/`, git-ignored)
+  and in the final hand-off; the material ones: amounts in tests are on a
+  48000 whole-pack order; P0001 for bad arguments and not-found (never P0002);
+  policy consent uses `monvelo_consent_challenges` (plan correction 1); the
+  expiry notice covers 15 days, not one day; the webhook records and applies
+  in one transaction; the late-charge pause also guards the repayment path.
 
 ### Service-role key standard (Ruling 46, 2026-11-04)
 
