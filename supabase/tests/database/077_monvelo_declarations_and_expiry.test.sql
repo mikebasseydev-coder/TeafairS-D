@@ -9,7 +9,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(34);
+select plan(38);
 
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
 begin
@@ -429,6 +429,34 @@ select ok(not has_function_privilege('authenticated', 'public.record_monvelo_ins
           and has_function_privilege('service_role', 'public.apply_monvelo_insurer_event(text,text,text,jsonb)', 'execute')
           and has_function_privilege('service_role', 'public.get_monvelo_insurer_provider(text)', 'execute'),
           'the webhook''s RPCs are service_role only');
+
+-- ── 12. Task 9: who may upload cover documents (4) ──────────────────────
+create function pg_temp.can(p_user integer, p_tenant uuid, p_purpose text, p_subject uuid) returns boolean
+language plpgsql as $$
+declare v boolean;
+begin
+  perform pg_temp.act_as(pg_temp.u(p_user), p_tenant);
+  v := public.can_upload_monvelo_cover(p_purpose, p_subject);
+  perform set_config('role', 'postgres', true);
+  return v;
+end; $$;
+select ok(pg_temp.can(4, pg_temp.t1(), 'SHOP_POLICY', '71000000-0000-0000-0000-000000000001')
+          and pg_temp.can(12, pg_temp.t1(), 'SHOP_POLICY', '71000000-0000-0000-0000-000000000001'),
+          'the area''s ASA and the zone''s ZSA may upload a shop''s policy');
+select ok(not pg_temp.can(8, pg_temp.t1(), 'SHOP_POLICY', '71000000-0000-0000-0000-000000000001')
+          and not pg_temp.can(7, pg_temp.t1(), 'SHOP_POLICY', '71000000-0000-0000-0000-000000000001')
+          and not pg_temp.can(9, null, 'SHOP_POLICY', '71000000-0000-0000-0000-000000000001'),
+          'the LM, the TENANT_ADMIN and an operator may not');
+select ok(pg_temp.can(4, pg_temp.t1(), 'CLAIM_EVIDENCE', pg_temp.f('B'))
+          and pg_temp.can(8, pg_temp.t1(), 'CLAIM_EVIDENCE', pg_temp.f('B'))
+          and pg_temp.can(9, null, 'CLAIM_EVIDENCE', pg_temp.f('B'))
+          and not pg_temp.can(7, pg_temp.t1(), 'CLAIM_EVIDENCE', pg_temp.f('B'))
+          and not pg_temp.can(4, pg_temp.t1(), 'OTHER', pg_temp.f('B'))
+          and not pg_temp.can(4, pg_temp.t1(), 'CLAIM_EVIDENCE', gen_random_uuid()),
+          'loss evidence: the reporters report_monvelo_loss allows, and nobody for an unknown purpose or financing');
+select ok(has_function_privilege('authenticated', 'public.can_upload_monvelo_cover(text,uuid)', 'execute')
+          and not has_function_privilege('anon', 'public.can_upload_monvelo_cover(text,uuid)', 'execute'),
+          'the check is the gateway''s, on the caller''s JWT');
 
 select * from finish();
 rollback;

@@ -494,6 +494,9 @@ verify_jwt = false
 [functions.monvelo-insurance-webhook]
 verify_jwt = false
 
+[functions.monvelo-cover-upload]
+verify_jwt = false
+
 [functions.web-commission-release]
 verify_jwt = false
 

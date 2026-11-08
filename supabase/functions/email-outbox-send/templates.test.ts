@@ -61,3 +61,26 @@ Deno.test("every subject line", () => {
   assertEquals(tenant("TENANT_TICKET_STATUS", { status: "RESOLVED" }).subject, "Support ticket TS-XYZ789 is resolved");
   assertEquals(tenant("TENANT_TICKET_STATUS", { status: "CLOSED" }).subject, "Support ticket TS-XYZ789 is closed");
 });
+
+// Addendum A8 §7.1: the shop-cover expiry notice to the area's field agents
+const cover = (shop_name: string, extra: Record<string, unknown> = {}) =>
+  renderEmail({ template: "MONVELO_SHOP_COVER_EXPIRING", payload: { shop_name, expires_on: "2026-11-23", ...extra } }, {});
+
+Deno.test("the cover expiry email names the shop and the date", () => {
+  const e = cover("Mama Ngozi Stores");
+  assertEquals(e.subject, "Shop cover expiring: Mama Ngozi Stores");
+  assertStringIncludes(e.text,
+    "The fire and burglary policy for Mama Ngozi Stores expires on 2026-11-23. Ask the shop owner for the renewed " +
+      "certificate and add it in the app before then, or the shop's agents will pay the auto-policy premium.");
+});
+
+Deno.test("the cover expiry email escapes the shop name and carries no policy detail", () => {
+  const e = cover("<script>x</script>\r\nBcc: a@b.c", { policy_number: "POL-LEAK", sum_insured: "999999" });
+  assertEquals(e.html.includes("<script>"), false);
+  assertStringIncludes(e.html, "&lt;script&gt;");
+  assertEquals(/[\r\n]/.test(e.subject), false);
+  for (const part of [e.subject, e.html, e.text]) {
+    assertEquals(part.includes("POL-LEAK"), false);
+    assertEquals(part.includes("999999"), false);
+  }
+});

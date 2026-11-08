@@ -39,6 +39,7 @@ const SERVICE_RPC: Record<string, string> = {
 // (A5 R22); their RPCs run on the caller's JWT.
 const STORAGE_SIGNING = new Set([
   "contact-report-upload",
+  "monvelo-cover-upload",
   "order-delivery-photo",
   "order-dispute-evidence",
   "support-staff-attachment",
@@ -99,6 +100,9 @@ Deno.test("R46: no Monvelo gateway calls serviceRpc() or signs Storage with the 
   for (const d of functionDirs().filter((d) => d.startsWith("monvelo-") && !(d in MONVELO_SYSTEM))) {
     const src = sourceOf(d);
     assert(!/\bserviceRpc\b/.test(src), `${d} must run its RPCs on the caller's JWT`);
+    // A8 §6.3: monvelo-cover-upload signs an upload URL only (A5 R22, as
+    // contact-report-upload); its one RPC runs on the caller's JWT
+    if (d === "monvelo-cover-upload") continue;
     assert(!/\bstorageConfigFromEnv\b/.test(src), `${d} must not hold the secret key`);
   }
 });

@@ -80,6 +80,13 @@ export function renderEmail(row: OutboxRow, cfg: RenderConfig): Rendered {
       const w = statusWord(p.status);
       return tenant(p, `Support ticket ${ref} is ${w}`, `Your support ticket ${ref} is now ${w}.`);
     }
+    case "MONVELO_SHOP_COVER_EXPIRING": {
+      // A8 §7.1: the shop and the date only; never a policy number or a sum insured
+      const shop = str(p.shop_name).replace(/[\r\n]+/g, " ");
+      const lead = `The fire and burglary policy for ${shop} expires on ${str(p.expires_on)}. Ask the shop owner for ` +
+        `the renewed certificate and add it in the app before then, or the shop's agents will pay the auto-policy premium.`;
+      return { subject: `Shop cover expiring: ${shop}`, html: page([esc(lead)]), text: `${lead}\n\nTeafair Support\n` };
+    }
     default:
       throw new Error(`unknown email template ${row.template}`);
   }

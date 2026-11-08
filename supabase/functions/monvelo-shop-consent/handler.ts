@@ -5,6 +5,11 @@
 // logged. A wrong, expired or locked code comes back from the RPC as data, so
 // the attempt counter commits, and becomes a 422 here.
 //
+// Addendum A8 §6.3 adds the same two steps for the shop's own fire and
+// burglary policy: "start_policy" (start_monvelo_policy_consent) and
+// "submit_policy" (submit_monvelo_shop_policy, which spends the code and
+// records the policy PENDING for an operator's review).
+//
 // A replayed start carries no code (the database never stored it), so it sends
 // nothing; request a fresh code with a new key if delivery failed.
 import { z } from "../_shared/core/deps.ts";
@@ -33,7 +38,32 @@ const schema = z.discriminatedUnion("action", [
     challenge_id: z.string().uuid(),
     code: z.string().regex(/^\d{6}$/),
   }),
+  z.object({
+    idempotency_key: idempotencyKey,
+    action: z.literal("start_policy"),
+    shop_id: z.string().uuid(),
+    area_id: z.string().uuid(),
+  }),
+  z.object({
+    idempotency_key: idempotencyKey,
+    action: z.literal("submit_policy"),
+    challenge_id: z.string().uuid(),
+    code: z.string().regex(/^\d{6}$/),
+    insurer_name: z.string().trim().min(1).max(200),
+    policy_number: z.string().trim().min(1).max(64),
+    covers_fire_perils: z.boolean(),
+    covers_burglary: z.boolean(),
+    sum_insured: z.number().positive().max(9_999_999_999_999),
+    lender_interest_endorsed: z.boolean(),
+    starts_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    expires_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    document_path: z.string().min(1).max(300),
+  }),
 ]);
+
+type Submitted =
+  | { submitted: true; policy_id: string; status: string }
+  | { submitted: false; reason: "INVALID" | "EXPIRED" | "LOCKED" };
 
 type Started = {
   challenge_id: string;
@@ -69,7 +99,29 @@ export function createMonveloShopConsentHandler(deps: MonveloShopConsentDeps): (
       return r;
     }
 
-    const started = await rpc<Started>("start_monvelo_consent", {
+    if (body.action === "submit_policy") {
+      const r = await rpc<Submitted>("submit_monvelo_shop_policy", {
+        p_idempotency_key: body.idempotency_key,
+        p_challenge_id: body.challenge_id,
+        p_code: body.code,
+        p_insurer_name: body.insurer_name,
+        p_policy_number: body.policy_number,
+        p_covers_fire_perils: body.covers_fire_perils,
+        p_covers_burglary: body.covers_burglary,
+        p_sum_insured: body.sum_insured,
+        p_lender_interest_endorsed: body.lender_interest_endorsed,
+        p_starts_on: body.starts_on,
+        p_expires_on: body.expires_on,
+        p_document_path: body.document_path,
+      });
+      if (!r.submitted) {
+        const [code, message] = REFUSALS[r.reason] ?? REFUSALS.INVALID;
+        throw new GatewayError(422, code, message);
+      }
+      return r;
+    }
+
+    const started = await rpc<Started>(body.action === "start_policy" ? "start_monvelo_policy_consent" : "start_monvelo_consent", {
       p_idempotency_key: body.idempotency_key,
       p_gateway_proof: deps.gatewaySecret,
       p_shop_id: body.shop_id,

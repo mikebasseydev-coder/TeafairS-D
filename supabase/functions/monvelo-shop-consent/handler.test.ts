@@ -12,10 +12,14 @@ const TENANT = "e0000000-0000-0000-0000-000000000001";
 function setup(opts: { replayed?: boolean; sendFails?: boolean; enrol?: Record<string, unknown> } = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
   const sent: Array<[string, OutboundMessage]> = [];
+  const auths: string[] = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
     if (fn === "enrol_monvelo_shop") {
       return Promise.resolve((opts.enrol ?? { enrolled: true, shop_code: "SH-ABC234" }) as T);
+    }
+    if (fn === "submit_monvelo_shop_policy") {
+      return Promise.resolve((opts.enrol ?? { submitted: true, policy_id: "p1", status: "PENDING" }) as T);
     }
     return Promise.resolve({
       challenge_id: CHALLENGE,
@@ -27,7 +31,10 @@ function setup(opts: { replayed?: boolean; sendFails?: boolean; enrol?: Record<s
   };
   const handler = createMonveloShopConsentHandler({
     verifyToken: () => Promise.resolve({ sub: "u2", role: "authenticated", app_metadata: { active_tenant_id: TENANT } }),
-    rpcFor: () => rpc,
+    rpcFor: (authorization) => {
+      auths.push(authorization);
+      return rpc;
+    },
     gatewaySecret: "gw-secret",
     sendMessage: (to, message) => {
       if (opts.sendFails) return Promise.reject(new MessageDeliveryError("down"));
@@ -35,7 +42,7 @@ function setup(opts: { replayed?: boolean; sendFails?: boolean; enrol?: Record<s
       return Promise.resolve({ channel: "WHATSAPP", sent: true });
     },
   });
-  return { handler, rpcCalls, sent };
+  return { handler, rpcCalls, sent, auths };
 }
 
 const call = (handler: (r: Request) => Promise<Response>, body: unknown) =>
@@ -105,4 +112,44 @@ Deno.test("a client-supplied tenant never reaches the RPC", async () => {
   const { handler, rpcCalls } = setup();
   await call(handler, { ...start, tenant_id: "evil", tenantId: "evil" });
   assertEquals(Object.keys(rpcCalls[0][1]).some((k) => k.includes("tenant")), false);
+});
+
+// Addendum A8 §6.3: the owner's consent to share the shop's own policy
+const policy = {
+  idempotency_key: KEY, action: "submit_policy", challenge_id: CHALLENGE, code: "042917",
+  insurer_name: "Leadway", policy_number: "SME-1", covers_fire_perils: true, covers_burglary: true,
+  sum_insured: 1000000, lender_interest_endorsed: true, starts_on: "2026-11-01", expires_on: "2027-10-31",
+  document_path: `${SHOP}/cert.pdf`,
+};
+
+Deno.test("start_policy draws the code with the caller's JWT and sends it WhatsApp-only", async () => {
+  const { handler, rpcCalls, sent, auths } = setup();
+  const res = await call(handler, { ...start, action: "start_policy" });
+  assertEquals(res.status, 200);
+  assertEquals(JSON.stringify(await res.json()).includes("042917"), false);
+  assertEquals(auths, ["Bearer tok"]);
+  assertEquals(rpcCalls, [["start_monvelo_policy_consent",
+    { p_idempotency_key: KEY, p_gateway_proof: "gw-secret", p_shop_id: SHOP, p_area_id: AREA }]]);
+  assertEquals(sent.length, 1);
+  assertEquals(sent[0][1].whatsappOnly, true);
+});
+
+Deno.test("submit_policy spends the code and submits the policy", async () => {
+  const { handler, rpcCalls } = setup();
+  const res = await call(handler, policy);
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { submitted: true, policy_id: "p1", status: "PENDING" });
+  assertEquals(rpcCalls, [["submit_monvelo_shop_policy", {
+    p_idempotency_key: KEY, p_challenge_id: CHALLENGE, p_code: "042917", p_insurer_name: "Leadway",
+    p_policy_number: "SME-1", p_covers_fire_perils: true, p_covers_burglary: true, p_sum_insured: 1000000,
+    p_lender_interest_endorsed: true, p_starts_on: "2026-11-01", p_expires_on: "2027-10-31",
+    p_document_path: `${SHOP}/cert.pdf`,
+  }]]);
+});
+
+Deno.test("a wrong policy consent code is a 422", async () => {
+  const { handler } = setup({ enrol: { submitted: false, reason: "INVALID" } });
+  const res = await call(handler, policy);
+  assertEquals(res.status, 422);
+  assertEquals((await res.json()).error.code, "CONSENT_CODE_INVALID");
 });
