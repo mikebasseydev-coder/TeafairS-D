@@ -1560,6 +1560,78 @@ Deno.test({
   },
 });
 
+// ── A8: cover uploads, the declarations drain and the insurer webhook ─────
+// Needs MONVELO_MOCK_INSURER_SECRET in the functions env (any value; the test
+// signs with the same one). Insurer rows are per run: Monvelo rows are never deleted.
+Deno.test({
+  name: "monvelo A8: a policy upload is signed for the area's ZSA only; the cron drains declarations; the webhook verifies and dedupes",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const { signMockWebhook } = await import("../_shared/insurance/mock.ts");
+    const MOCK_SECRET = Deno.env.get("MONVELO_MOCK_INSURER_SECRET") ?? "";
+    assert(MOCK_SECRET.length > 0, "set MONVELO_MOCK_INSURER_SECRET in the functions env");
+    assert(consented, "the consent test enrols the shop this test uses");
+    const sql = asPostgres();
+
+    // monvelo-cover-upload: the shop's area ZSA gets a signed slot under the shop's folder and uploads
+    const zsa = await asUser(consented.zsa.email);
+    const up = await zsa.post("monvelo-cover-upload",
+      { purpose: "SHOP_POLICY", subject_id: consented.shop, content_type: "application/pdf", byte_length: 512 });
+    const upBody = await up.json();
+    assertEquals(up.status, 200, JSON.stringify(upBody));
+    assertEquals(upBody.bucket, "monvelo-shop-policies");
+    assert(String(upBody.path).startsWith(`${consented.shop}/`), upBody.path);
+    await uploadTo(upBody.upload_url, new TextEncoder().encode("%PDF-1.4 integration\n").slice(), "application/pdf");
+    const dsa = await asUser(users.dsa.email);
+    const refused = await dsa.post("monvelo-cover-upload",
+      { purpose: "SHOP_POLICY", subject_id: consented.shop, content_type: "application/pdf", byte_length: 512 });
+    assertEquals(refused.status, 403);
+    await refused.body?.cancel();
+
+    // a MOCK insurer and two declarations: one it accepts, one (…REJ) it declines
+    const code = `IT${run.toUpperCase().replace(/[^A-Z0-9]/g, "")}`;
+    const [ins] = await sql`
+      insert into public.monvelo_insurers (code, legal_name, naicom_licence_no, api_provider, created_by)
+      values (${code}, 'Integration Mock', 'NAICOM-IT', 'MOCK', ${users.tm.id}) returning id`;
+    const [ok] = await sql`select public.monvelo_enqueue_declaration(${ids.tenant}::uuid, 'GIT_DECLARE', ${ins.id}::uuid,
+      'monvelo_order_git_cover', gen_random_uuid(), '{"financing_reference": "MV-ITACCEPT"}'::jsonb) as id`;
+    const [no] = await sql`select public.monvelo_enqueue_declaration(${ids.tenant}::uuid, 'GIT_DECLARE', ${ins.id}::uuid,
+      'monvelo_order_git_cover', gen_random_uuid(), '{"financing_reference": "MV-ITTESTREJ"}'::jsonb) as id`;
+
+    // monvelo-insurance-declare: the cron secret first, then the drain
+    const denied = await fetch(`${FN}/monvelo-insurance-declare`, { method: "POST", headers: { "x-cron-secret": "wrong" }, body: "{}" });
+    assertEquals(denied.status, 401);
+    await denied.body?.cancel();
+    const drained = await fetch(`${FN}/monvelo-insurance-declare`, { method: "POST", headers: { "x-cron-secret": CRON_SECRET }, body: "{}" });
+    const counts = await drained.json();
+    assertEquals(drained.status, 200, JSON.stringify(counts));
+    assert(counts.accepted >= 1 && counts.rejected >= 1, JSON.stringify(counts));
+    const rows = await sql`select id::text, status from public.monvelo_insurance_declarations where id in (${ok.id}, ${no.id})`;
+    assertEquals(Object.fromEntries(rows.map((r) => [r.id, r.status])), { [ok.id]: "ACCEPTED", [no.id]: "REJECTED" });
+
+    // monvelo-insurance-webhook: signed, verified, recorded once
+    const hook = async (body: string, secret = MOCK_SECRET) => {
+      const ts = String(Math.floor(Date.now() / 1000));
+      const res = await fetch(`${FN}/monvelo-insurance-webhook?insurer=${code}`, {
+        method: "POST", body,
+        headers: { "x-insurer-signature": await signMockWebhook(secret, ts, body), "x-insurer-timestamp": ts },
+      });
+      return { status: res.status, body: await res.json() };
+    };
+    const event = JSON.stringify({ event_id: `it-${run}`, type: "policy.renewed" });
+    assertEquals(await hook(event), { status: 200, body: { event_id: `it-${run}`, ignored: true } });
+    assertEquals(await hook(event), { status: 200, body: { duplicate: true } });
+    assertEquals((await hook(event, "not-the-secret")).status, 401);
+    const missing = await hook(JSON.stringify({
+      event_id: `it-${run}-x`, type: "claim.settled", claim_reference: "IC-AAAAAAAA", settled_amount: "100.00", payout_reference: "P",
+    }));
+    assertEquals(missing.status, 422);
+    const [{ n }] = await sql`select count(*)::int as n from public.monvelo_insurer_events where insurer_id = ${ins.id}`;
+    assertEquals(n, 1, "only the accepted event is recorded; the refused one stays retryable");
+  },
+});
+
 Deno.test({
   name: "teardown",
   sanitizeOps: false,
