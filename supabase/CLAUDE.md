@@ -32,7 +32,7 @@ the authority; this file is the working summary.
 | Monvelo (A6) §22 field agents (ZSA, ASA) decide holds; the ZSM oversees | done (local) |
 | Monvelo deferred minors: live supply-day end, zone-scoped ZSM nomination reads | done (local) |
 | A7. Tenant support tickets and ticket emails (outbox, `email-outbox-send`) | done (local) |
-| A8. Monvelo cover (GIT, stock cover, loss claims, declarations, insurer webhook) | done (local, branch) |
+| A8. Monvelo cover (GIT, stock cover, loss claims, declarations, insurer webhook, onboarding terms) | done (merged into local main) |
 | 4. Client offline queue | needs Spec B |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -1286,7 +1286,7 @@ and uses the A6 CSM role).
 Migrations `20261031121700`-`20261031122900`, pgTAP 072-080, the functions
 `monvelo-insurance-declare`, `monvelo-insurance-webhook` and
 `monvelo-cover-upload` (and a changed `monvelo-shop-consent` and
-`email-outbox-send`), local only on branch `feature/addendum-a8-monvelo-cover`.
+`email-outbox-send`). **Merged into local `main` 2026-11-08** (`f3d15b0`); not pushed, not deployed.
 The spec is `docs/superpowers/specs/2026-11-07-addendum-a8-monvelo-cover-design.md`,
 the plan `docs/superpowers/plans/2026-11-07-addendum-a8-monvelo-cover.md`.
 **A8 deploys after A6 Step 3 and A7** (it recreates Step 3's dispatch,
@@ -1413,8 +1413,9 @@ delivery, repayment, sweep and summary functions and uses A7's `email_outbox`).
   approved, every new financing is `NONE` and pays the full rebate.
 - **Tests:** Deno runs here with `--node-modules-dir=none` while the
   repository root has an untracked `package.json`.
-- **Rulings** are in the plan's ledger (`.superpowers/sdd/`, git-ignored)
-  and in the final hand-off; the material ones: amounts in tests are on a
+- **Rulings** are in the archived ledger
+  (`docs/superpowers/archive/2026-11-07-addendum-a8-monvelo-cover-ledger.md`,
+  with both reviews' deferred minors); the material ones: amounts in tests are on a
   48000 whole-pack order; P0001 for bad arguments and not-found (never P0002);
   policy consent uses `monvelo_consent_challenges` (plan correction 1); the
   expiry notice covers 15 days, not one day; the webhook records and applies
