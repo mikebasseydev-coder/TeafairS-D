@@ -6,3 +6,6 @@
 
 # Package installs (the app gets its own setup under Spec B)
 node_modules/
+
+# design reference pipeline: harvested screenshots and tokens stay local
+.design-refs/
