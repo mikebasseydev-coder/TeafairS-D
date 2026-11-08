@@ -21,6 +21,7 @@ const SERVICE_RPC: Record<string, string> = {
   "storage-purge": "system: x-cron-secret (constant time)",
   "email-outbox-send": "system: x-cron-secret (constant time)",
   "monvelo-insurance-declare": "system: x-cron-secret (constant time)",
+  "monvelo-insurance-webhook": "public: insurer HMAC (adapter.verifyWebhook) after a read-only provider lookup",
   "storefront-catalogue": "public: read-only, CORS-limited",
   "storefront-locations": "public: read-only, CORS-limited",
   "storefront-refund-policy": "public: read-only, CORS-limited",
@@ -56,6 +57,7 @@ const SERVICE_MONVELO_RPCS = new Set(["settle_monvelo_funding", "apply_monvelo_r
 // other monvelo-* function is a user gateway and never holds the key.
 const MONVELO_SYSTEM: Record<string, string[]> = {
   "monvelo-insurance-declare": ["claim_monvelo_declarations", "complete_monvelo_declaration"],
+  "monvelo-insurance-webhook": ["get_monvelo_insurer_provider", "apply_monvelo_insurer_event"],
 };
 
 function functionDirs(): string[] {
@@ -105,7 +107,8 @@ Deno.test("R46: the Monvelo insurer functions call only their reviewed RPCs, and
   for (const [d, allowed] of Object.entries(MONVELO_SYSTEM)) {
     const src = sourceOf(d);
     assert(!/\bstorageConfigFromEnv\b/.test(src), `${d} must not sign Storage`);
-    const calls = [...src.matchAll(/\brpc(?:<[^>]*>)?\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    // rpc("x", …) or rpc<T>("x", …), nested generics included
+    const calls = [...src.matchAll(/\brpc(?:<[^(]*>)?\(\s*"([a-z_]+)"/g)].map((m) => m[1]);
     assert(calls.length > 0, `${d}: no rpc call found`);
     assertEquals([...new Set(calls)].sort(), [...allowed].sort(), `${d}: review the RPCs, then update MONVELO_SYSTEM`);
   }

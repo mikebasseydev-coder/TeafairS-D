@@ -9,7 +9,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(24);
+select plan(34);
 
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
 begin
@@ -377,6 +377,58 @@ select ok((select status = 'PENDING' and next_attempt_at = 'infinity'::timestamp
 select ok(exists (select 1 from cron.job where jobname = 'monvelo-insurance-declare' and schedule = '* * * * *'
                                          and command like '%invoke_system_function(''monvelo-insurance-declare''%'),
           'monvelo-insurance-declare runs every minute');
+
+-- ── 11. Task 8: insurer events, recorded and applied once (9) ───────────
+set local session_replication_role = replica;
+insert into public.monvelo_insurers (id, code, legal_name, naicom_licence_no, api_provider, created_by) values
+  ('a8000000-0000-0000-0000-000000000005', 'OTHER', 'Other Insurance', 'NAICOM-077-O', 'MOCK', pg_temp.u(9));
+set local session_replication_role = origin;
+select ok(public.record_monvelo_insurer_event('MOCK', 'evt-a', '{"type": "x"}')
+          and not public.record_monvelo_insurer_event('MOCK', 'evt-a', '{"type": "x"}'),
+          'an event is new once, then a duplicate');
+select ok(public.record_monvelo_insurer_event('OTHER', 'evt-a', '{}'), 'the same event id from another insurer is its own');
+select ok(public.get_monvelo_insurer_provider('MOCK') = 'MOCK' and public.get_monvelo_insurer_provider('NOPE') is null,
+          'the provider lookup answers for a known insurer and is null otherwise');
+select ok((public.apply_monvelo_insurer_event('MOCK', 'evt-b', 'policy.renewed', '{}') ->> 'ignored')::boolean
+          and (public.apply_monvelo_insurer_event('MOCK', 'evt-b', 'policy.renewed', '{}') ->> 'duplicate')::boolean,
+          'an unknown type is recorded and ignored; its repeat is a duplicate');
+insert into d select 'Y', public.monvelo_enqueue_declaration(pg_temp.t1(), 'GIT_DECLARE',
+  'a8000000-0000-0000-0000-000000000001', 'monvelo_order_git_cover', gen_random_uuid(), '{}');
+select throws_ok(format($q$ select public.apply_monvelo_insurer_event('OTHER', 'evt-c', 'declaration.accepted',
+                                    jsonb_build_object('declaration_id', %L)) $q$, (select id from d where n = 'Y')),
+                 'P0001', 'declaration not found', 'another insurer cannot answer this declaration');
+select ok(public.record_monvelo_insurer_event('OTHER', 'evt-c', '{}'), 'and the refused event was not recorded');
+select public.apply_monvelo_insurer_event('MOCK', 'evt-d', 'declaration.accepted',
+  jsonb_build_object('declaration_id', (select id from d where n = 'Y'), 'insurer_reference', 'POL-Y'));
+select ok((select status = 'ACCEPTED' and insurer_reference = 'POL-Y'
+             from public.monvelo_insurance_declarations where id = (select id from d where n = 'Y')),
+          'the declaring insurer''s acceptance lands');
+-- a filed STORAGE claim on A (accepted cover), then the insurer's review and settlement
+update public.monvelo_financings set delivered_at = now() - interval '2 days' where id = pg_temp.f('A');
+select pg_temp.act_as(pg_temp.u(4), pg_temp.t1());
+insert into res select 'claimA', public.report_monvelo_loss(pg_temp.k(300), pg_temp.f('A'), 'STORAGE', 'FIRE',
+  now() - interval '1 day', 'fire', array[pg_temp.f('A')::text || '/p.jpg']);
+select pg_temp.act_as(pg_temp.u(9), null);
+select public.file_monvelo_insurance_claim(pg_temp.k(301), (pg_temp.r('claimA') ->> 'claim_id')::uuid);
+reset role;
+select public.apply_monvelo_insurer_event('MOCK', 'evt-e', 'claim.under_review',
+  jsonb_build_object('claim_reference', pg_temp.r('claimA') ->> 'reference', 'insurer_reference', 'INS-CL-A'));
+select ok((select status = 'UNDER_REVIEW' and insurer_claim_reference = 'INS-CL-A'
+             from public.monvelo_insurance_claims where id = (pg_temp.r('claimA') ->> 'claim_id')::uuid),
+          'claim.under_review moves the claim and keeps the insurer''s reference');
+select public.apply_monvelo_insurer_event('MOCK', 'evt-f', 'claim.settled',
+  jsonb_build_object('claim_reference', pg_temp.r('claimA') ->> 'reference', 'settled_amount', '48000.00',
+                     'payout_reference', 'PO-A'));
+select ok((select c.status = 'SETTLED' and c.settled_amount = 48000 and f.status = 'CLOSED_BY_CLAIM'
+             from public.monvelo_insurance_claims c join public.monvelo_financings f on f.id = c.financing_id
+            where c.id = (pg_temp.r('claimA') ->> 'claim_id')::uuid),
+          'claim.settled closes the financing CLOSED_BY_CLAIM');
+select ok(not has_function_privilege('authenticated', 'public.record_monvelo_insurer_event(text,text,jsonb)', 'execute')
+          and not has_function_privilege('authenticated', 'public.apply_monvelo_insurer_event(text,text,text,jsonb)', 'execute')
+          and not has_function_privilege('authenticated', 'public.get_monvelo_insurer_provider(text)', 'execute')
+          and has_function_privilege('service_role', 'public.apply_monvelo_insurer_event(text,text,text,jsonb)', 'execute')
+          and has_function_privilege('service_role', 'public.get_monvelo_insurer_provider(text)', 'execute'),
+          'the webhook''s RPCs are service_role only');
 
 select * from finish();
 rollback;

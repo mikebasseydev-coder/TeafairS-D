@@ -21,6 +21,8 @@ export type InsurerEvent = {
   settledAmount?: string;
   payoutReference?: string;
   insurerReference?: string;
+  // the insurer's reason, on a rejection
+  error?: string;
 };
 
 export interface InsurerAdapter {

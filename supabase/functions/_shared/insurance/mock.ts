@@ -64,6 +64,7 @@ export function createMockAdapter(opts: { secret: string; now?: () => number }):
         ["settledAmount", "settled_amount"],
         ["payoutReference", "payout_reference"],
         ["insurerReference", "insurer_reference"],
+        ["error", "error"],
       ];
       for (const [k, wire] of map) {
         const v = str(o[wire]);
