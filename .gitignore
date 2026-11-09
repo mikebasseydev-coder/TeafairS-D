@@ -1,4 +1,7 @@
-.claude/
+.claude/*
+!.claude/awards-mobile-workflow.md
+# visual references stay local
+.claude/references/
 
 # Environment — never commit Supabase URLs or keys
 .env

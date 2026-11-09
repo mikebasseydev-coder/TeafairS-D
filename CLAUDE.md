@@ -39,7 +39,7 @@ integrations. Its implementation runs in four phases (§14).
 | `docs/superpowers/specs/2026-10-28-addendum-a6-…` | Addendum A6 to Spec A — Monvelo (B2B trade financing) and §15 domain separation (built locally, not pushed); §16–§18 (Step 1c and Step 2: CSM, TENANT_ADMIN, LOGISTICS_MANAGER, contact reports, the tenant ledger, stock, operational states, financings and claims) built locally, not pushed; plan at `docs/superpowers/plans/2026-10-29-monvelo-step1c-step2.md`; §19 (Step 3 calls: funding, delivery, repayment) built locally, not pushed; plan at `docs/superpowers/plans/2026-10-31-monvelo-step3-funding-repayment.md`; §20 (the market-maker allowance) built locally, not pushed; plan at `docs/superpowers/plans/2026-11-02-monvelo-market-maker-allowance.md`; §21 (the limits scaled to ₦1,000,000 and ₦3,000,000; §21.3 the agent exposure meter RPC) built locally, not pushed; §22 (field agents decide holds) built locally, not pushed |
 | `docs/superpowers/specs/2026-11-05-addendum-a7-…` | Addendum A7 to Spec A — tenant support tickets and ticket emails (built locally, not pushed); plan at `docs/superpowers/plans/2026-11-05-addendum-a7-tenant-support-and-ticket-emails.md` |
 | `docs/superpowers/specs/2026-11-07-addendum-a8-…` | Addendum A8 to Spec A — Monvelo cover (merged into local `main` 2026-11-08, not pushed; §15 pre-underwriter policy and onboarding terms); plan at `docs/superpowers/plans/2026-11-07-addendum-a8-monvelo-cover.md` |
-| client app | **none yet**: built fresh under Spec B as a flat `src/`. `frontend/`, `apps/` and `docs/features/` were removed (§13) |
+| client app | **none yet**: built fresh under Spec B as a feature-based `src/` (see "Frontend standards" below). `frontend/`, `apps/` and `docs/features/` were removed (§13) |
 
 Phase 4 (client offline queue) needs the Spec B app shell.
 
@@ -93,6 +93,39 @@ Android only at launch; the Windows HQ client is deferred.
   holds it, and the database still decides every write. (3) No secret is ever
   under `EXPO_PUBLIC_`, `NEXT_PUBLIC_` or `VITE_`, or in a client tree. The
   tests `service-role-guard`, `secret-scoping` and `keys` enforce all three.
+
+## Frontend standards (Spec B; adopted 2026-11-09, app not started)
+
+Spec B is still **on hold**: no `src/` scaffold until it is written and
+approved. These rules govern it when it starts and must be recorded in it.
+
+- **Stack:** React Native + Expo + TypeScript, NativeWind, feature-scoped
+  Zustand stores, MMKV offline queue (Spec A §7). **`pnpm` only** for the app
+  (`node-linker=hoisted` for Expo). The Supabase side stays Deno.
+- **Targets:** iOS and Android (this amends Spec A §2 item 11, "Android
+  only"), phones in portrait (~390–430 px) and tablets/foldables in portrait
+  and landscape with multi-column layouts, through NativeWind `sm:`/`md:`/`lg:`
+  and `react-native-safe-area-context` (notches, dynamic island, nav bars).
+- **Layout:** `src/features/<feature>/` (components, screens, hooks, services,
+  store) and `src/shared/` (`tokens/`, `storage/`, `network/`, `components/`).
+  Features never import each other's internals; they share only through
+  `src/shared/` or a feature's public `index.ts`. Monvelo is its own feature
+  and never shares a store or service with the web/storefront code (A6 §15).
+- **Data access:** the app reads through RLS (`SELECT` only) and writes only
+  by calling an Edge Function in `src/shared/network/` with the user's JWT.
+  It never writes to a table, never sends a `tenantId`, and never holds a
+  secret key (Rules above, Ruling 46).
+- **Tokens:** `src/shared/tokens/` is the single source of the `FIGMA.md`
+  `teafair-*` values and exports the NativeWind preset that
+  `tailwind.config.js` consumes. No hex values and no stock palette classes
+  (`emerald-500`, `slate-900`) in components.
+- **Design workflow:** every screen follows `.claude/awards-mobile-workflow.md`
+  (references, three concepts, the 8/10 critique loop).
+- **References:** curated images in `.claude/references/<feature>/` (folder
+  named after the `src/features/` directory, e.g. `rtm/`) and screenshots
+  from `scripts/harvest-ui.js` in `.design-refs/` are both git-ignored. In
+  `.claude/` only the workflow file is tracked; local settings, worktrees and
+  locks stay ignored.
 
 ## Commands
 
