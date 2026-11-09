@@ -1,7 +1,8 @@
 // UI harvesting for the design reference pipeline: a 1440x900 viewport
 // screenshot of a page, saved to .design-refs/captured/.
 //
-//   node scripts/harvest-ui.js <url> [output-name.png]
+//   pnpm harvest <url> [output-name.png]
+//   (first run on a machine: pnpm harvest:install-browser)
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');

@@ -12,3 +12,8 @@ node_modules/
 
 # design reference pipeline: harvested screenshots and tokens stay local
 .design-refs/
+
+# transient Playwright output (MCP browser sessions, test runs)
+.playwright-mcp/
+test-results/
+playwright-report/

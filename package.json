@@ -1,0 +1,13 @@
+{
+  "name": "teafair-tools",
+  "private": true,
+  "description": "Repo-level tooling (the design reference harvester); the app gets its own setup under Spec B",
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "harvest": "node scripts/harvest-ui.js",
+    "harvest:install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "1.65.0"
+  }
+}
