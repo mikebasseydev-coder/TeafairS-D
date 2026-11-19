@@ -523,8 +523,8 @@ functions `send-auth-sms` and `send-auth-email`, local only. From the
   Auth confirmed (`phone_confirmed_at`). Self-serve sign-up is off
   (`[auth] enable_signup = false`): accounts come from the Admin API with
   `phone` and `phone_confirm: true`. **Gotcha:** in `config.toml`,
-  `[auth.email] enable_signup` and `[auth.sms] enable_signup` are the email and
-  phone *provider* switches; turning them off disables those logins
+  `[auth.email] enabled` and `[auth.sms] enabled` (formerly `enable_signup`,
+  renamed 2026-11-19 for CLI v4) are the email and phone *provider* switches; turning them off disables those logins
   entirely. Keep both on; the global switch blocks new accounts.
 - **H2, the database draws the shop-owner OTP.** `issue_otp(p_idempotency_key,
   p_subject_id, p_purpose, p_gateway_proof)` checks `assert_gateway_proof` (the
@@ -1217,7 +1217,7 @@ calls, as amended, and the material rulings are recorded in A6 §19.
 
 Migrations `20261031121500_tenant_support_tickets` and
 `20261031121600_ticket_email_outbox`, pgTAP 070 and 071, the function
-`email-outbox-send`, local only (branch `feature/addendum-a7-tenant-support`).
+`email-outbox-send`, on `main` and GitHub, not deployed.
 The spec is `docs/superpowers/specs/2026-11-05-addendum-a7-tenant-support-and-ticket-emails-design.md`.
 **A7 deploys after A3, A5 and A6 Step 1c** (it adds triggers to A3's tables
 and uses the A6 CSM role).
@@ -1286,7 +1286,7 @@ and uses the A6 CSM role).
 Migrations `20261031121700`-`20261031122900`, pgTAP 072-080, the functions
 `monvelo-insurance-declare`, `monvelo-insurance-webhook` and
 `monvelo-cover-upload` (and a changed `monvelo-shop-consent` and
-`email-outbox-send`). **Merged into local `main` 2026-11-08** (`f3d15b0`); not pushed, not deployed.
+`email-outbox-send`). **Merged into `main` 2026-11-08** (`f3d15b0`), on GitHub; not deployed to the Supabase remote.
 The spec is `docs/superpowers/specs/2026-11-07-addendum-a8-monvelo-cover-design.md`,
 the plan `docs/superpowers/plans/2026-11-07-addendum-a8-monvelo-cover.md`.
 **A8 deploys after A6 Step 3 and A7** (it recreates Step 3's dispatch,
@@ -1411,8 +1411,9 @@ delivery, repayment, sweep and summary functions and uses A7's `email_outbox`).
   `20261031122300` (its cron job posts every minute). Register insurers and
   products with the operator RPCs (two-person approval). Until an insurer is
   approved, every new financing is `NONE` and pays the full rebate.
-- **Tests:** Deno runs here with `--node-modules-dir=none` while the
-  repository root has an untracked `package.json`.
+- **Tests:** Deno runs here with `--node-modules-dir=none`, because the
+  repository root has a `package.json` and pnpm's `node_modules` (repo
+  tooling); without it Deno looks for `@sentry/deno` there and fails.
 - **Rulings** are in the archived ledger
   (`docs/superpowers/archive/2026-11-07-addendum-a8-monvelo-cover-ledger.md`,
   with both reviews' deferred minors); the material ones: amounts in tests are on a
