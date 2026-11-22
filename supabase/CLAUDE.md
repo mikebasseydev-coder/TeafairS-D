@@ -1604,11 +1604,18 @@ one responsibility per file. Third-party versions appear only in
 
 ```bash
 supabase functions serve --env-file supabase/functions/.env     # serve locally
-deno test --allow-env --allow-read supabase/functions/         # unit tests (+ R46 guards)
+deno test --node-modules-dir=none --allow-env --allow-read supabase/functions/   # unit tests (+ R46 guards)
 supabase status -o env > supabase/.env.test.local               # then:
-deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
+deno test --node-modules-dir=none --allow-net --allow-env --env-file=supabase/.env.test.local \
   --env-file=supabase/functions/.env supabase/functions/_tests/gateway.integration.ts
 ```
+
+**`--node-modules-dir=none` is required** on every `deno test` and `deno check`.
+The repo-level tooling uses pnpm, which creates a root `node_modules` beside
+`package.json`. Without the flag, Deno looks for the functions' `npm:` imports
+(`@sentry/deno`, `postgres`, …) there and fails before any test runs. The flag
+keeps Deno on its own cache, so the functions stay out of pnpm's install. There
+is deliberately no `deno.json`, so deploy bundling is unchanged.
 
 Before the integration run: `supabase db reset` wipes Vault, so run
 `select vault.create_secret('<GATEWAY_SECRET>', 'gateway_secret');` (A5, R16),
