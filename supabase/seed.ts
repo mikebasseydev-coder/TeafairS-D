@@ -8,8 +8,15 @@
 //   15 retail shops in the Ojodu/Ikeja box (8 covered by Ojodu, 7 by Omole),
 //   20 FMCG SKUs (fictional house brands), one batch per SKU per depot,
 //   two PAID web orders with buyer contacts (one per territory), stock reserved.
+//   Monvelo (A6) opted in: area "Ojodu Central" and its ASA asa@rtm.local
+//   (reports to rep1), the zone's ZSA zsa@rtm.local (reports to the ZSM), an
+//   ACTIVE POS agent the ASA recruited with its staff pos-agent@rtm.local (the
+//   Monvelo "fintech agent"), the platform operator monvelo-ops@rtm.local, and
+//   the owner of the first Ojodu outlet, shop-owner@rtm.local.
 // Plus a second tenant, LAGOSFMCG, with its own zone, territory, depot and
-// SKUs and no members, so the tests can prove tenant isolation.
+// SKUs, not opted in to Monvelo, whose only members are a TM
+// (lagos-tm@rtm.local) and an ASA under them (lagos-asa@rtm.local), so the
+// tests can prove tenant isolation.
 //
 // Users go through the Auth admin API (supabase-js, secret key). Domain rows are
 // fixtures written as `postgres` over the local DB URL: clients never write
@@ -60,7 +67,32 @@ export const SEED = {
     manager: { email: "manager@rtm.local", phone: "2348000000901", name: "Adaeze Okonkwo" },
     rep1: { email: "rep1@rtm.local", phone: "2348000000902", name: "Tunde Bakare" },
     rep2: { email: "rep2@rtm.local", phone: "2348000000903", name: "Ifeoma Nwosu" },
+    /** Monvelo street agent (A6 §3): ASA of the Ojodu Central area, reports to rep1 (the territory's TM). */
+    asa: { email: "asa@rtm.local", phone: "2348000000904", name: "Bola Adebayo" },
+    /** Monvelo platform staff (profiles.platform_role MONVELO_OPERATOR), no tenant membership. */
+    monveloOps: { email: "monvelo-ops@rtm.local", phone: "2348000000905", name: "Chidi Obi" },
+    /** Monvelo street agent (A6 §3): ZSA of the zone, reports to the ZSM. */
+    zsa: { email: "zsa@rtm.local", phone: "2348000000906", name: "Emeka Nnadi" },
+    /** The owner of the first Ojodu outlet (retail_shops.owner_id); no tenant membership. */
+    shopOwner: { email: "shop-owner@rtm.local", phone: "2348000000907", name: "Funke Akande" },
+    /**
+     * Monvelo "fintech agent": staff (monvelo_agent_members) of the seeded ACTIVE POS
+     * agent the ASA recruited. Not the web POS_AGENT tenant role (A6 §15).
+     */
+    fintechAgent: { email: "pos-agent@rtm.local", phone: "2348000000908", name: "Yusuf Bello" },
+    /** LAGOSFMCG (not opted in to Monvelo): the territory's TM and an ASA under them. */
+    lagosTm: { email: "lagos-tm@rtm.local", phone: "2348000000909", name: "Ngozi Eze" },
+    lagosAsa: { email: "lagos-asa@rtm.local", phone: "2348000000910", name: "Sola Martins" },
   },
+  /** The Ojodu area the ASA works (A6 §3: zone - territory - area). */
+  ojoduAreaId: sid("area:ojodu-central"),
+  /** LAGOSFMCG's area, for its ASA. */
+  otherAreaId: sid("area:lagosfmcg-allen"),
+  /** The first Ojodu outlet, owned by the shop owner persona. */
+  ownedShopId: sid("shop:0"),
+  /** An ACTIVE Monvelo POS agent recruited by the ASA; the fintech agent is its staff. */
+  monveloAgentId: sid("monvelo-agent:ojodu-liquidity"),
+  monveloAgentNetworkId: "MP-SEED-OJODU-0001",
 } as const;
 
 type SkuSeed = {
@@ -231,6 +263,13 @@ async function main() {
       manager: await ensureUser(supabase.auth.admin, SEED.users.manager),
       rep1: await ensureUser(supabase.auth.admin, SEED.users.rep1),
       rep2: await ensureUser(supabase.auth.admin, SEED.users.rep2),
+      asa: await ensureUser(supabase.auth.admin, SEED.users.asa),
+      monveloOps: await ensureUser(supabase.auth.admin, SEED.users.monveloOps),
+      zsa: await ensureUser(supabase.auth.admin, SEED.users.zsa),
+      shopOwner: await ensureUser(supabase.auth.admin, SEED.users.shopOwner),
+      fintechAgent: await ensureUser(supabase.auth.admin, SEED.users.fintechAgent),
+      lagosTm: await ensureUser(supabase.auth.admin, SEED.users.lagosTm),
+      lagosAsa: await ensureUser(supabase.auth.admin, SEED.users.lagosAsa),
     };
     for (const [k, u] of Object.entries(SEED.users)) console.log(`user ${k}: ${u.email} (phone ${last4(u.phone)})`);
 
@@ -318,6 +357,55 @@ async function main() {
           on conflict (tenant_id, retail_shop_id) do update set territory_id = excluded.territory_id`;
       }
 
+      // Monvelo (A6): TEAFAIR opts in; an ASA works the Ojodu Central area under rep1 (the TM);
+      // a MONVELO_OPERATOR is platform staff with no tenant. LAGOSFMCG stays opted out.
+      await tx`insert into public.monvelo_tenant_settings (tenant_id, enabled) values (${T}, true)
+               on conflict (tenant_id) do update set enabled = true`;
+      await tx`insert into public.areas (id, tenant_id, territory_id, area_name)
+               values (${SEED.ojoduAreaId}, ${T}, ${SEED.ojoduTerritoryId}, 'Ojodu Central')
+               on conflict (id) do nothing`;
+      const rep1Tu = (await tx<{ id: string }[]>`
+        select id from public.tenant_users where tenant_id = ${T} and profile_id = ${ids.rep1}`)[0].id;
+      await tx`
+        insert into public.tenant_users (id, tenant_id, profile_id, role, territory_id, area_id, reports_to_id, is_primary, status)
+        values (${sid("tu:asa")}, ${T}, ${ids.asa}, 'ASA', ${SEED.ojoduTerritoryId}, ${SEED.ojoduAreaId}, ${rep1Tu}, true, 'ACTIVE')
+        on conflict (tenant_id, profile_id) do update set role = 'ASA', territory_id = excluded.territory_id,
+                                                         area_id = excluded.area_id, reports_to_id = excluded.reports_to_id,
+                                                         status = 'ACTIVE'`;
+      await tx`update public.areas set asa_id = ${ids.asa} where id = ${SEED.ojoduAreaId}`;
+      await tx`update public.profiles set platform_role = 'MONVELO_OPERATOR' where id = ${ids.monveloOps}`;
+
+      // the ZSA works the zone and reports to its ZSM (tenant_users_zsa_anchor)
+      await tx`
+        insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, reports_to_id, is_primary, status)
+        values (${sid("tu:zsa")}, ${T}, ${ids.zsa}, 'ZSA', ${SEED.zoneId}, ${managerTu}, true, 'ACTIVE')
+        on conflict (tenant_id, profile_id) do update set role = 'ZSA', zone_id = excluded.zone_id, territory_id = null,
+                                                         area_id = null, reports_to_id = excluded.reports_to_id,
+                                                         status = 'ACTIVE'`;
+
+      // the shop owner owns the first Ojodu outlet (the owner reads it under retail_shops_select_network)
+      await tx`update public.retail_shops set owner_id = ${ids.shopOwner} where id = ${SEED.ownedShopId}`;
+
+      // an ACTIVE POS agent the ASA recruited and the operator approved (stands in for
+      // monvelo-agent-register + approve_monvelo_agent), with the fintech agent as its staff.
+      // The account number is a fixture: it never leaves the local stack.
+      await tx`
+        insert into public.monvelo_agents (id, business_name, pos_network, network_agent_id, contact_phone, location,
+                                           address_text, settlement_account_number, settlement_account_last4,
+                                           settlement_bank_code, settlement_account_name, network_kyc_reference,
+                                           recruited_by, status, approved_by, approved_at)
+        values (${SEED.monveloAgentId}, 'Ojodu Liquidity Point (seed)', 'MONIEPOINT', ${SEED.monveloAgentNetworkId},
+                '+2348000000908',
+                extensions.st_setsrid(extensions.st_makepoint(${SEED.ojoduGps.lng}, ${SEED.ojoduGps.lat}), 4326)::extensions.geography,
+                '2 Ojodu-Berger Road, Ojodu, Lagos', '9000000001', '0001', '058', 'OJODU LIQUIDITY POINT',
+                'SEED-KYC-0001', ${ids.asa}, 'ACTIVE', ${ids.monveloOps}, now())
+        on conflict (id) do update set status = 'ACTIVE', recruited_by = excluded.recruited_by,
+                                       approved_by = excluded.approved_by`;
+      await tx`
+        insert into public.monvelo_agent_members (agent_id, profile_id, status)
+        values (${SEED.monveloAgentId}, ${ids.fintechAgent}, 'ACTIVE')
+        on conflict (agent_id, profile_id) do update set status = 'ACTIVE'`;
+
       // a second tenant with no members: nothing of it may reach a TEAFAIR rep
       const O = SEED.otherTenantId;
       await tx`insert into public.tenants (id, name, code) values (${O}, 'Lagos FMCG Distribution (seed)', 'LAGOSFMCG')
@@ -344,6 +432,24 @@ async function main() {
           on conflict (warehouse_id, sku_code, batch_number) do nothing`;
       }
 
+      // LAGOSFMCG members for cross-tenant tests: a TM and an ASA under them. LAGOSFMCG has no
+      // monvelo_tenant_settings row, so it is not opted in and its ASA is refused by Monvelo.
+      await tx`
+        insert into public.tenant_users (id, tenant_id, profile_id, role, territory_id, is_primary, status)
+        values (${sid("tu:lagos-tm")}, ${O}, ${ids.lagosTm}, 'TM', ${SEED.otherTerritoryId}, true, 'ACTIVE')
+        on conflict (tenant_id, profile_id) do update set role = 'TM', territory_id = excluded.territory_id, status = 'ACTIVE'`;
+      const lagosTmTu = (await tx<{ id: string }[]>`
+        select id from public.tenant_users where tenant_id = ${O} and profile_id = ${ids.lagosTm}`)[0].id;
+      await tx`insert into public.areas (id, tenant_id, territory_id, area_name)
+               values (${SEED.otherAreaId}, ${O}, ${SEED.otherTerritoryId}, 'Allen') on conflict (id) do nothing`;
+      await tx`
+        insert into public.tenant_users (id, tenant_id, profile_id, role, territory_id, area_id, reports_to_id, is_primary, status)
+        values (${sid("tu:lagos-asa")}, ${O}, ${ids.lagosAsa}, 'ASA', ${SEED.otherTerritoryId}, ${SEED.otherAreaId},
+                ${lagosTmTu}, true, 'ACTIVE')
+        on conflict (tenant_id, profile_id) do update set role = 'ASA', territory_id = excluded.territory_id,
+                                                         area_id = excluded.area_id, reports_to_id = excluded.reports_to_id,
+                                                         status = 'ACTIVE'`;
+
       // mark_order_dispatched checks the gateway proof against Vault; a db reset wipes Vault
       const [v] = await tx<{ id: string }[]>`select id from vault.secrets where name = 'gateway_secret'`;
       if (v) await tx`select vault.update_secret(${v.id}::uuid, ${gatewaySecret})`;
@@ -369,7 +475,8 @@ async function main() {
     console.log(`TEAFAIR: zone Lagos Mainland North, territories Ojodu-Berger and Omole-Agidingbi`);
     console.log(`outlets covered: ${c.shops}, seed SKUs: ${c.skus}, depot batches: ${c.batches}`);
     console.log(`paid orders: ${o1.publicReference} (Ojodu), ${o2.publicReference} (Omole)`);
-    console.log("second tenant LAGOSFMCG: 1 zone, 1 territory, 1 depot, 2 SKUs, no members");
+    console.log("Monvelo: TEAFAIR opted in; ASA, ZSA, operator, shop owner, 1 ACTIVE POS agent with 1 staff member");
+    console.log("second tenant LAGOSFMCG: 1 zone, 1 territory, 1 area, 1 depot, 2 SKUs, a TM and an ASA, Monvelo off");
     console.log("vault gateway_secret: set");
   } finally {
     await sql.end();
