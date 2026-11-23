@@ -7,9 +7,10 @@
     "harvest": "node scripts/harvest-ui.js",
     "harvest:install-browser": "playwright install chromium",
     "db:seed": "tsx supabase/seed.ts",
+    "db:fresh": "supabase db reset && pnpm db:seed",
     "functions:serve:api": "node scripts/api-test-env.mjs && supabase functions serve --env-file supabase/functions/.env.api.local",
     "test:api": "playwright test",
-    "test:backend": "supabase db reset && pnpm db:seed && pnpm test:api"
+    "test:backend": "pnpm db:fresh && pnpm test:api"
   },
   "dependencies": {
     "playwright": "1.65.1"
