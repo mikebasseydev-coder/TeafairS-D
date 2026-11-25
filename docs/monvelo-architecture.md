@@ -487,7 +487,7 @@ The tables below are generated from `pg_proc` on the migrated database. **Gate**
 |---|---|---|---|---|---|
 | `accept_monvelo_agent_terms` | `p_idempotency_key uuid, p_agent_id uuid, p_terms_code text, p_body_sha256 text` | `jsonb` | ACTIVE member of the agent | member, idem | v |
 | `accept_monvelo_tenant_terms` | `p_idempotency_key uuid, p_terms_code text, p_body_sha256 text, p_decision_id uuid` | `jsonb` | tenant: CLIENT_SERVICE_MANAGER | idem | v |
-| `add_monvelo_member` | `p_idempotency_key uuid, p_agent_id uuid, p_phone_number text` | `jsonb` | platform: MONVELO_OPERATOR | member, idem | v |
+| `add_monvelo_member` | `p_idempotency_key uuid, p_agent_id uuid, p_contact text` | `jsonb` | platform: MONVELO_OPERATOR | member, idem | v |
 | `approve_monvelo_agent` | `p_idempotency_key uuid, p_agent_id uuid` | `jsonb` | platform: MONVELO_OPERATOR | idem | v |
 | `approve_monvelo_brand_terms` | `p_idempotency_key uuid, p_terms_id uuid, p_decision_id uuid` | `jsonb` | tenant: ZSM, CLIENT_SERVICE_MANAGER | idem | v |
 | `approve_monvelo_financing` | `p_idempotency_key uuid, p_financing_id uuid` | `jsonb` | tenant: TM | idem | v |
