@@ -194,7 +194,7 @@ select throws_ok(
 select throws_ok(
   $$select public.invite_tenant_user('aaaaaaaa-0000-0000-0000-000000000099', '+2348000000008', 'DSA',
       '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000007')$$,
-  'P0001', 'no Teafair account with a verified phone exists for +2348000000008',
+  'P0001', 'no Teafair account with a verified email or phone matches that contact',
   'an invite never reaches an account whose phone is unverified (audit H1)');
 select throws_ok(
   $$select public.invite_tenant_user('aaaaaaaa-0000-0000-0000-000000000011', '+2348000000006', 'ZSM',

@@ -1,9 +1,12 @@
 // Supabase Auth's Send Email hook. Every email Supabase Auth would send comes
 // here, signed with Standard Webhooks, and goes out through Resend.
 //
-// Supported: recovery (password reset), signup, invite and email_change.
-// Anything else (magic links, email OTPs, reauthentication) is refused:
-// passwordless email is not a Teafair sign-in route.
+// Supported: recovery (password reset), signup, invite and email_change, and
+// (email-first, 2026-11-25) the sign-in code: GoTrue's magiclink and email
+// actions. A sign-in code goes out only when auth_email_context allows the
+// person (a platform role, an ACTIVE or INVITED membership, an ACTIVE Monvelo
+// agent membership, or a registered shop), as the code only, never a link, in
+// the copy of its audience. Reauthentication is still refused.
 //
 // Links point at Supabase Auth's /auth/v1/verify with the token hash, never
 // the raw token. redirect_to is used only when it matches an allowed URL
@@ -17,7 +20,9 @@ import { GatewayError } from "../_shared/core/errors.ts";
 import { json } from "../_shared/core/http.ts";
 import { reportError, tagRequest, tagUserId } from "../_shared/core/observability.ts";
 import type { EmailSender } from "../_shared/messaging/resend.ts";
-import { type EmailKind, renderEmail } from "./templates.ts";
+import { type EmailKind, renderEmail, renderSignInCode, type SignInAudience } from "./templates.ts";
+
+export type AuthEmailContext = { allowed: boolean; audience: SignInAudience };
 
 export type SendAuthEmailConfig = {
   /** Public base URL of Supabase Auth, e.g. https://<ref>.supabase.co (no /auth/v1). */
@@ -33,10 +38,15 @@ export type SendAuthEmailConfig = {
 export type SendAuthEmailDeps = {
   verifyHook: HookVerifier;
   sendEmail: EmailSender;
+  /** auth_email_context(user), through the service role (after the signature). */
+  emailContext: (userId: string) => Promise<AuthEmailContext>;
   config: SendAuthEmailConfig;
 };
 
 const SUPPORTED = ["recovery", "signup", "invite", "email_change"] as const;
+/** GoTrue's actions for an email sign-in code (signInWithOtp). */
+const SIGN_IN = ["magiclink", "email"] as const;
+const AUDIENCES: readonly string[] = ["TEAM", "TRADE", "MONVELO"];
 
 const hookEvent = z.object({
   user: z.object({
@@ -46,6 +56,7 @@ const hookEvent = z.object({
   }).passthrough(),
   email_data: z.object({
     email_action_type: z.string(),
+    token: z.string().optional().nullable(),
     token_hash: z.string().optional().nullable(),
     token_hash_new: z.string().optional().nullable(),
     redirect_to: z.string().optional().nullable(),
@@ -97,6 +108,9 @@ export function createSendAuthEmailHandler(deps: SendAuthEmailDeps): (req: Reque
     const { user, email_data: data } = event.data;
     tagUserId(user.id);
     const action = data.email_action_type;
+    if ((SIGN_IN as readonly string[]).includes(action)) {
+      return await sendSignInCode(deps, req, user.id, user.email ?? null, data.token ?? null);
+    }
     if (!(SUPPORTED as readonly string[]).includes(action)) {
       return hookError(400, "This kind of email is not available.");
     }
@@ -141,4 +155,40 @@ export function createSendAuthEmailHandler(deps: SendAuthEmailDeps): (req: Reque
     }
     return json(200, {});
   };
+}
+
+async function sendSignInCode(
+  deps: SendAuthEmailDeps,
+  req: Request,
+  userId: string,
+  to: string | null,
+  code: string | null,
+): Promise<Response> {
+  if (!to || !code || !/^[0-9]{4,10}$/.test(code)) return hookError(400, "unexpected hook payload");
+
+  let ctx: AuthEmailContext;
+  try {
+    ctx = await deps.emailContext(userId);
+  } catch (e) {
+    reportError(e);
+    return hookError(503, "Sign-in is unavailable. Try again shortly.");
+  }
+  if (!ctx?.allowed) return hookError(403, "This email has no Teafair access.");
+  const audience: SignInAudience = AUDIENCES.includes(ctx.audience) ? ctx.audience : "TEAM";
+
+  const hookId = req.headers.get("webhook-id");
+  try {
+    await deps.sendEmail({
+      to,
+      ...renderSignInCode(audience, code),
+      ...(hookId ? { idempotencyKey: `${hookId}:sign_in` } : {}),
+    });
+  } catch (e) {
+    // EmailDeliveryError carries the HTTP status only; anything else is replaced
+    const status = (e as { status?: unknown }).status;
+    reportError(new GatewayError(502, "EMAIL_DELIVERY_FAILED",
+      `auth email (sign_in) not sent${typeof status === "number" ? `: HTTP ${status}` : ""}`));
+    return hookError(502, "The email could not be sent. Try again.");
+  }
+  return json(200, {});
 }

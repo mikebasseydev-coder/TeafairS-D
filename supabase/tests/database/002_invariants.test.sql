@@ -40,14 +40,15 @@ select is(
 select is(
   (select full_name from public.profiles where id = '20000000-0000-0000-0000-000000000001'),
   'Zainab ZSM', 'full_name is copied from user metadata');
-select throws_ok(
+-- email-first (20261125120000): an email alone is enough; the phone is optional
+select lives_ok(
   $$insert into auth.users (id, email) values ('20000000-0000-0000-0000-0000000000ff', 'nophone@example.com')$$,
-  'P0001', null, 'an auth user without a phone number is refused');
+  'an auth user with an email and no phone gets a profile');
 select throws_ok(
-  $$insert into auth.users (id, email, raw_user_meta_data) values
-      ('20000000-0000-0000-0000-0000000000fe', 'squat@example.com', '{"phone":"+2348000000001"}')$$,
-  'P0001', 'a phone number is required to create a Teafair account',
-  'a phone in client-written user metadata is ignored (audit H1)');
+  $$insert into auth.users (id, raw_user_meta_data) values
+      ('20000000-0000-0000-0000-0000000000fe', '{"phone":"+2348000000001","email":"squat@example.com"}')$$,
+  'P0001', 'an email address is required to create a Teafair account',
+  'a contact in client-written user metadata is ignored (audit H1)');
 
 insert into public.zones (id, tenant_id, zone_name, state_code) values
   ('30000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA'),

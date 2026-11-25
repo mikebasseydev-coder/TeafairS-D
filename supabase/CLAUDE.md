@@ -618,6 +618,40 @@ functions `send-auth-sms` and `send-auth-email`, local only. From the
 6. Meta: the `teafair_otp` authentication template is now also the sign-in
    code. With no SMS fallback, a number not on WhatsApp cannot sign in.
 
+### Email-first sign-in (user decision 2026-11-25)
+
+Migration `20261125120000_auth_email_first`, pgTAP 082 (002 and 004 updated),
+the changed `send-auth-email`, local only. Meta's WhatsApp templates and the
+Nigerian sender-ID approvals are not in place, so every persona signs in by
+email (a 6-digit code or a password). **This supersedes the "verified phones
+only" and "magic links refused" lines of the auth hardening section above.**
+
+- `profiles.phone_number` is nullable; a profile holds an email, a phone or
+  both (`profiles_contact_present`). `handle_new_user` takes both from
+  GoTrue's own columns (never metadata, H1); a confirmed email or phone change
+  in `auth.users` follows into `profiles` (`on_auth_user_contact_changed`).
+- `invite_tenant_user`, `add_monvelo_member`, `appoint_zone_manager` and
+  `appoint_client_service_manager` take `p_contact` (was `p_phone_number`;
+  same types, order and grants): a confirmed email or a confirmed phone
+  (`resolve_verified_account`). Errors never echo the contact. A phone keeps
+  the idempotency key `phone_number`, so old keys still replay.
+- `send-auth-email` now sends the sign-in code for GoTrue's `magiclink` and
+  `email` actions: **the code only, never a link**, and only when
+  `auth_email_context(user)` (service role, after the hook signature; listed
+  in the R46 guard) allows the person: a platform role, an ACTIVE or INVITED
+  membership, an ACTIVE Monvelo agent membership, or a registered shop. Its
+  `audience` picks the copy: TEAM (platform and tenant staff, who win),
+  MONVELO, TRADE. Anyone else gets the hook's 403. Reauthentication is still
+  refused. The Monvelo read sits in `is_monvelo_agent_member` (internal) so
+  045's domain guard holds.
+- `send-auth-sms` is unchanged and parked. The shop owner's delivery,
+  repayment, consent and OTP codes still go to a verified phone (a business
+  rule, not sign-in) and fail closed without one.
+- **Deploy:** push the migration, then deploy `send-auth-email` straight
+  after (the old hook refuses sign-in codes). The Send Email hook must be
+  re-enabled in the dashboard with a correct `SEND_EMAIL_HOOK_SECRET`. Email
+  OTP expiry is `otp_expiry = 3600` locally; set it shorter on the remote.
+
 ### Domain separation (A6 §15)
 
 Migrations `20261028130000`-`20261028130500`, pgTAP 042-045, local only.

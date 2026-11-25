@@ -15,6 +15,7 @@ const read = (path: string) => Deno.readTextFileSync(new URL(path, root));
 const SERVICE_RPC: Record<string, string> = {
   "auth-verify-claims": "system: Standard Webhooks signature (AUTH_HOOK_SECRET)",
   "send-auth-sms": "system: Standard Webhooks signature (SEND_SMS_HOOK_SECRET)",
+  "send-auth-email": "system: Standard Webhooks signature (SEND_EMAIL_HOOK_SECRET)",
   "process-payment": "system: Paystack x-paystack-signature, then Verify",
   "reconcile-funds": "system: x-cron-secret (constant time)",
   "web-commission-release": "system: x-cron-secret (constant time)",
