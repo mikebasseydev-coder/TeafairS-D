@@ -115,12 +115,26 @@ approved. These rules govern it when it starts and must be recorded in it.
 - **Layout:** `src/features/<feature>/` (components, screens, hooks, services,
   store) and `src/shared/` (`tokens/`, `storage/`, `network/`, `components/`).
   Features never import each other's internals; they share only through
-  `src/shared/` or a feature's public `index.ts`. Monvelo is its own feature
-  and never shares a store or service with the web/storefront code (A6 §15).
-- **Data access:** the app reads through RLS (`SELECT` only) and writes only
-  by calling an Edge Function in `src/shared/network/` with the user's JWT.
-  It never writes to a table, never sends a `tenantId`, and never holds a
-  secret key (Rules above, Ruling 46).
+  `src/shared/` or a feature's public barrel `index.ts`. Monvelo is its own
+  feature and never shares a store or service with the web/storefront code
+  (A6 §15). This replaces Spec A's flat `src/` (§12, §7.1 `src/store/`).
+- **Write path (ruling 2026-11-25).** The app reads through RLS (`SELECT`
+  only). It writes in one of two ways, both under the user's JWT and both
+  through `src/shared/network/`:
+  1. **an idempotency-keyed `SECURITY DEFINER` RPC** through PostgREST
+     (`supabase.rpc`), `p_idempotency_key` first, for every write that has
+     no gateway (most of them: invitations, PINs, tickets, chat, Monvelo,
+     RTM);
+  2. **an Edge Function** wherever a gateway exists for that operation: PIN
+     checks (`requirePin`), WhatsApp codes, Paystack, Storage upload slots,
+     and other external IO. Never call the RPC behind a gateway directly
+     (A5: `order-delivery-confirm`, not `mark_order_delivered`).
+
+  Both follow the §3.5 error contract, so the offline queue treats them
+  alike. The app never writes to a table, never sends a `tenantId` (a
+  membership is named by `tenant_users.id`; `set_active_tenant` is the one
+  exception), and never holds a secret key (Rules above, Ruling 46). This
+  replaces Spec A §3.4's gateway inventory, which is out of date.
 - **Tokens:** `src/shared/tokens/` is the single source of the `FIGMA.md`
   `teafair-*` values and exports the NativeWind preset that
   `tailwind.config.js` consumes. No hex values and no stock palette classes

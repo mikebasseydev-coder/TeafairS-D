@@ -67,7 +67,8 @@ grant execute on function pg_temp.act_as(uuid, uuid) to authenticated;
 -- every RPC the app may call takes the idempotency key first and no tenant;
 -- the exemptions are reads: pos_order_lookup (addendum A2 §4.2) and
 -- list_my_chat_channels (addendum A4 §4.5) and get_order_dispute_evidence
--- (addendum A5 §6: a read that audits the view, so no idempotency)
+-- (addendum A5 §6: a read that audits the view, so no idempotency) and
+-- get_my_pin_status (onboarding 20261125130000: the active membership's PIN state)
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
@@ -76,6 +77,7 @@ select is(
       and p.oid <> 'public.pos_order_lookup(text)'::regprocedure
       and p.oid <> 'public.list_my_chat_channels()'::regprocedure
       and p.oid <> 'public.get_order_dispute_evidence(uuid)'::regprocedure
+      and p.oid <> 'public.get_my_pin_status()'::regprocedure
       and (p.proargnames[1] is distinct from 'p_idempotency_key'
            or p.proargtypes[0] <> 'uuid'::regtype)),
   0, 'every app-callable RPC takes p_idempotency_key uuid first');
@@ -194,7 +196,7 @@ select throws_ok(
 select throws_ok(
   $$select public.invite_tenant_user('aaaaaaaa-0000-0000-0000-000000000099', '+2348000000008', 'DSA',
       '40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000007')$$,
-  'P0001', 'no Teafair account with a verified phone exists for +2348000000008',
+  'P0001', 'no Teafair account with a verified email or phone matches that contact',
   'an invite never reaches an account whose phone is unverified (audit H1)');
 select throws_ok(
   $$select public.invite_tenant_user('aaaaaaaa-0000-0000-0000-000000000011', '+2348000000006', 'ZSM',

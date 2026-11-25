@@ -31,6 +31,21 @@ Deno.test("an HTTP failure is a failed send", async () => {
   await assertRejects(() => send("+2348000000005", "x"));
 });
 
+Deno.test("KudiSMS is given an abort signal", async () => {
+  const seen: Request[] = [];
+  const send = kudiSmsSender({ token: "tok", senderId: "Teafair", fetchFn: fakeFetch({ error_code: "000" }, 200, seen) });
+  await send("+2348000000005", "x");
+  assertEquals(seen[0].signal instanceof AbortSignal, true);
+});
+
+Deno.test("a KudiSMS call that hangs fails at the timeout, without the token in the error", async () => {
+  // never settles and ignores the signal, like a stuck connection
+  const hung: typeof fetch = () => new Promise<Response>(() => {});
+  const send = kudiSmsSender({ token: "tok-secret", senderId: "Teafair", fetchFn: hung, timeoutMs: 20 });
+  const err = await assertRejects(() => send("+2348000000005", "Your code is 123456"), Error, "KudiSMS timed out");
+  assertEquals(/tok-secret|123456|2348000000005/.test(String(err)), false);
+});
+
 Deno.test("there is no default SMS provider", () => {
   Deno.env.delete("SMS_PROVIDER");
   let threw = false;

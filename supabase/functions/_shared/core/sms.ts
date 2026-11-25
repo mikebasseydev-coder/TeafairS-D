@@ -13,23 +13,47 @@ export function kudiSmsSender(opts: {
   gateway?: string;
   baseUrl?: string;
   fetchFn?: typeof fetch;
+  /** Gives up after this long, so a stuck KudiSMS never hangs an Auth hook or a gateway. */
+  timeoutMs?: number;
 }): SmsSender {
   const fetchFn = opts.fetchFn ?? fetch;
   const baseUrl = opts.baseUrl ?? "https://my.kudisms.net";
+  const timeoutMs = opts.timeoutMs ?? 10000;
   return async (to, message) => {
-    const res = await fetchFn(`${baseUrl}/api/sms`, {
-      method: "POST",
-      body: new URLSearchParams({
-        token: opts.token,
-        senderID: opts.senderId,
-        recipients: to.replace(/^\+/, ""),
-        message,
-        ...(opts.gateway ? { gateway: opts.gateway } : {}),
-      }),
+    const signal = AbortSignal.timeout(timeoutMs);
+    let abort: (() => void) | undefined;
+    // Race the call against the signal so a transport that ignores it still times out.
+    const timedOut = new Promise<never>((_, reject) => {
+      abort = () => reject(new Error("KudiSMS timed out"));
+      signal.addEventListener("abort", abort, { once: true });
     });
-    const payload = await res.json().catch(() => null) as { error_code?: string; msg?: string } | null;
-    if (!res.ok || payload?.error_code !== "000") {
-      throw new Error(`KudiSMS rejected the message: ${payload?.msg ?? `HTTP ${res.status}`}`);
+    try {
+      const res = await Promise.race([
+        fetchFn(`${baseUrl}/api/sms`, {
+          method: "POST",
+          signal,
+          body: new URLSearchParams({
+            token: opts.token,
+            senderID: opts.senderId,
+            recipients: to.replace(/^\+/, ""),
+            message,
+            ...(opts.gateway ? { gateway: opts.gateway } : {}),
+          }),
+        }),
+        timedOut,
+      ]);
+      const payload = await Promise.race([
+        res.json().catch(() => null) as Promise<{ error_code?: string; msg?: string } | null>,
+        timedOut,
+      ]);
+      if (!res.ok || payload?.error_code !== "000") {
+        throw new Error(`KudiSMS rejected the message: ${payload?.msg ?? `HTTP ${res.status}`}`);
+      }
+    } catch (e) {
+      if (signal.aborted) throw new Error("KudiSMS timed out");
+      throw e;
+    } finally {
+      if (abort) signal.removeEventListener("abort", abort);
     }
   };
 }

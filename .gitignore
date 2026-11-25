@@ -6,9 +6,13 @@
 # Environment — never commit Supabase URLs or keys
 .env
 .env*.local
+supabase/.env.prod.secrets
 
 # Package installs (the app gets its own setup under Spec B)
 node_modules/
+
+# Deno writes a lockfile wherever it runs; the functions pin their own versions
+deno.lock
 
 # design reference pipeline: harvested screenshots and tokens stay local
 .design-refs/

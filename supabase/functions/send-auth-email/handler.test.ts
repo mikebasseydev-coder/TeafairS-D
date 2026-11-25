@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { hookResultCode } from "../_shared/auth/hook.ts";
-import { createSendAuthEmailHandler, safeRedirect } from "./handler.ts";
+import { type AuthEmailContext, createSendAuthEmailHandler, safeRedirect } from "./handler.ts";
 import { type Email, EmailDeliveryError, resendSender } from "../_shared/messaging/resend.ts";
 
 const USER = "20000000-0000-0000-0000-000000000003";
@@ -12,12 +12,23 @@ const config = {
   recoveryRedirect: `${SITE}/reset-password`,
 };
 
-function setup(opts: { badSignature?: boolean; sendFails?: boolean } = {}) {
+function setup(opts: {
+  badSignature?: boolean;
+  sendFails?: boolean;
+  context?: { allowed: boolean; audience: string };
+  contextFails?: boolean;
+} = {}) {
   const sent: Email[] = [];
+  const asked: string[] = [];
   const handler = createSendAuthEmailHandler({
     verifyHook: (payload) => {
       if (opts.badSignature) throw new Error("bad signature");
       return JSON.parse(payload);
+    },
+    emailContext: (userId) => {
+      asked.push(userId);
+      if (opts.contextFails) return Promise.reject(new Error("db down"));
+      return Promise.resolve((opts.context ?? { allowed: true, audience: "TEAM" }) as AuthEmailContext);
     },
     sendEmail: (email) => {
       if (opts.sendFails) return Promise.reject(new EmailDeliveryError(422));
@@ -26,7 +37,7 @@ function setup(opts: { badSignature?: boolean; sendFails?: boolean } = {}) {
     },
     config,
   });
-  return { handler, sent };
+  return { handler, sent, asked };
 }
 
 const event = (action: string, data: Record<string, unknown> = {}, user: Record<string, unknown> = {}) => ({
@@ -87,12 +98,64 @@ Deno.test("a single-confirmation email change mails only the new address", async
   assertEquals(sent.map((e) => e.to), ["ada.new@example.com"]);
 });
 
-Deno.test("magic links, email OTPs and reauthentication are refused", async () => {
-  for (const action of ["magiclink", "email", "reauthentication"]) {
-    const { handler, sent } = setup();
-    assertEquals(await hookResultCode(await handler(post(event(action)))), 400, action);
-    assertEquals(sent, []);
+Deno.test("reauthentication is refused", async () => {
+  const { handler, sent } = setup();
+  assertEquals(await hookResultCode(await handler(post(event("reauthentication")))), 400);
+  assertEquals(sent, []);
+});
+
+Deno.test("a sign-in code (magiclink or email) goes to an allowed person as the code only, no link", async () => {
+  for (const action of ["magiclink", "email"]) {
+    const { handler, sent, asked } = setup();
+    const res = await handler(post(event(action), { "webhook-id": "msg_9" }));
+    assertEquals([res.status, await res.json()], [200, {}], action);
+    assertEquals(asked, [USER]);
+    assertEquals(sent.length, 1);
+    assertEquals([sent[0].to, sent[0].subject], ["ada@example.com", "Your Teafair sign-in code"]);
+    assert(sent[0].html.includes("123456") && sent[0].text.includes("123456"));
+    assert(!/href=|https?:\/\//.test(sent[0].html), "no link in a sign-in code email");
+    assert(!sent[0].text.includes("hash-abc"));
+    assertEquals(sent[0].idempotencyKey, "msg_9:sign_in");
   }
+});
+
+Deno.test("the sign-in copy follows the audience", async () => {
+  for (const [audience, subject] of [
+    ["TEAM", "Your Teafair sign-in code"],
+    ["TRADE", "Your Teafair trade sign-in code"],
+    ["MONVELO", "Your Monvelo sign-in code"],
+    ["SOMETHING_ELSE", "Your Teafair sign-in code"],
+  ]) {
+    const { handler, sent } = setup({ context: { allowed: true, audience } });
+    await handler(post(event("magiclink")));
+    assertEquals(sent[0].subject, subject, audience);
+  }
+});
+
+Deno.test("a sign-in code is refused (403) to a person auth_email_context does not allow", async () => {
+  const { handler, sent } = setup({ context: { allowed: false, audience: "TEAM" } });
+  assertEquals(await hookResultCode(await handler(post(event("magiclink")))), 403);
+  assertEquals(sent, []);
+});
+
+Deno.test("the sign-in gate failing is a 503 and sends nothing", async () => {
+  const { handler, sent } = setup({ contextFails: true });
+  assertEquals(await hookResultCode(await handler(post(event("email")))), 503);
+  assertEquals(sent, []);
+});
+
+Deno.test("a sign-in event without a numeric code or an address is 400", async () => {
+  for (const [data, user] of [[{ token: "" }, {}], [{ token: "abc123" }, {}], [{}, { email: null }]]) {
+    const { handler, sent, asked } = setup();
+    assertEquals(await hookResultCode(await handler(post(event("magiclink", data, user)))), 400);
+    assertEquals([sent, asked], [[], []]);
+  }
+});
+
+Deno.test("a sign-in code is never asked about before the signature holds", async () => {
+  const { handler, asked } = setup({ badSignature: true });
+  assertEquals(await hookResultCode(await handler(post(event("magiclink")))), 401);
+  assertEquals(asked, []);
 });
 
 Deno.test("an unsigned or forged call is 401 and sends nothing", async () => {

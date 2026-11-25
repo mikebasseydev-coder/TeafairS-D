@@ -618,6 +618,67 @@ functions `send-auth-sms` and `send-auth-email`, local only. From the
 6. Meta: the `teafair_otp` authentication template is now also the sign-in
    code. With no SMS fallback, a number not on WhatsApp cannot sign in.
 
+### Email-first sign-in (user decision 2026-11-25)
+
+Migration `20261125120000_auth_email_first`, pgTAP 082 (002 and 004 updated),
+the changed `send-auth-email`, local only. Meta's WhatsApp templates and the
+Nigerian sender-ID approvals are not in place, so every persona signs in by
+email (a 6-digit code or a password). **This supersedes the "verified phones
+only" and "magic links refused" lines of the auth hardening section above.**
+
+- `profiles.phone_number` is nullable; a profile holds an email, a phone or
+  both (`profiles_contact_present`). `handle_new_user` takes both from
+  GoTrue's own columns (never metadata, H1); a confirmed email or phone change
+  in `auth.users` follows into `profiles` (`on_auth_user_contact_changed`).
+- `invite_tenant_user`, `add_monvelo_member`, `appoint_zone_manager` and
+  `appoint_client_service_manager` take `p_contact` (was `p_phone_number`;
+  same types, order and grants): a confirmed email or a confirmed phone
+  (`resolve_verified_account`). Errors never echo the contact. A phone keeps
+  the idempotency key `phone_number`, so old keys still replay.
+- `send-auth-email` now sends the sign-in code for GoTrue's `magiclink` and
+  `email` actions: **the code only, never a link**, and only when
+  `auth_email_context(user)` (service role, after the hook signature; listed
+  in the R46 guard) allows the person: a platform role, an ACTIVE or INVITED
+  membership, an ACTIVE Monvelo agent membership, or a registered shop. Its
+  `audience` picks the copy: TEAM (platform and tenant staff, who win),
+  MONVELO, TRADE. Anyone else gets the hook's 403. Reauthentication is still
+  refused. The Monvelo read sits in `is_monvelo_agent_member` (internal) so
+  045's domain guard holds.
+- `send-auth-sms` is unchanged and parked. The shop owner's delivery,
+  repayment, consent and OTP codes still go to a verified phone (a business
+  rule, not sign-in) and fail closed without one.
+- **Deploy:** push the migration, then deploy `send-auth-email` straight
+  after (the old hook refuses sign-in codes). The Send Email hook must be
+  re-enabled in the dashboard with a correct `SEND_EMAIL_HOOK_SECRET`. Email
+  OTP expiry is `otp_expiry = 3600` locally; set it shorter on the remote.
+
+### Onboarding: invitations and the membership PIN (2026-11-25)
+
+Migration `20261125130000_auth_onboarding_invitations_pin`, pgTAP 083, local
+only. Before it, an INVITED member could sign in but never get a tenant (the
+claims hook counts ACTIVE only), and nothing wrote `tenant_users.pin_hash`.
+All six are `authenticated`; none takes a tenant id.
+
+- `list_my_invitations()`: the caller's INVITED memberships in ACTIVE
+  tenants, with the tenant's name and code and the post's place names.
+- `accept_tenant_invitation(key, tenant_user_id)`: INVITED -> ACTIVE; primary
+  when the caller has no ACTIVE primary, so the refreshed token carries it.
+  Replies `refresh_session: true`. Another person's id, an unknown one and a
+  used one are all P0001 "invitation not found"; an inactive tenant is P0001.
+- `decline_tenant_invitation(key, tenant_user_id)`: INVITED -> DISABLED. The
+  unique `(tenant_id, profile_id)` means re-inviting a decliner needs a
+  re-enable path (not built).
+- `get_my_pin_status()` (a read; exempt in 004's contract check):
+  `{tenant_user_id, pin_set, locked_until}` for the active membership.
+- `set_tenant_pin(key, new_pin)`: the first PIN only. `change_tenant_pin(key,
+  current_pin, new_pin)`: shares `verify_pin`'s 5 attempts and 15-minute lock;
+  a wrong or locked current PIN is a reply `{changed:false,
+  attempts_remaining, locked_until}` (A5 R5), so use a fresh key per attempt.
+- PINs: four digits, not one digit repeated, not a run (`pin_policy_refusal`,
+  internal), bcrypt cost 10 (what `verify_pin` reads). A PIN never enters the
+  idempotency request, a reply, an error or an audit row. Each membership has
+  its own PIN. A forgotten PIN has no reset path yet.
+
 ### Domain separation (A6 §15)
 
 Migrations `20261028130000`-`20261028130500`, pgTAP 042-045, local only.
@@ -1604,11 +1665,18 @@ one responsibility per file. Third-party versions appear only in
 
 ```bash
 supabase functions serve --env-file supabase/functions/.env     # serve locally
-deno test --allow-env --allow-read supabase/functions/         # unit tests (+ R46 guards)
+deno test --node-modules-dir=none --allow-env --allow-read supabase/functions/   # unit tests (+ R46 guards)
 supabase status -o env > supabase/.env.test.local               # then:
-deno test --allow-net --allow-env --env-file=supabase/.env.test.local \
+deno test --node-modules-dir=none --allow-net --allow-env --env-file=supabase/.env.test.local \
   --env-file=supabase/functions/.env supabase/functions/_tests/gateway.integration.ts
 ```
+
+**`--node-modules-dir=none` is required** on every `deno test` and `deno check`.
+The repo-level tooling uses pnpm, which creates a root `node_modules` beside
+`package.json`. Without the flag, Deno looks for the functions' `npm:` imports
+(`@sentry/deno`, `postgres`, …) there and fails before any test runs. The flag
+keeps Deno on its own cache, so the functions stay out of pnpm's install. There
+is deliberately no `deno.json`, so deploy bundling is unchanged.
 
 Before the integration run: `supabase db reset` wipes Vault, so run
 `select vault.create_secret('<GATEWAY_SECRET>', 'gateway_secret');` (A5, R16),

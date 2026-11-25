@@ -5,9 +5,23 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "harvest": "node scripts/harvest-ui.js",
-    "harvest:install-browser": "playwright install chromium"
+    "harvest:install-browser": "playwright install chromium",
+    "db:seed": "tsx supabase/seed.ts",
+    "db:fresh": "supabase db reset && pnpm db:seed",
+    "functions:serve:api": "node scripts/api-test-env.mjs && supabase functions serve --env-file supabase/functions/.env.api.local",
+    "test:api": "playwright test",
+    "test:backend": "pnpm db:fresh && pnpm test:api"
   },
   "dependencies": {
-    "playwright": "1.65.0"
+    "playwright": "1.65.1"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "@playwright/test": "^1.65.1",
+    "@supabase/supabase-js": "^2.119.2",
+    "dotenv": "^18.0.10",
+    "postgres": "3.4.5",
+    "supabase": "3.4.0",
+    "tsx": "^4.23.15"
   }
 }
