@@ -652,6 +652,33 @@ only" and "magic links refused" lines of the auth hardening section above.**
   re-enabled in the dashboard with a correct `SEND_EMAIL_HOOK_SECRET`. Email
   OTP expiry is `otp_expiry = 3600` locally; set it shorter on the remote.
 
+### Onboarding: invitations and the membership PIN (2026-11-25)
+
+Migration `20261125130000_auth_onboarding_invitations_pin`, pgTAP 083, local
+only. Before it, an INVITED member could sign in but never get a tenant (the
+claims hook counts ACTIVE only), and nothing wrote `tenant_users.pin_hash`.
+All six are `authenticated`; none takes a tenant id.
+
+- `list_my_invitations()`: the caller's INVITED memberships in ACTIVE
+  tenants, with the tenant's name and code and the post's place names.
+- `accept_tenant_invitation(key, tenant_user_id)`: INVITED -> ACTIVE; primary
+  when the caller has no ACTIVE primary, so the refreshed token carries it.
+  Replies `refresh_session: true`. Another person's id, an unknown one and a
+  used one are all P0001 "invitation not found"; an inactive tenant is P0001.
+- `decline_tenant_invitation(key, tenant_user_id)`: INVITED -> DISABLED. The
+  unique `(tenant_id, profile_id)` means re-inviting a decliner needs a
+  re-enable path (not built).
+- `get_my_pin_status()` (a read; exempt in 004's contract check):
+  `{tenant_user_id, pin_set, locked_until}` for the active membership.
+- `set_tenant_pin(key, new_pin)`: the first PIN only. `change_tenant_pin(key,
+  current_pin, new_pin)`: shares `verify_pin`'s 5 attempts and 15-minute lock;
+  a wrong or locked current PIN is a reply `{changed:false,
+  attempts_remaining, locked_until}` (A5 R5), so use a fresh key per attempt.
+- PINs: four digits, not one digit repeated, not a run (`pin_policy_refusal`,
+  internal), bcrypt cost 10 (what `verify_pin` reads). A PIN never enters the
+  idempotency request, a reply, an error or an audit row. Each membership has
+  its own PIN. A forgotten PIN has no reset path yet.
+
 ### Domain separation (A6 §15)
 
 Migrations `20261028130000`-`20261028130500`, pgTAP 042-045, local only.
