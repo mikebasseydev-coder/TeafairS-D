@@ -460,6 +460,16 @@ test.describe("monvelo-agent-register: request validation", () => {
 
 // ── e) the happy path, side effects and idempotency ─────────────────────
 test.describe("monvelo-agent-register: registration by the ASA, audit and idempotency", () => {
+  // The tests after the registration read its agent and key. Run on their own
+  // (one test picked in the UI, or a -g filter) they register first with the
+  // same key, so each one stands alone; in a full run the first test has.
+  const ensureRegistered = async (request: APIRequestContext) => {
+    if (agentId) return;
+    const res = await register(request, asa, { ...agentInput, idempotency_key: key });
+    expect(res.status(), "setup: the ASA registers the POS agent").toBe(200);
+    agentId = (await res.json()).agent_id;
+  };
+
   test("the ASA registers the POS agent: 200, PENDING, one Paystack call, no account number back", async ({ request }) => {
     let body: any;
     const n = await paystackCallsDuring(async () => {
@@ -477,6 +487,7 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("the operator reads the new agent as recorded: the resolved name, the ASA as recruiter", async ({ request }) => {
+    await ensureRegistered(request);
     const [a] = await rows(request, ops, `monvelo_agents?id=eq.${agentId}&select=${AGENT_COLS}`);
     expect(a).toEqual({
       id: agentId,
@@ -491,6 +502,7 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("the full settlement account number is readable by no API role, not even Monvelo staff", async ({ request }) => {
+    await ensureRegistered(request);
     const res = await request.get(`/rest/v1/monvelo_agents?id=eq.${agentId}&select=settlement_account_number`,
       { headers: authHeaders(ops) });
     expect(res.status()).not.toBe(200);
@@ -498,12 +510,14 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("a PENDING agent is invisible to the tenant and to field agents", async ({ request }) => {
+    await ensureRegistered(request);
     for (const s of [asa, zsa, rep1, manager, fintechAgent, lagosAsa]) {
       expect(await rows(request, s, `monvelo_agents?id=eq.${agentId}&select=id`)).toHaveLength(0);
     }
   });
 
   test("the caller's idempotency log is COMPLETED with the agent id; nobody else reads it", async ({ request }) => {
+    await ensureRegistered(request);
     const log = await rows(request, asa,
       `idempotency_logs?key=eq.${key}&select=key,operation,status,actor_id,tenant_id,response`);
     expect(log).toHaveLength(1);
@@ -518,11 +532,13 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("the audit row is tenant-null (R19): no API role reads it", async ({ request }) => {
+    await ensureRegistered(request);
     const q = `audit_logs?entity_type=eq.monvelo_agents&entity_id=eq.${agentId}&select=id`;
     for (const s of [asa, rep1, manager, ops]) expect(await rows(request, s, q)).toHaveLength(0);
   });
 
-  test("the audit row records the key, the ASA and a redacted agent (read as postgres)", async () => {
+  test("the audit row records the key, the ASA and a redacted agent (read as postgres)", async ({ request }) => {
+    await ensureRegistered(request);
     const sql = openDb();
     try {
       const audit = await sql<any[]>`
@@ -548,6 +564,7 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("an identical retry replays the cached 200 with 0 Paystack calls, even if the bank's name changed", async ({ request }) => {
+    await ensureRegistered(request);
     holders.set(accountNumber, "SOMEBODY ELSE ENTIRELY"); // would have broken the old replay (TF002)
     try {
       const n = await paystackCallsDuring(async () => {
@@ -576,6 +593,7 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("the same key with a changed payload is 409 IDEMPOTENCY_MISMATCH with 0 Paystack calls", async ({ request }) => {
+    await ensureRegistered(request);
     const n = await paystackCallsDuring(async () => {
       const res = await register(request, asa,
         { ...agentInput, idempotency_key: key, business_name: `${agentInput.business_name} Changed` });
@@ -588,6 +606,7 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("the ZSA replaying the ASA's key is 409 IDEMPOTENCY_MISMATCH, never the ASA's answer", async ({ request }) => {
+    await ensureRegistered(request);
     const n = await paystackCallsDuring(async () => {
       const res = await register(request, zsa, { ...agentInput, idempotency_key: key });
       expect(res.status()).toBe(409);
@@ -599,12 +618,14 @@ test.describe("monvelo-agent-register: registration by the ASA, audit and idempo
   });
 
   test("a refused persona replaying the ASA's key gets 403, never the ASA's answer", async ({ request }) => {
+    await ensureRegistered(request);
     const res = await register(request, rep1, { ...agentInput, idempotency_key: key });
     expect(res.status()).toBe(403);
     expect(JSON.stringify(await res.json())).not.toContain(agentId);
   });
 
   test("a fresh key cannot register the same network agent twice: 409 CONFLICT, still one agent", async ({ request }) => {
+    await ensureRegistered(request);
     const k = randomUUID();
     const res = await register(request, asa, { ...agentInput, idempotency_key: k });
     expect(res.status()).toBe(409);
@@ -678,6 +699,17 @@ test.describe("monvelo-agent-register: change_settlement", () => {
     idempotency_key: changeKey, action: "change_settlement", agent_id: SEED.monveloAgentId,
     settlement_account_number: changeAcct, settlement_bank_code: "044", ...over,
   });
+  let changeRequested = false;
+
+  // The replay tests need the ASA's change under changeKey; run on their own
+  // they request it first, as the full run's third test does.
+  const ensureChangeRequested = async (request: APIRequestContext) => {
+    if (changeRequested) return;
+    holders.set(changeAcct, "OJODU LIQUIDITY POINT");
+    const res = await register(request, asa, change());
+    expect(res.status(), "setup: the recruiting ASA requests the change").toBe(200);
+    changeRequested = true;
+  };
 
   test("the ZSA, who did not recruit the agent, is refused with 0 Paystack calls", async ({ request }) => {
     const n = await paystackCallsDuring(async () => {
@@ -705,6 +737,7 @@ test.describe("monvelo-agent-register: change_settlement", () => {
       text = await res.text();
     });
     expect(n).toBe(1);
+    changeRequested = true;
     expect(JSON.parse(text)).toEqual({
       agent_id: SEED.monveloAgentId, status: "PENDING_APPROVAL", settlement_account_last4: changeAcct.slice(-4),
     });
@@ -712,6 +745,7 @@ test.describe("monvelo-agent-register: change_settlement", () => {
   });
 
   test("an identical retry replays the cached 200 with 0 Paystack calls", async ({ request }) => {
+    await ensureChangeRequested(request);
     const n = await paystackCallsDuring(async () => {
       const res = await register(request, asa, change());
       expect(res.status()).toBe(200);
@@ -723,6 +757,7 @@ test.describe("monvelo-agent-register: change_settlement", () => {
   });
 
   test("the same key for a different account is 409 IDEMPOTENCY_MISMATCH with 0 Paystack calls", async ({ request }) => {
+    await ensureChangeRequested(request);
     const n = await paystackCallsDuring(async () => {
       const res = await register(request, asa, change({ settlement_account_number: account() }));
       expect(res.status()).toBe(409);

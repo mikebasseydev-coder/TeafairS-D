@@ -2,6 +2,18 @@
 // ever put in an error message.
 export type ResendConfig = { apiKey: string; from: string; apiUrl?: string };
 
+/**
+ * Resend's sandbox sender. It delivers only to the address that owns the
+ * Resend account, so it is a safe fallback until a domain is verified.
+ */
+export const DEFAULT_FROM = "Teafair <onboarding@resend.dev>";
+
+/** The configured sender, or the sandbox sender when it is unset or blank. */
+export function senderFrom(configured: string | undefined | null): string {
+  const v = configured?.trim();
+  return v ? v : DEFAULT_FROM;
+}
+
 export type Email = { to: string; subject: string; html: string; text: string; idempotencyKey?: string };
 
 export type EmailSender = (email: Email) => Promise<void>;

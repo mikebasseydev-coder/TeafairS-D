@@ -29,9 +29,23 @@ async function signIn(request: APIRequestContext, email: string, password = PASS
 }
 
 async function session(request: APIRequestContext, email: string): Promise<Session> {
-  const res = await signIn(request, email);
-  expect(res.status(), `sign-in for ${email}`).toBe(200);
-  const token = (await res.json()).access_token as string;
+  // `supabase db reset` restarts the containers; Auth and the access token
+  // hook can take a few seconds to answer, so wait out 5xx and refused
+  // connections (never a 4xx, which is a real answer).
+  let res: Awaited<ReturnType<typeof signIn>> | undefined;
+  for (const deadline = Date.now() + 45_000; ;) {
+    try {
+      res = await signIn(request, email);
+      if (res.status() < 500) break;
+    } catch {
+      // stack still restarting
+    }
+    if (Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  expect(res, `sign-in for ${email}: the local stack did not answer`).toBeDefined();
+  expect(res!.status(), `sign-in for ${email}`).toBe(200);
+  const token = (await res!.json()).access_token as string;
   const claims = decodeJwt(token);
   return { token, userId: claims.sub, claims };
 }
@@ -185,6 +199,18 @@ test.describe("order-dispatch: stock deduction, audit and idempotency", () => {
   const tracking = `OJD-${Date.now()}`;
   const batchIds = LINES.map((l) => sid(`batch:${SEED.ojoduDepotId}:${l.sku}`));
   let before: Map<string, { quantity: number; quantity_reserved: number }>;
+  let dispatched = false;
+
+  // The tests after the dispatch read its result. Run on their own (one test
+  // picked in the UI, or a -g filter) they dispatch first with the same key,
+  // so each one stands alone; in a full run the dispatch test has done it.
+  const ensureDispatched = async (request: APIRequestContext) => {
+    if (dispatched) return;
+    const res = await callFunction(request, "order-dispatch", rep1,
+      { idempotency_key: key, order_id: orderId, tracking_reference: tracking });
+    expect(res.status(), "setup: rep1 dispatches the order").toBe(200);
+    dispatched = true;
+  };
 
   const readBatches = async (request: APIRequestContext) => {
     const r = await rows<{ id: string; quantity: string; quantity_reserved: string }>(request, rep1,
@@ -204,6 +230,25 @@ test.describe("order-dispatch: stock deduction, audit and idempotency", () => {
       await sql.end();
     }
     before = await readBatches(request);
+  });
+
+  test.afterAll(async () => {
+    // A run that never dispatched (one test picked on its own, or a failure
+    // before the dispatch) would leave this PAID order holding its stock for
+    // good: a paid order's reservation never expires. Cancel it and release
+    // the stock so repeated runs do not drain the Ojodu depot.
+    if (dispatched) return;
+    const sql = openDb();
+    try {
+      await sql.begin(async (tx) => {
+        const [o] = await tx<{ tenant_id: string }[]>`
+          update public.orders set status = 'CANCELLED'
+           where id = ${orderId} and status = 'PAID' returning tenant_id`;
+        if (o) await tx`select public.stock_release_order(${o.tenant_id}, ${orderId}, 'CANCELLED')`;
+      });
+    } finally {
+      await sql.end();
+    }
   });
 
   test("the reservation holds the stock before dispatch", async ({ request }) => {
@@ -240,6 +285,7 @@ test.describe("order-dispatch: stock deduction, audit and idempotency", () => {
     const body = await res.json();
     expect(body).toMatchObject({ order_id: orderId, status: "IN_TRANSIT", delivery_code_sent: false });
     expect(body).not.toHaveProperty("buyer_phone");
+    dispatched = true;
 
     const [o] = await rows(request, rep1, `orders?id=eq.${orderId}&select=status`);
     expect(o.status).toBe("IN_TRANSIT");
@@ -261,6 +307,7 @@ test.describe("order-dispatch: stock deduction, audit and idempotency", () => {
   });
 
   test("the dispatch is audited with its idempotency key, visible to rep1 and hidden from rep2", async ({ request }) => {
+    await ensureDispatched(request);
     const q = `audit_logs?entity_type=eq.orders&entity_id=eq.${orderId}&operation=eq.mark_order_dispatched` +
       `&select=actor_id,actor_role,idempotency_key,source,after`;
     const audit = await rows(request, rep1, q);
@@ -275,6 +322,7 @@ test.describe("order-dispatch: stock deduction, audit and idempotency", () => {
   });
 
   test("an identical retry replays 200 without touching stock or the audit trail again", async ({ request }) => {
+    await ensureDispatched(request);
     const stock = await readBatches(request);
     const res = await callFunction(request, "order-dispatch", rep1,
       { idempotency_key: key, order_id: orderId, tracking_reference: tracking });
@@ -288,6 +336,7 @@ test.describe("order-dispatch: stock deduction, audit and idempotency", () => {
   });
 
   test("the same key with a changed payload is 409 IDEMPOTENCY_MISMATCH (TF002)", async ({ request }) => {
+    await ensureDispatched(request);
     const res = await callFunction(request, "order-dispatch", rep1,
       { idempotency_key: key, order_id: orderId, tracking_reference: `${tracking}-CHANGED` });
     expect(res.status()).toBe(409);
@@ -295,6 +344,7 @@ test.describe("order-dispatch: stock deduction, audit and idempotency", () => {
   });
 
   test("a fresh key cannot dispatch the order twice", async ({ request }) => {
+    await ensureDispatched(request);
     const res = await callFunction(request, "order-dispatch", rep1, { idempotency_key: randomUUID(), order_id: orderId });
     expect(res.status()).toBe(422);
     expect((await res.json()).error.code).toBe("BUSINESS_RULE");

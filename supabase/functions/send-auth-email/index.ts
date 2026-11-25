@@ -2,7 +2,7 @@ import { hookVerifierFromEnv } from "../_shared/auth/hook.ts";
 import { requireEnv } from "../_shared/core/env.ts";
 import { observe } from "../_shared/core/observability.ts";
 import { createSendAuthEmailHandler } from "./handler.ts";
-import { resendSender } from "../_shared/messaging/resend.ts";
+import { resendSender, senderFrom } from "../_shared/messaging/resend.ts";
 
 const verifyHook = hookVerifierFromEnv("SEND_EMAIL_HOOK_SECRET");
 const siteUrl = requireEnv("AUTH_SITE_URL").replace(/\/$/, "");
@@ -13,7 +13,8 @@ Deno.serve(observe("send-auth-email", createSendAuthEmailHandler({
   verifyHook,
   sendEmail: resendSender({
     apiKey: requireEnv("RESEND_API_KEY"),
-    from: requireEnv("AUTH_EMAIL_FROM"),
+    // unset: Resend's sandbox sender, which delivers only to the account owner
+    from: senderFrom(Deno.env.get("AUTH_EMAIL_FROM")),
     apiUrl: Deno.env.get("RESEND_API_URL") || undefined,
   }),
   config: {
