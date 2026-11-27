@@ -183,6 +183,12 @@ Two layers in `src/shared/tokens/`, and **the only hex values in the app**:
   | `teafair-ink` | `#0F172A` | primary text |
   | `teafair-slate` | `#64748B` | secondary text |
   | `teafair-mist` | `#E2E8F0` | hairlines |
+  | `teafair-red` / `teafair-red-soft` / `teafair-red-tint` | `#B91C1C` / `#F87171` / `#FEF2F2` | danger (light / dark / subtle background) |
+  | `teafair-blue` / `teafair-sky` / `teafair-blue-tint` | `#0369A1` / `#38BDF8` / `#F0F9FF` | info (light / dark / subtle background) |
+
+  `FIGMA.md` is the single source of these values, with the full contrast
+  table, the semantic table per theme and the tone table. This section is
+  the contract that uses them.
 
 - **`semantic.ts`, what components use.** Each semantic token resolves to a
   primitive per theme. The NativeWind preset exposes them as CSS variables,
@@ -234,15 +240,25 @@ layer encodes them so a component cannot break them:
 - **`border-hairline`** (mist, 1.23:1) only separates. **Input boundaries,
   checkboxes and focus use `border-control` and `ring-focus`** (slate,
   4.76:1), which meet the 3:1 non-text rule.
-- **The palette has no red and no blue.** `danger` and `info` need two more
-  primitives before B1 (an open item, below). Until then, tone is never the
-  only signal: every badge and banner says its state in words and carries an
-  icon.
+- **Danger and info (ruling 2026-11-27).** On light themes, `danger` text is
+  red (`#B91C1C`: 6.47:1 on white, 5.98:1 on canvas, and white on red is
+  6.47:1). `info` text is blue (`#0369A1`: 5.93:1 and 5.48:1, and white on
+  blue is 5.93:1). Red and blue fail on the dark surfaces (2.03–3.01:1), so
+  the `dark` theme uses red-soft (`#F87171`, 4.75:1 on botanical) and sky
+  (`#38BDF8`, 6.13:1). Success and brand text is botanical, and warning
+  text is ink: their colour is carried by the icon and border.
+- **Status is never colour alone.** `Badge` and `Banner` require a tone, a
+  label in words and an icon, and there is no colour-only variant. Each tone
+  has a fixed icon (FIGMA.md §3): neutral a dot, brand a leaf, success a
+  check, warning an exclamation triangle, danger an exclamation octagon,
+  info an "i" in a circle, pending a clock. `StatusDot`-style indicators
+  without text are not part of `shared/ui`.
 
 **Themes** (`usePrefsStore.theme`, Tier 2 at the user level, §5):
 
-- **`standard`:** canvas, white surfaces, ink. The default for staff who
-  mostly work indoors (ZSM, ASM, DSM, DSA, LM, CSM, TENANT_ADMIN).
+- **`standard`:** canvas, white surfaces, ink. The default for the
+  operational and tenant roles (ZSM, ASM, DSM, DSA, LOGISTICS_MANAGER,
+  CLIENT_SERVICE_MANAGER, TENANT_ADMIN) and for Monvelo agent members.
 - **`daylight`:** high contrast for outdoor field work. The default for ZSA,
   ASA, TM, RETAIL_SHOP_OWNER and POS_AGENT.
   - Surfaces and canvas are white.
@@ -255,8 +271,12 @@ layer encodes them so a component cannot break them:
   on leaf is 5.48:1. The FIGMA.md dark gradient is used only in brand
   moments.
 
-The shell header has a quick theme toggle. The role default applies until
-the user picks one. Every primitive pair a theme uses is listed in
+**The role default applies until the user picks a theme** (ruling
+2026-11-27). The default is taken from the active membership's role. Any
+choice is saved in `usePrefsStore` (user level, Tier 2) and wins over the
+default in every tenant. Clearing it returns to the role default. The shell
+header has a quick toggle, and analytical views offer `dark` without
+changing the saved choice for the rest of the app. Every primitive pair a theme uses is listed in
 `tokens/contrast.test.ts` with its minimum ratio. The test fails on any pair
 below 4.5:1 for text, or below 3:1 for non-text.
 
@@ -268,11 +288,9 @@ the emblem component. ESLint and `tokens.guard.test.ts` enforce it; the
 guard scans `src/` for `#[0-9a-fA-F]{3,8}\b`, colour functions, stock
 palette names and primitive classes outside the allowed files.
 
-**FIGMA.md must follow the emblem palette (an open item, below).** FIGMA.md
-§1–§3 still give the earlier values (emerald `#4CAF50`, lime `#8BC34A`,
-forest `#2E7D32`, black `#111111`, surface `#F5F7F6`, darkSurfaceEnd
-`#1A2E1B`). This spec's primitives replace them. FIGMA.md is updated to the
-same names and values before B1, so the two never disagree.
+**FIGMA.md and this section agree** (§4.5, ruling 1). A change to a value is
+made in FIGMA.md and `src/shared/tokens/` together, with `contrast.test.ts`
+updated in the same commit.
 
 ### 4.3 Components and skeleton loading
 
@@ -342,14 +360,18 @@ built from those primitives and exported through the feature's `index.ts`.
   a Zustand `persist` store, to a log or to an error report. §5 says where
   each one lives.
 
-### 4.5 Open items before B1
+### 4.5 Rulings on the open items (2026-11-27)
 
-1. **FIGMA.md updated to the emblem palette** (§4.2), with the same
-   primitive names.
-2. **Two primitives for `danger` and `info`.** The emblem palette has
-   neither. Each must reach 4.5:1 for its text pairing in all three themes.
-3. **Confirm the theme defaults by role** (§4.2), or set one default for
-   everyone.
+1. **FIGMA.md follows the emblem palette.** It was rewritten to the §4.2
+   primitives and the semantic contract, and is now the single source of
+   the values. The old names (`teafair-emerald`, `-lime`, `-forest`,
+   `-black`, `-surface`, `-darkSurfaceEnd`) are retired.
+2. **Danger and info have their own accessible primitives** (red and blue,
+   plus dark-theme and subtle variants). Every badge and banner carries a
+   label in words and an icon.
+3. **Theme defaults:** `daylight` for ZSA, ASA, TM, RETAIL_SHOP_OWNER and
+   POS_AGENT; `standard` for the operational and tenant roles; `dark` on
+   request for analytical views. The user's preference always overrides.
 
 ## 5. State: feature stores and the three tiers
 

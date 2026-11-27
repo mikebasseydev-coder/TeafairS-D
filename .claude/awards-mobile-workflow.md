@@ -17,13 +17,13 @@ are never copied pixel for pixel, and a third party's branding is never used.
 Propose three distinct concepts for the screen, for example:
 
 - **Editorial minimalist:** type-led hierarchy, generous whitespace, one
-  emerald accent.
-- **Immersive dark:** the `teafair-black` → `teafair-darkSurfaceEnd` surface,
-  lime highlights for state.
+  leaf or amber accent (the Swiss Minimal rules of Spec B §4.1).
+- **Immersive dark:** the `dark` theme (ink canvas, botanical surfaces), leaf
+  marks for state.
 - **Kinetic:** motion-led (Reanimated), progress and state carried by
   transitions.
 
-All three use only the `teafair-*` tokens. Each gets a sentence or two and a
+All three use only the semantic tokens of Spec B §4.2 (values in `FIGMA.md`). Each gets a sentence or two and a
 rough phone and tablet layout. Pick one and say why it fits the user (a shop
 owner, POS agent or field rep on a mid-range Android phone in bright light on
 a weak network). The user can override the pick.
