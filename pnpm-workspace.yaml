@@ -1,5 +1,7 @@
+nodeLinker: hoisted
 allowBuilds:
   esbuild: true
+  '@parcel/watcher': false
 minimumReleaseAgeExclude:
   - '@supabase/cli-darwin-arm64@3.4.0'
   - '@supabase/cli-darwin-x64@3.4.0'
@@ -10,3 +12,5 @@ minimumReleaseAgeExclude:
   - '@supabase/cli-windows-arm64@3.4.0'
   - '@supabase/cli-windows-x64@3.4.0'
   - supabase@3.4.0
+fetchTimeout: 300000
+networkConcurrency: 6

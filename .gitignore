@@ -21,3 +21,9 @@ deno.lock
 .playwright-mcp/
 test-results/
 playwright-report/
+
+# the Expo app (Spec B): build output and generated local files
+dist-web/
+.expo/
+expo-env.d.ts
+web-build/

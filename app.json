@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Teafair RTM",
+    "slug": "teafair-rtm",
+    "scheme": "teafair",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.teafair.rtm" },
+    "android": { "package": "com.teafair.rtm", "edgeToEdgeEnabled": true },
+    "web": { "bundler": "metro", "output": "single" },
+    "plugins": ["expo-router", "expo-status-bar", "expo-secure-store"],
+    "experiments": { "typedRoutes": false }
+  }
+}

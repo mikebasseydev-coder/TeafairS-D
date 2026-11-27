@@ -147,6 +147,8 @@ Text needs 4.5:1. Large text (18 px bold or 24 px) and non-text marks
 | sky on ink / on botanical | 8.33 / 6.13 | dark theme info |
 | leaf on botanical | 4.03 | dark theme marks and large text |
 | mist on white | 1.23 | separators only, never a control boundary |
+| amber on canvas | 2.94 | never: warning marks sit on white (§3) |
+| slate on botanical | 2.76 | never: dark-theme neutral marks are mist (§3) |
 | red / blue on ink | 2.76 / 3.01 | never: the dark theme uses red-soft and sky |
 
 `tokens/contrast.test.ts` holds every pair a theme uses, with its minimum,
@@ -183,19 +185,32 @@ Three themes. The role default applies until the user chooses (Spec B
 info | pending`. Each tone has a mark colour (icon, border, indicator), a
 text colour, and a subtle background:
 
-| Tone | Mark | Text (light / dark) | Subtle background (light / dark) |
+| Tone | Mark (light / dark) | Text (light / dark) | Subtle background (light / dark) |
 |---|---|---|---|
-| `neutral` | slate | ink-muted / mist | canvas / ink |
+| `neutral` | slate / mist | ink / mist | canvas / ink |
 | `brand` | leaf | botanical / canvas | canvas / ink |
 | `success` | leaf | botanical / canvas | canvas / ink |
-| `warning` | amber | ink / canvas | canvas / ink |
-| `danger` | red (dark: red-soft) | red / red-soft | red-tint / ink |
-| `info` | blue (dark: sky) | blue / sky | blue-tint / ink |
-| `pending` | slate | ink / canvas | canvas / ink |
+| `warning` | amber | ink / canvas | white / ink |
+| `danger` | red / red-soft | red / red-soft | red-tint / ink |
+| `info` | blue / sky | blue / sky | blue-tint / ink |
+| `pending` | slate / mist | ink / canvas | canvas / ink |
 
 Success and brand text is botanical, not leaf (leaf is 3.26:1 on white), and
 warning text is ink, not amber (3.19:1). The colour of those tones is
 carried by the mark.
+
+**Three corrections from measurement (B1, 2026-11-28),** made here and in
+`src/shared/tokens/` together:
+
+- **Neutral text is ink on light themes, not ink-muted.** Slate on its
+  canvas subtle background is 4.40:1, below 4.5:1 for badge-sized text.
+- **The warning subtle background is white on light themes, not canvas.**
+  The amber mark on canvas is 2.94:1, below the 3:1 rule for marks.
+- **Neutral and pending marks are mist on dark, not slate.** Slate on
+  botanical is 2.76:1.
+
+Tone marks sit on a surface or on their own subtle background, never on the
+bare canvas. `contrast.test.ts` checks every pair.
 
 **Status is never colour alone.** Every `Badge` and `Banner` takes a tone,
 a label in words and an icon. The props are required, and there is no
@@ -285,14 +300,14 @@ module.exports = {
         action: { DEFAULT: 'var(--action)', on: 'var(--on-action)',
                   strong: 'var(--action-strong)', 'on-strong': 'var(--on-action-strong)' },
         skeleton: { DEFAULT: 'var(--skeleton)', highlight: 'var(--skeleton-highlight)' },
-        tone: {
-          // one of each per tone: neutral, brand, success, warning, danger, info, pending
-          'danger-mark': 'var(--tone-danger-mark)',
-          'danger-text': 'var(--tone-danger-text)',
-          'danger-subtle': 'var(--tone-danger-subtle)',
-          // …
-        },
+        // per tone (neutral, brand, success, warning, danger, info, pending):
+        // bg-tone-<tone> / border-tone-<tone> is the mark, bg-tone-<tone>-subtle the background
+        'tone-danger': 'var(--tone-danger-mark)',
+        'tone-danger-subtle': 'var(--tone-danger-subtle)',
+        // …
       },
+      // text-tone-<tone> is the tone's text colour, not its mark
+      textColor: { 'tone-danger': 'var(--tone-danger-text)' /* … */ },
     },
   },
 };

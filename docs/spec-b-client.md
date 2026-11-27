@@ -1,8 +1,9 @@
 # Spec B — The Client (Teafair RTM app shell)
 
-**Status:** draft under review, not approved. `src/` stays frozen; slices
-B1–B4 (§11) wait on approval. The Monvelo rulings of 2026-11-27 are built
-(A6 §23, local) and §6 follows them.
+**Status:** **approved 2026-11-27** by the product owner. `src/` is unfrozen
+for the slices of §11, one at a time: B1 first, and each later slice only on
+its own go-ahead. The Monvelo rulings of 2026-11-27 are built (A6 §23, local)
+and §6 follows them.
 **Authority:** Spec A
 (`docs/superpowers/specs/2026-10-05-multi-tenant-rtm-foundation-design.md`)
 and its addenda A1–A8 (A6 through §23) still govern the backend. Where this spec and Spec A
@@ -799,6 +800,55 @@ before it closes.
 | **B2** Auth and onboarding | email OTP screens, invitation list (accept/decline), PIN set and change | an invited user signs in with a code, accepts, and lands on the PIN gate; a weak PIN (`7777`, `1234`, `6543`) is refused before sending; a wrong current PIN shows the attempts left; a decline leaves "No access yet"; an unknown email sees the access message |
 | **B3** Tenancy and shells | tenant switcher, every shell of §10, the header | a user with two memberships switches and the previous tenant's lists are gone; each role lands on its shell; tablet shows two columns where the shell has a list and a detail; the switch is refused while the queue holds entries |
 | **B4** Queue, A5 and realtime | the queue and Needs attention; the fulfilment wrappers (`order-dispatch`, `order-delivery-pin`, `order-delivery-photo`, `order-delivery-confirm`); the Monvelo funding wrapper (`monvelo-fund`, `MONVELO_CHECKOUT_LOST`); the realtime client | offline (context set offline) a chat post queues, then lands once with the same key when back online; a `P0001` lands in Needs attention with the database copy; a dependent entry waits for its parent; a wrong delivery code shows 422 copy and the next entry uses a new key; a chat message from a second user appears live; after a tenant switch no event from the old tenant arrives |
+
+### 11.1 Slice B1 as built (2026-11-28)
+
+**Built:**
+- **The app package** is the root `package.json`: Expo SDK 58.1.0, React
+  Native 0.88.1, Expo Router (`src/app`), NativeWind 4.2.7 on Tailwind
+  3.4.19, every version pinned exactly. It uses `nodeLinker: hoisted` in
+  `pnpm-workspace.yaml`.
+- **`src/shared/`:**
+  - `tokens/`: primitives, semantic, themes, role defaults, contrast, and the
+    preset;
+  - `ui/`: the primitives of §4.3, plus `Text`, `ToneIcon`, `Screen`,
+    `SkeletonList` and `SkeletonRegion`;
+  - `storage/`: `secure.ts`, `mmkv.ts` and the reset registry;
+  - `network/`: `supabase.ts`, `rpc.ts`, `gateway.ts`, `gateways.ts`,
+    `errors.ts`, `rpc-map.ts`, `database.types.ts`,
+    `callable-functions.json` and `queue/queue-tone.ts`;
+  - `observability/`: `log.ts` and `scrub.ts`.
+- **Features:** `features/auth` (`decodeClaims`), `features/shell`
+  (`usePrefsStore`), `features/monvelo` (`financingTone`) and
+  `features/gallery` (the `/gallery` route).
+- **`pnpm gen:db`** writes the types and the list of functions
+  `authenticated` may execute. `rpc-map.test.ts` holds §6 against both.
+
+**Verified:**
+- `pnpm typecheck` and `pnpm lint` (the §3 import rules, proven to fire)
+  pass.
+- `pnpm test:unit` passes: Jest with the contrast, tokens-guard and rpc-map
+  guards, and the financing adapter checked against the database CHECK.
+- `pnpm test:app` passes: 32 Playwright checks across phone and tablet,
+  with screenshot baselines in `tests/app/__screenshots__/`.
+
+**Choices made while building:**
+- **Three tone values changed from measurement** (FIGMA.md §3, the
+  corrections note): neutral text on light themes, the warning subtle
+  background, and the dark neutral and pending marks.
+- **The focus indicator is `border-focus` at the theme's ring width**, not
+  `ring-focus`, because React Native has no ring.
+- **Screenshots run under reduced motion,** so skeletons are static. A
+  separate check proves the pulse animates when motion is allowed. The moti
+  shimmer's motion is seen only on a device.
+- **`record_order_return` is left out of `APP_RPCS`** until Spec C decides
+  the LM's return screen. Its row in §6.2 is Web.
+- **`usePrefsStore` lives in memory in B1.** B2 binds it to the user-level
+  MMKV instance once a user is signed in.
+
+**Not yet done:**
+- The §11 device check on one iOS and one Android phone. Secure storage,
+  MMKV and the shimmer are proven only by type and on web.
 
 **Realtime:** subscribe to `chat_messages` with `channel_id=eq.<id>` and to
 `chat_channels` with `tenant_id=eq.<active tenant>` (every post updates

@@ -1,9 +1,19 @@
 {
-  "name": "teafair-tools",
+  "name": "teafair-rtm",
   "private": true,
-  "description": "Repo-level tooling (the design reference harvester); the app gets its own setup under Spec B",
+  "description": "Teafair RTM, the field app (Spec B), plus the repo tooling (design harvester, API tests)",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "export:web": "expo export -p web --output-dir dist-web",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test:unit": "jest",
+    "test:app": "playwright test -c playwright.app.config.ts",
+    "gen:db": "node scripts/gen-db-types.mjs",
     "harvest": "node scripts/harvest-ui.js",
     "harvest:install-browser": "playwright install chromium",
     "db:seed": "tsx supabase/seed.ts",
@@ -13,16 +23,57 @@
     "test:backend": "pnpm db:fresh && pnpm test:api"
   },
   "dependencies": {
-    "moti": "^0.30.0",
-    "playwright": "1.65.1"
+    "@expo/metro-runtime": "58.0.17",
+    "@supabase/supabase-js": "2.119.2",
+    "expo": "58.1.0",
+    "expo-constants": "58.0.16",
+    "expo-crypto": "58.0.9",
+    "expo-linear-gradient": "58.0.4",
+    "expo-linking": "58.0.17",
+    "expo-router": "58.0.33",
+    "expo-secure-store": "58.0.3",
+    "expo-status-bar": "58.0.5",
+    "moti": "0.30.0",
+    "nativewind": "4.2.7",
+    "playwright": "1.65.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-mmkv": "4.3.2",
+    "react-native-nitro-modules": "0.37.2",
+    "react-native-reanimated": "4.7.1",
+    "react-native-safe-area-context": "5.11.1",
+    "react-native-screens": "4.30.1",
+    "react-native-svg": "15.16.0",
+    "react-native-web": "0.21.4",
+    "react-native-worklets": "0.13.0",
+    "zod": "4.6.7",
+    "zustand": "5.1.0"
   },
   "devDependencies": {
-    "@faker-js/faker": "^10.6.0",
-    "@playwright/test": "^1.65.1",
-    "@supabase/supabase-js": "^2.119.2",
-    "dotenv": "^18.0.10",
+    "@faker-js/faker": "10.6.0",
+    "@playwright/test": "1.65.1",
+    "@types/jest": "30.0.0",
+    "@types/react": "19.3.3",
+    "dotenv": "18.0.10",
+    "eslint": "10.15.0",
+    "eslint-config-expo": "58.0.4",
+    "jest": "30.5.2",
+    "jest-expo": "58.0.16",
     "postgres": "3.4.5",
     "supabase": "3.4.0",
-    "tsx": "^4.23.15"
+    "tailwindcss": "3.4.19",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3"
+  },
+  "main": "expo-router/entry",
+  "jest": {
+    "preset": "jest-expo",
+    "testMatch": [
+      "<rootDir>/src/**/*.test.ts?(x)"
+    ],
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/src/$1"
+    }
   }
 }

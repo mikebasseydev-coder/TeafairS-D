@@ -45,8 +45,8 @@ Commands below.
 | `docs/superpowers/specs/2026-10-28-addendum-a6-…` | Addendum A6 to Spec A — Monvelo (B2B trade financing) and §15 domain separation (built locally, not pushed); §16–§18 (Step 1c and Step 2: CSM, TENANT_ADMIN, LOGISTICS_MANAGER, contact reports, the tenant ledger, stock, operational states, financings and claims) built locally, not pushed; plan at `docs/superpowers/plans/2026-10-29-monvelo-step1c-step2.md`; §19 (Step 3 calls: funding, delivery, repayment) built locally, not pushed; plan at `docs/superpowers/plans/2026-10-31-monvelo-step3-funding-repayment.md`; §20 (the market-maker allowance) built locally, not pushed; plan at `docs/superpowers/plans/2026-11-02-monvelo-market-maker-allowance.md`; §21 (the limits scaled to ₦1,000,000 and ₦3,000,000; §21.3 the agent exposure meter RPC) built locally, not pushed; §22 (field agents decide holds) built locally, not pushed; §23 (2026-11-27: ZSA/ASA field scope and dashboard, TM oversight, platform partner codes and kinds, the 200 m radius, pairing, the 15:00 Lagos cutoff for next-day supply, the owner's codes by email) built locally, not pushed |
 | `docs/superpowers/specs/2026-11-05-addendum-a7-…` | Addendum A7 to Spec A — tenant support tickets and ticket emails (built locally, not pushed); plan at `docs/superpowers/plans/2026-11-05-addendum-a7-tenant-support-and-ticket-emails.md` |
 | `docs/superpowers/specs/2026-11-07-addendum-a8-…` | Addendum A8 to Spec A — Monvelo cover (merged into local `main` 2026-11-08, not pushed; §15 pre-underwriter policy and onboarding terms); plan at `docs/superpowers/plans/2026-11-07-addendum-a8-monvelo-cover.md` |
-| `docs/spec-b-client.md` | **Spec B — the client, draft under review (not approved)**: the TeafairWeb / Teafair RTM boundary, store tiers, the RPC and gateway map, write path, offline queue, auth and PIN, slices B1–B4 with Playwright checks |
-| client app | **none yet; `src/` stays frozen** until Spec B is approved, and Spec B waits on Monvelo being finished. It will be a feature-based `src/` (see "Frontend standards" below). `frontend/`, `apps/` and `docs/features/` were removed (§13) |
+| `docs/spec-b-client.md` | **Spec B — the client, approved 2026-11-27**: the TeafairWeb / Teafair RTM boundary, store tiers, the RPC and gateway map, write path, offline queue, auth and PIN, slices B1–B4 with Playwright checks |
+| client app | **slice B1 (scaffold, tokens, shared UI, gallery) on `feat/auth-email-first`**; B2–B4 each wait on their own go-ahead. A feature-based `src/` (see "Frontend standards" below). `frontend/`, `apps/` and `docs/features/` were removed (§13) |
 
 Phase 4 (client offline queue) needs the Spec B app shell.
 
@@ -101,11 +101,10 @@ Android only at launch; the Windows HQ client is deferred.
   under `EXPO_PUBLIC_`, `NEXT_PUBLIC_` or `VITE_`, or in a client tree. The
   tests `service-role-guard`, `secret-scoping` and `keys` enforce all three.
 
-## Frontend standards (Spec B; adopted 2026-11-09, spec under review)
+## Frontend standards (Spec B; approved 2026-11-27)
 
-Spec B (`docs/spec-b-client.md`) is a **draft under review, not approved**.
-No `src/` scaffold until the user approves it, and Monvelo must be finished
-first. The rules below are recorded there; where the two differ,
+Spec B (`docs/spec-b-client.md`) is **approved** (2026-11-27). Its slices
+are built one at a time, each on the user's go-ahead. The rules below are recorded there; where the two differ,
 `docs/spec-b-client.md` wins.
 
 - **Stack:** React Native + Expo + TypeScript, NativeWind, feature-scoped
