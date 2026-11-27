@@ -88,8 +88,8 @@ follow the spec, not the brief.
 src/
 ├── app/                      Expo Router routes: thin, they render feature screens
 ├── shared/
-│   ├── tokens/               FIGMA.md values + the NativeWind preset (the only hex values)
-│   ├── ui/                   primitives: Button, Field, PinPad, OtpInput, Card, Banner, Sheet, ListRow, EmptyState
+│   ├── tokens/               primitives.ts (the emblem palette, the only hex values), semantic.ts, themes, the NativeWind preset (§4.2)
+│   ├── ui/                   primitives and skeletons, exported by ui/index.ts (§4.3)
 │   ├── storage/              secure.ts (Tier 1), mmkv.ts (Tier 2, namespaced), reset-registry.ts
 │   ├── network/              supabase.ts, rpc.ts, gateway.ts, errors.ts (§3.5), queue/, realtime.ts, database.types.ts
 │   ├── observability/        log.ts + scrub.ts (Ruling 46)
@@ -123,27 +123,233 @@ no store or service with anything outside `shared`, `auth` and `tenant`
 
 ## 4. Design system and security
 
-- **Tokens.** `src/shared/tokens/` is the single source of the `FIGMA.md`
-  `teafair-*` values (emerald, lime, forest, black, white, surface,
-  darkSurfaceEnd, the three gradients). It exports the NativeWind preset
-  that `tailwind.config.js` consumes. **No raw hex value and no stock palette
-  class (`emerald-500`, `slate-900`, …) outside `src/shared/tokens/`.** An
-  ESLint rule and a unit test (`tokens.guard.test.ts`, a scan of `src/` for
-  `#[0-9a-fA-F]{3,8}\b` and for stock palette class names) enforce it.
-- **Design workflow.** Every screen follows `.claude/awards-mobile-workflow.md`.
-- **Ruling 46 in the client.**
-  - The app holds only `EXPO_PUBLIC_SUPABASE_URL` and
-    `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (the `sb_publishable_` key, or the
-    anon key until it is retired). No secret, ever. The existing
-    `secret-scoping` test already scans `src/`.
-  - `log.ts` is the only logger. It runs every message and context object
-    through `scrub.ts`, which follows `_shared/core/scrub.ts`. Values under
-    sensitive keys are dropped (pin, otp, code, token, secret, phone,
-    email, address, hash, `p_` parameters). Strings are scrubbed of JWTs,
-    emails and phone numbers. It never logs a queued payload.
-  - No PIN, OTP, owner code, token or checkout URL is ever written to MMKV,
-    to a Zustand `persist` store, to a log or to an error report. §5 says
-    where each one lives.
+### 4.1 Visual direction
+
+Two layouts, chosen by what the screen is for. Every screen still follows
+`.claude/awards-mobile-workflow.md` (references, three concepts, the 8/10
+critique), within these rules.
+
+- **Swiss Minimal: queues, ledgers, lists and forms.** This covers the
+  offline queue and Needs attention, orders, shops, financings, holds,
+  repayments, invitations, the PIN and every form.
+  - A 4-point grid with 8-point rhythm, and left-aligned text.
+  - One type family: the platform system font, so nothing loads.
+  - A fixed scale of 12, 14, 16, 20, 24 and 32. Money and counts use
+    tabular numerals.
+  - Hierarchy comes from size, weight and spacing, not colour. One accent
+    per screen, used for its primary action or its live state.
+  - 1-pixel hairlines and plain fills. **No shadows, blurs, gradients or
+    translucent layers on these screens**, so they stay fast on mid-range
+    Android phones.
+- **Bento Grid: dashboards and multi-metric overviews.** This covers the
+  ZSA/ASA field dashboard (`get_monvelo_field_dashboard`), the TM oversight
+  read (`get_monvelo_tm_oversight`), the Monvelo agent's exposure and
+  reconciliation, and the field manager's home.
+  - **Tile sizes:** 1×1, 2×1 and 2×2.
+  - **Phone (390×844):** a 2-column grid; 2×2 tiles span the width.
+  - **Tablet (768×1024 and wider):** a 4-column grid; landscape keeps the
+    grid and adds a detail pane.
+  - **Each tile is isolated.** It owns its query, loading state, error and
+    empty state, so one failing read shows its own retry and every other
+    tile renders. Financial tiles follow §5: they show "Unavailable
+    offline", never a cached figure.
+  - Gaps are 12. Tiles are surface fills with a hairline border, never
+    shadows.
+- **Workflows stay utilitarian.** Monvelo requests, claims, funding, delivery
+  and repayment codes, and the fulfilment screens (dispatch, delivery code,
+  delivery photo) are step lists and forms in the Swiss rules.
+  - No decoration and no illustration.
+  - The state of each step is in words and a tone (§4.2), never colour alone.
+  - The cutoff (§6.2) is shown as a time, "Requests close 15:00 Lagos".
+  - The owner's code entry follows §5 Tier 3.
+- **Brand moments are few.** The FIGMA.md gradients and the emblem appear
+  only on the sign-in screen, the splash and empty states. Never in a list,
+  a form or a workflow.
+
+### 4.2 Tokens: primitives, then semantics
+
+Two layers in `src/shared/tokens/`, and **the only hex values in the app**:
+
+- **`primitives.ts`, the Teafair emblem palette.** Fixed names, no meaning:
+
+  | Primitive | Hex | Note |
+  |---|---|---|
+  | `teafair-leaf` | `#629E28` | primary leaf green |
+  | `teafair-botanical` | `#1B3624` | secondary botanical dark |
+  | `teafair-amber` | `#D97706` | accent |
+  | `teafair-canvas` | `#F4F6F9` | app background |
+  | `teafair-white` | `#FFFFFF` | surfaces |
+  | `teafair-scrim` | `#111827` at 35% | modal and sheet overlay |
+  | `teafair-ink` | `#0F172A` | primary text |
+  | `teafair-slate` | `#64748B` | secondary text |
+  | `teafair-mist` | `#E2E8F0` | hairlines |
+
+- **`semantic.ts`, what components use.** Each semantic token resolves to a
+  primitive per theme. The NativeWind preset exposes them as CSS variables,
+  so a theme switch is a variable swap, not a re-render of every class:
+  - `bg-canvas`, `bg-surface`, `bg-scrim`;
+  - `text-ink`, `text-ink-muted`, `text-on-action`;
+  - `border-hairline`, `border-control`;
+  - `bg-action`, `bg-action-strong`, `ring-focus`;
+  - and one family per tone: `bg-tone-<tone>`, `bg-tone-<tone>-subtle`,
+    `text-tone-<tone>`, `border-tone-<tone>`.
+
+**`SemanticTone`** is `"neutral" | "brand" | "success" | "warning" |
+"danger" | "info" | "pending"`. Components take a tone, never a colour:
+`<Badge tone="warning">`, `<Banner tone="danger">`. **Domain statuses reach
+a tone only through a typed adapter** that lives in the feature that owns
+the status. Each adapter is an exhaustive `Record<Status, SemanticTone>`, so
+a new database status breaks the type check until someone maps it:
+
+```ts
+// src/features/monvelo/components/financing-tone.ts
+export const financingTone: Record<FinancingStatus, SemanticTone> = {
+  REQUESTED: "pending", AWAITING_APPROVAL: "pending", OFFERED: "info", HELD: "warning",
+  CLAIMED: "brand", FUNDED: "brand", DELIVERED: "brand", REPAID_WITHIN_WINDOW: "success",
+  REPAID_LATE: "warning", DEFAULTED_WITH_LATE_CHARGE: "danger", REFUND_DUE: "danger",
+  CLOSED_BY_CLAIM: "neutral", EXPIRED: "neutral", CANCELLED: "neutral",
+};
+```
+
+`FinancingStatus` comes from the database CHECK, through the generated types
+or a Zod enum checked against them. The queue has `queueTone`
+(PENDING → pending, IN_FLIGHT → info, TERMINAL → danger, DONE → success).
+Orders, tickets and holds get theirs in Spec C and D.
+
+**Contrast rules.** These are measured WCAG 2.1 ratios, and the semantic
+layer encodes them so a component cannot break them:
+
+- **Body text** is `text-ink` (`#0F172A`: 17.85:1 on white, 16.49:1 on
+  canvas).
+- **`text-ink-muted`** (`#64748B`) is 4.76:1 on surfaces but 4.40:1 on the
+  canvas. On the canvas, muted text is 14 px semibold or larger, or uses
+  `text-ink`.
+- **Leaf green (`#629E28`) is a fill and an indicator, not small text.**
+  White on it is 3.26:1, enough only for large text and non-text marks
+  (3:1). So `bg-action` (leaf) carries `text-on-action` = ink (5.48:1).
+  `bg-action-strong` (botanical `#1B3624`, white text 13.13:1) is the
+  default primary button. A leaf CTA with a white label is allowed only at
+  18 px bold or larger.
+- **Amber (`#D97706`)** carries ink, never white: ink 5.60:1, white 3.19:1.
+- **`border-hairline`** (mist, 1.23:1) only separates. **Input boundaries,
+  checkboxes and focus use `border-control` and `ring-focus`** (slate,
+  4.76:1), which meet the 3:1 non-text rule.
+- **The palette has no red and no blue.** `danger` and `info` need two more
+  primitives before B1 (an open item, below). Until then, tone is never the
+  only signal: every badge and banner says its state in words and carries an
+  icon.
+
+**Themes** (`usePrefsStore.theme`, Tier 2 at the user level, §5):
+
+- **`standard`:** canvas, white surfaces, ink. The default for staff who
+  mostly work indoors (ZSM, ASM, DSM, DSA, LM, CSM, TENANT_ADMIN).
+- **`daylight`:** high contrast for outdoor field work. The default for ZSA,
+  ASA, TM, RETAIL_SHOP_OWNER and POS_AGENT.
+  - Surfaces and canvas are white.
+  - `text-ink-muted` resolves to ink, and hierarchy comes from weight alone.
+  - `border-hairline` resolves to slate.
+  - Tone fills use their strong values, and touch targets stay at 48 px.
+- **`dark`:** for analytical views (dashboards, ledgers, reconciliation), by
+  the user's choice. Canvas is ink, surfaces are botanical, text is canvas,
+  and muted text is mist (14.48:1 on ink, 10.65:1 on botanical); `border-control` resolves to mist, because slate on botanical is 2.76:1. Leaf stays the action colour: ink
+  on leaf is 5.48:1. The FIGMA.md dark gradient is used only in brand
+  moments.
+
+The shell header has a quick theme toggle. The role default applies until
+the user picks one. Every primitive pair a theme uses is listed in
+`tokens/contrast.test.ts` with its minimum ratio. The test fails on any pair
+below 4.5:1 for text, or below 3:1 for non-text.
+
+**Zero raw colour in components.** There are no hex, `rgb()` or `hsl()`
+literals, and no stock palette classes (`emerald-500`, `slate-900`, …),
+anywhere outside `src/shared/tokens/`. Components and screens use semantic
+classes only. A `teafair-*` primitive class appears only in `tokens/` and in
+the emblem component. ESLint and `tokens.guard.test.ts` enforce it; the
+guard scans `src/` for `#[0-9a-fA-F]{3,8}\b`, colour functions, stock
+palette names and primitive classes outside the allowed files.
+
+**FIGMA.md must follow the emblem palette (an open item, below).** FIGMA.md
+§1–§3 still give the earlier values (emerald `#4CAF50`, lime `#8BC34A`,
+forest `#2E7D32`, black `#111111`, surface `#F5F7F6`, darkSurfaceEnd
+`#1A2E1B`). This spec's primitives replace them. FIGMA.md is updated to the
+same names and values before B1, so the two never disagree.
+
+### 4.3 Components and skeleton loading
+
+**`src/shared/ui/`** holds the primitives, all exported through
+`src/shared/ui/index.ts`:
+
+- `Button`, `Field`, `PinPad`, `OtpInput`, `Card`, `Banner`, `Badge`,
+  `Sheet`, `ListRow`, `EmptyState`, `SyncIndicator`;
+- `BentoGrid` and `BentoTile`;
+- the skeleton primitives: `Skeleton` (one block), `SkeletonText` (lines),
+  `SkeletonListRow` (the `ListRow` footprint) and `SkeletonTile` (the
+  `BentoTile` footprint). Each takes `variant: "pulse" | "shimmer"`.
+
+Feature-specific skeletons, such as `FinancingCardSkeleton` or
+`HoldListSkeleton`, live in `src/features/<feature>/components/`. They are
+built from those primitives and exported through the feature's `index.ts`.
+
+**The two variants:**
+
+- **`pulse`** (the default) is a NativeWind opacity pulse on a plain block,
+  no gradient. It is used for dense and high-frequency lists (queues,
+  orders, shops, holds, ledgers), where many rows animate at once on
+  mid-range Android. List skeletons render 4–6 placeholder rows, never a
+  full screen of them.
+- **`shimmer`** uses `moti` (`moti/skeleton`, already a dependency; it runs
+  on `react-native-reanimated`, pinned with the Expo SDK at B1). It is used
+  only for one-off hero, header and detail surfaces: a financing's header,
+  a dashboard's hero tile, a shop's profile. **At most one shimmer region
+  per screen.**
+- **Both** use the semantic skeleton tokens (`bg-skeleton`,
+  `bg-skeleton-highlight`, per theme). Both stop animating when the OS
+  reduce-motion setting is on, and are hidden from screen readers. The
+  region announces "Loading" once.
+
+**When a skeleton shows** is decided by explicit fetch state, never by
+`data == null`:
+
+- Each query hook returns `{ status, isLoading, isRefreshing, isHydrated, items, error }`.
+  A list shows its skeleton only while `isLoading && items.length === 0`. A
+  tile or detail shows it only while `isLoading && !hasData`.
+- **Pull-to-refresh and background sync keep the visible items.** The
+  platform refresh control shows progress and the content never blanks.
+- **Cached or offline data is shown, not blocked.** The `SyncIndicator` in
+  the header (or on the tile) says "Offline, showing data from 10:42", or
+  "Syncing". Financial figures are the §5 exception: they show
+  "Unavailable offline".
+- **Skeletons and spinners never mix on one surface.** A spinner appears
+  only inside a pressed button while its write is in flight.
+- **Skeletons match the final layout's dimensions** (row height, tile span,
+  text line widths), so nothing shifts when the data arrives. Each skeleton
+  sits next to its component and shares its size constants.
+- **An error or an empty result replaces the skeleton** with the component's
+  own `Banner` or `EmptyState`, in the same footprint.
+
+### 4.4 Security in the client (Ruling 46)
+
+- The app holds only `EXPO_PUBLIC_SUPABASE_URL` and
+  `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (the `sb_publishable_` key, or the
+  anon key until it is retired). No secret, ever. The existing
+  `secret-scoping` test already scans `src/`.
+- `log.ts` is the only logger. It runs every message and context object
+  through `scrub.ts`, which follows `_shared/core/scrub.ts`. Values under
+  sensitive keys are dropped (pin, otp, code, token, secret, phone, email,
+  address, hash, `p_` parameters). Strings are scrubbed of JWTs, emails and
+  phone numbers. It never logs a queued payload.
+- No PIN, OTP, owner code, token or checkout URL is ever written to MMKV, to
+  a Zustand `persist` store, to a log or to an error report. §5 says where
+  each one lives.
+
+### 4.5 Open items before B1
+
+1. **FIGMA.md updated to the emblem palette** (§4.2), with the same
+   primitive names.
+2. **Two primitives for `danger` and `info`.** The emblem palette has
+   neither. Each must reach 4.5:1 for its text pairing in all three themes.
+3. **Confirm the theme defaults by role** (§4.2), or set one default for
+   everyone.
 
 ## 5. State: feature stores and the three tiers
 
@@ -199,7 +405,7 @@ imports every barrel and asserts that each store with state has registered.
 | `usePinStore` | tenant | 3 + memory | `pin_set`, `locked_until`, entry buffers |
 | `useQueueStore` | shared/network | 2 | entries, drain state |
 | `useAttentionStore` | shared/network | 2 | terminal entries with their error |
-| `usePrefsStore` | shell | 2 | theme, list density, tabs |
+| `usePrefsStore` | shell | 2 (user level) | theme (`standard`, `daylight`, `dark`; the role default until chosen, §4.2), list density, tabs |
 | `useMonveloCheckoutStore` | monvelo | 3 | the funding checkout of the open financing |
 
 ## 6. RPC and gateway map
@@ -521,7 +727,7 @@ before it closes.
 
 | Slice | Builds | Playwright proves (phone and tablet) |
 |---|---|---|
-| **B1** Scaffold | the pnpm app package and Expo Router; `database.types.ts`; `tokens/` and the NativeWind preset; `secure.ts`, `mmkv.ts`, the reset registry; `rpc()`, `gateway()`, `errors.ts`; `decodeClaims`; `log`/`scrub`; `shared/ui/` primitives on a gallery route; the guards (`tokens.guard`, `rpc-map`, the import rules) | the primitives gallery renders at both sizes with no horizontal scroll and visible safe areas; screenshots match baselines; the gallery's colours are the `FIGMA.md` values (read from computed styles) |
+| **B1** Scaffold | the pnpm app package and Expo Router; `database.types.ts`; `tokens/` and the NativeWind preset; `secure.ts`, `mmkv.ts`, the reset registry; `rpc()`, `gateway()`, `errors.ts`; `decodeClaims`; `log`/`scrub`; `shared/ui/` primitives, skeletons (`pulse`, `shimmer`) and `BentoGrid` on a gallery route, in all three themes; the guards (`tokens.guard`, `contrast.test`, `rpc-map`, the import rules) | the primitives gallery renders at both sizes with no horizontal scroll and visible safe areas; screenshots match baselines in each theme; the gallery's colours are the §4.2 primitives through the semantic tokens (read from computed styles); a Bento tile in error leaves its neighbours rendered; a list skeleton has 4–6 rows and the same height as the loaded list |
 | **B2** Auth and onboarding | email OTP screens, invitation list (accept/decline), PIN set and change | an invited user signs in with a code, accepts, and lands on the PIN gate; a weak PIN (`7777`, `1234`, `6543`) is refused before sending; a wrong current PIN shows the attempts left; a decline leaves "No access yet"; an unknown email sees the access message |
 | **B3** Tenancy and shells | tenant switcher, every shell of §10, the header | a user with two memberships switches and the previous tenant's lists are gone; each role lands on its shell; tablet shows two columns where the shell has a list and a detail; the switch is refused while the queue holds entries |
 | **B4** Queue, A5 and realtime | the queue and Needs attention; the fulfilment wrappers (`order-dispatch`, `order-delivery-pin`, `order-delivery-photo`, `order-delivery-confirm`); the Monvelo funding wrapper (`monvelo-fund`, `MONVELO_CHECKOUT_LOST`); the realtime client | offline (context set offline) a chat post queues, then lands once with the same key when back online; a `P0001` lands in Needs attention with the database copy; a dependent entry waits for its parent; a wrong delivery code shows 422 copy and the next entry uses a new key; a chat message from a second user appears live; after a tenant switch no event from the old tenant arrives |
