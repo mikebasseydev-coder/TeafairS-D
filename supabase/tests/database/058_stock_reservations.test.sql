@@ -415,7 +415,7 @@ select throws_ok($$update public.stock_reservations set status = 'RELEASED', clo
                     where order_id = (select id from o where n = 'WO1') and sku_code = 'SR-1'$$,
   'P0001', 'a reservation closes once, from RESERVED to CONSUMED or RELEASED', 'nor be closed a second time');
 select throws_ok($$update public.stock_reservations set quantity = 2 where order_id = (select id from o where n = 'WO4')$$,
-  'P0001', 'a reservation closes once, from RESERVED to CONSUMED or RELEASED', 'an open row''s quantity cannot change');
+  'P0001', 'a held reservation only gets a later expiry', 'an open row''s quantity cannot change (A6 §23.5: only a later expiry)');
 select throws_ok($$insert into public.stock_movements (tenant_id, kind, warehouse_id, sku_code, batch_number, quantity,
                      decision_id, order_id, recorded_by)
                    values ('7eaf0000-0000-4000-8000-000000000001', 'RECEIPT', pg_temp.w(1), 'SR-1', 'L1', 1,

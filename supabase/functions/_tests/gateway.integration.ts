@@ -1232,7 +1232,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "monvelo-shop-consent: a ZSA starts consent, the owner's WhatsApp carries the code, and the ZSA enrols the shop",
+  name: "monvelo-shop-consent: a ZSA starts consent, the owner's email carries the code, and the ZSA enrols the shop",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
@@ -1255,21 +1255,21 @@ Deno.test({
     }).select("id"))) ?? [];
     const zsa = await asUser(zsaUser.email);
 
-    const before = whatsappSends.length;
+    const before = resendEmails.length;
+    const waBefore = whatsappSends.length;
     const key = crypto.randomUUID();
     const started = await zsa.post("monvelo-shop-consent", { idempotency_key: key, action: "start", shop_id: shop.id, area_id: area.id });
     const startedBody = await started.json();
     assertEquals(started.status, 200, JSON.stringify(startedBody));
     assert(!/"code"/.test(JSON.stringify(startedBody)), "the code never reaches the street agent");
-    const sent = whatsappSends.slice(before).filter((w) => w.template === "teafair_otp" && w.to === owner.phone_number.replace(/^\+/, ""));
-    assertEquals(sent.length, 1);
-    const code = sent[0].params[0];
-    assert(/^[0-9]{6}$/.test(code), code);
+    // A6 §23.6: one email to the owner's verified sign-in address, and no WhatsApp
+    const code = await ownerCode(before);
+    assertEquals(whatsappSends.length, waBefore, "nothing goes over WhatsApp");
 
     // a replay sends nothing more
     const replay = await zsa.post("monvelo-shop-consent", { idempotency_key: key, action: "start", shop_id: shop.id, area_id: area.id });
     await replay.body?.cancel();
-    assertEquals(whatsappSends.slice(before).filter((w) => w.template === "teafair_otp" && w.to === owner.phone_number.replace(/^\+/, "")).length, 1);
+    assertEquals(ownerEmails(before).length, 1);
 
     const wrong = await zsa.post("monvelo-shop-consent", {
       idempotency_key: crypto.randomUUID(), action: "enrol", challenge_id: startedBody.challenge_id, code: code === "000000" ? "111111" : "000000",
@@ -1293,6 +1293,11 @@ Deno.test({
   sanitizeResources: false,
   fn: async () => {
     assert(consented, "runs after the monvelo-shop-consent test, on the shop it enrolled");
+    // A6 §23: this flow predates the 2026-11-27 rulings, so it keeps same-day
+    // supply, no practical cutoff and the 1,000 m radius (pgTAP 085/086 cover
+    // the shipped values; `db reset` after the run restores them)
+    await asPostgres()`update public.monvelo_platform_settings
+      set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000`;
     // Lagos is UTC+1: today's date and ISO weekday there
     const lagos = new Date(Date.now() + 3600_000);
     const today = lagos.toISOString().slice(0, 10);
@@ -1393,14 +1398,19 @@ async function financing(id: string): Promise<{
   return row as Awaited<ReturnType<typeof financing>>;
 }
 
-// the one WhatsApp code sent to the shop owner since `before`
+// A6 §23.6: the Monvelo code emails sent to the shop owner since `before`
+// (an index into the fake Resend's log)
+function ownerEmails(before: number) {
+  return resendEmails.slice(before).filter((e) => e.to.includes(users.owner.email) && /Monvelo/.test(e.subject));
+}
+// the one Monvelo code emailed to the shop owner since `before`
 async function ownerCode(before: number): Promise<string> {
-  const owner = await must(admin.from("profiles").select("phone_number").eq("id", users.owner.id).single()) as { phone_number: string };
-  const sent = whatsappSends.slice(before).filter((w) => w.template === "teafair_otp" && w.to === owner.phone_number.replace(/^\+/, ""));
-  assertEquals(sent.length, 1, "one code to the owner's verified phone");
-  const code = sent[0].params[0];
-  assert(/^[0-9]{6}$/.test(code), code);
-  return code;
+  const sent = ownerEmails(before);
+  assertEquals(sent.length, 1, "one code to the owner's verified email");
+  const code = sent[0].text.match(/Your code: ([0-9]{6})/)?.[1] ?? "";
+  assert(/^[0-9]{6}$/.test(code), "the email carries a 6-digit code");
+  assert(sent[0].idempotencyKey?.startsWith("monvelo-code:"), "keyed on its challenge");
+  return Promise.resolve(code);
 }
 
 Deno.test({
@@ -1481,8 +1491,8 @@ Deno.test({
     })) as { order_status: string };
     assertEquals(dispatched.order_status, "IN_TRANSIT");
 
-    // 4. the owner's code goes over WhatsApp; the deliverer types it in: DELIVERED, the clock starts
-    const before = whatsappSends.length;
+    // 4. the owner's code goes by email (A6 §23.6); the deliverer types it in: DELIVERED, the clock starts
+    const before = resendEmails.length;
     const startRes = await zsm.post("monvelo-confirm-delivery", { idempotency_key: crypto.randomUUID(), action: "start", financing_id: mv.financingId });
     const start = await startRes.json();
     assertEquals(startRes.status, 200, JSON.stringify(start));
@@ -1500,7 +1510,7 @@ Deno.test({
 
     // 5. a part repayment, recorded by the member and confirmed with the owner's code
     const repay = async (amount: number) => {
-      const mark = whatsappSends.length;
+      const mark = resendEmails.length;
       const recRes = await lender.post("monvelo-confirm-repayment", {
         idempotency_key: crypto.randomUUID(), action: "record", financing_id: mv.financingId, agent_id: mv.agentId, amount,
       });

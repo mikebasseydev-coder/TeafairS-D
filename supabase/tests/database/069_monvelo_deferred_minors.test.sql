@@ -9,6 +9,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(21);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- ── fixtures (as postgres), tenant TEAFAIR plus NESTLE ──────────────────
 -- zone 1 Lagos (ZSM 01) > territory 1 > area 1 · zone 2 Ogun (ZSM 02) > territory 2 > area 2
 -- · zone 3 Oyo (no ZSM) > territory 3 > area 3
@@ -17,6 +23,9 @@ select plan(21);
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '234800000' || lpad(n::text, 4, '0'), now()
   from unnest(array[1, 2, 3, 4, 8, 11, 21, 31]) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 
 create function pg_temp.u(n integer) returns uuid language sql as
   $$ select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid $$;

@@ -1322,3 +1322,105 @@ Everything else in §20 stands: the 15-minute exclusive hold, the ₦3,000,000 a
 - **The ZSA's zone is its own `tenant_users.zone_id`,** matched to the zone of the request's territory, as `start_monvelo_consent` does.
 - **A ZSA who raised the request is the raiser,** so it is barred like an ASA raiser; a second field agent (the area's ASA, or another ZSA of the zone) decides.
 
+
+## 23. Amendment 2026-11-27: field activation, partners, pairing, the cutoff and email codes
+
+**Status:** user rulings 2026-11-27 (binding). **Built locally, not pushed:** migrations `20261127130000_monvelo_order_cutoff`, `20261127130100_monvelo_partners_and_radius`, `20261127130200_monvelo_field_scope_and_pairing` and `20261127130300_monvelo_email_codes`; pgTAP 085 and 086 (001, 004, 040, 041, 049, 052, 058, 062 and 063 updated; the earlier Monvelo files pin the pre-§23 settings in their own transaction); the gateways `monvelo-shop-consent`, `monvelo-confirm-delivery` and `monvelo-confirm-repayment`; `_shared/monvelo/code-email.ts`.
+
+**The model.** Teafair is the platform, owned by Teafair Ventures. Monvelo is the trade-finance service offered across tenants on it. ZSA and ASA are the field activation agents. They drive the service from a dashboard they own, and the TM oversees them.
+
+### 23.1 Agents, members, field agents; the dashboard and TM oversight
+
+- **Three kinds of people stay apart.**
+  - A Monvelo agent is a platform partner (`monvelo_agents`, no tenant).
+  - The people who act for it are the ACTIVE rows of `monvelo_agent_members`.
+  - The field activation agents, ZSA and ASA, are tenant memberships.
+  - A person may be more than one of these. The bars below apply when they are.
+- **Field scope.** `my_monvelo_field_area_ids()` returns the areas of the caller's field scope: for a ZSA, every area of their zone (`tenant_users.zone_id`); for an ASA, their own area. It counts ACTIVE memberships in tenants that run Monvelo only. The internal `monvelo_field_covers_area(membership, area)` answers the same question for one membership.
+- **Partner visibility narrows.** Before §23 a field agent read every ACTIVE agent on the platform. Now they read:
+  - their own recruits, in any status;
+  - ACTIVE partners in their scope (`my_monvelo_field_agent_ids()`): paired with a shop enrolled there, or pledged to one of its areas for today or later.
+- **Financing visibility widens.** A field agent now reads every financing of their scope, not only those they raised.
+- **`my_monvelo_territory_ids()` is the TM's territory only.** ASM is removed: no Monvelo role belongs to the ASM.
+- **`get_monvelo_field_dashboard()`** (ZSA or ASA, the active tenant; a read, so no idempotency key) returns one JSON document:
+  - the scope (zone, area, area ids), today, the next supply date and its cutoff;
+  - enrolled, paired and unpaired shops, and open nominations;
+  - the pipeline by status: open statuses at any date, closed ones from the last 30 days;
+  - pledged and remaining funds for today through the next supply date;
+  - the holds awaiting the caller (§22);
+  - the caller's own recruits, with code, kind and status;
+  - the caller's pairing activity over 30 days.
+- **`monvelo_field_partners_near(shop, radius_m)`** lists the ACTIVE liquidity partners near a shop in the caller's scope, so they can pair it. It shows name, network, code and distance. The radius defaults to 1,000 m and is capped at 5,000 m. Partners the caller acts for are left out.
+- **`get_monvelo_tm_oversight(p_days 1..366)`** (TM) lists the field agents working the TM's territory: its ASAs and the ZSAs of its zone. For each it gives counts within the territory over the window:
+  - shops enrolled;
+  - partners recruited (total, active, pending);
+  - pairings made and undone;
+  - holds allowed and declined;
+  - financings raised (total, open, principal).
+
+  **It names no partner** (§16.2.2). The TM reads no pairing row directly.
+
+### 23.2 Platform partner codes and kinds
+
+- **Every agent has a `partner_code`** of `MP-` plus 8 base32 characters. It is drawn on insert (trigger and column default) and is unique on the platform. It is not the storefront's `web_referral_codes`, which are tenant-scoped (A1); §15 keeps the two apart.
+- **Every agent has a `partner_kind`:**
+  - `LIQUIDITY_PARTNER` lends: it pledges, claims, funds, takes repayments and is paired with shops.
+  - `RETAIL_INDEPENDENT_PARTNER` is registered, coded and onboarded, with no lending action.
+- **Kind and code never change.** Existing agents became liquidity partners.
+- **`register_monvelo_agent` takes `p_agent.partner_kind`** (default `LIQUIDITY_PARTNER`) and replies with `partner_code` and `partner_kind`.
+- **The kind rule sits on the tables.** A pledge insert and a change to `retail_shops.preferred_agent_id` both refuse a non-liquidity partner (42501 "only a liquidity partner may …"). A claim, a hold, funding and a repayment all need a pledge, so a retail independent partner reaches none of them.
+
+### 23.3 The claim radius
+
+`monvelo_platform_settings.offer_radius_m` is **200 m** (it was 1,000 m), platform-wide; the column default is 200 too. The 100–50,000 m bounds and the paired partner's exemption from distance are unchanged.
+
+### 23.4 Direct pairing and directed requests
+
+- **A pairing is `retail_shops.preferred_agent_id`:** one per shop, platform-wide. It now has a history in `monvelo_shop_pairings`:
+  - columns: tenant, area, partner, source (`FIELD_PAIRING` or `NOMINATION`), who paired it, who unpaired it and why;
+  - one open row per shop;
+  - readers: Monvelo staff, the partner's members, and the field agents whose scope covers the area.
+- **`pair_monvelo_shop_agent(key, shop, agent)`** is for a ZSA (own zone) or ASA (own area). It requires:
+  - an ACTIVE enrolment in the caller's tenant and scope;
+  - an ACTIVE liquidity partner;
+  - a caller who is not a member of that partner (as R78);
+  - a shop that is not paired yet. Unpair first; pairing the same partner twice is P0001.
+- **`unpair_monvelo_shop_agent(key, shop, reason)`** has the same scope and needs a reason of 10 to 500 characters. **The fallback starts at once:** each OFFERED financing of the shop that was reserved for the old partner loses its preferred partner and window.
+- **`close_monvelo_nomination` RECRUITED** also records a `NOMINATION` pairing.
+- Both RPCs are idempotent and audited tenant-null, because the rows name a partner (R19).
+- **Directed requests are the existing routing.** `monvelo_offer` gives the paired partner the exclusive preferred window (10 minutes) when it has pledged room for the supply date. Then any liquidity partner within 200 m may claim.
+- **Funding is unchanged:** webhook-settled, with the payer binding. Nothing in §23 touches money.
+
+### 23.5 The 3:00 PM consolidation cutoff for next-day supply
+
+- **The settings:** `monvelo_platform_settings.order_cutoff_local` (15:00, Lagos wall clock) and `supply_lead_days` (1), both written by migration only.
+- **A request raised on Lagos day D is for supply date D + 1,** and only before 15:00 on D. P0001 "today's Monvelo order cutoff (15:00 Lagos) has passed; raise the request tomorrow before the cutoff". The supply date must be a supply day for the area (P0001 "tomorrow is not a supply day for this area").
+- **The TM's approval closes at the same cutoff:** P0001 "the Monvelo order cutoff for this supply date has passed". An AWAITING_APPROVAL request past the cutoff waits for the existing supply-day sweep to expire it.
+- **Helpers (`authenticated`):** `monvelo_request_supply_date()` and `monvelo_order_cutoff_at(date)`.
+- **Everything after the offer runs against the supply date** (pledges, claims, holds, funding) until that day ends, as before.
+- **The financed order's stock is held through its supply date.** A trade order's reservations otherwise lapse at the end of the day it was placed, and the stock sweep would cancel the order overnight. The internal `stock_hold_order` extends them. A RESERVED reservation may now take a later `expires_at` and nothing else. 049 lists the helper as an operational writer.
+
+### 23.6 The owner's codes go by email
+
+- **The four codes go to the owner's verified sign-in email:** consent, policy consent, delivery and repayment. That is `auth.users.email` with `email_confirmed_at` set, through the internal `monvelo_owner_code_email`. The codes never go to the shop's contact details, and never by WhatsApp or SMS.
+- **The RPC replies carry `destination_email`** in place of `destination_phone`.
+- **`request_monvelo_financing` check 8** now requires the owner's verified email, not a verified phone.
+- **The gateways send through Resend.** The sender is `MONVELO_EMAIL_FROM`, else `AUTH_EMAIL_FROM`, else the sandbox sender. The copy is fixed text plus the code, and each email is keyed `monvelo-code:<challenge>`. The reply shows only a masked address (`o***@e***.com`). A failed send is still 502 `MESSAGE_DELIVERY_FAILED`.
+- **Unchanged:** codes, hashes, expiry, attempt limits and the one-time reply.
+
+### 23.7 Calls made while building (cost if wrong)
+
+- **"Directed with fallback" reuses the preferred window.** No new offer state was added.
+  - **Cost if wrong:** a longer or notified exclusive window is a settings change, or a notice in `monvelo_offer`.
+- **The pairing history starts with §23.** Pairings set before it have no row, so unpairing them records the shop change in the audit but adds no history row, and they count as no unpair in the dashboard or oversight.
+  - **Cost if wrong:** a backfill from RECRUITED nominations.
+- **A retail independent partner has no positive action yet.** It is coded and visible to its recruiter.
+  - **Cost if wrong:** each action it should take needs its own ruling.
+- **Unpairing is open to any field agent whose scope covers an enrolment of the shop in their tenant, in any status.** The pairing is platform-wide, so this holds whatever the pairing's tenant.
+  - **Cost if wrong:** restrict it to the pairing's own tenant.
+- **Cutoff and lead days are platform-wide.**
+  - **Cost if wrong:** per-tenant columns on `monvelo_tenant_settings`.
+- **The partner code's column default needs `service_role` EXECUTE on `monvelo_draw_partner_code`**, because a default runs with the inserting role's rights. Admin tooling inserts as `service_role`. The function only draws a code.
+  - **Cost if wrong:** none known; drop the grant if no admin insert remains.
+- **The earlier Monvelo pgTAP files and the Step 2/3 integration flow pin the pre-§23 world** (same-day supply, no practical cutoff, 1,000 m) in their own transaction. Their fixtures gain a verified email wherever they had a verified phone.
+  - **Cost if wrong:** to test those scenarios at the shipped values, their supply days and distances must be rebuilt.

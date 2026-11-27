@@ -8,6 +8,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(90);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- A6 Task 6b: placing an order reserves stock. This file is not about stock,
 -- so every ordered line finds ample stock in its order's fulfilment warehouse.
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
@@ -34,6 +40,9 @@ insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '234800000' || lpad(n::text, 4, '0'),
        case when n = 11 then null else now() end
   from generate_series(1, 18) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 
 -- A6 §18.4: every state on, and every tenant opted in
 update public.operational_states set app_enabled = true, web_enabled = true;
@@ -312,7 +321,7 @@ select throws_ok($$select public.request_monvelo_financing(pg_temp.k(125), pg_te
 select throws_ok($$select public.request_monvelo_financing(pg_temp.k(126), pg_temp.o('O4'))$$,
   'P0001', 'the shop is not enrolled in Monvelo', 'a withdrawn enrolment');
 select throws_ok($$select public.request_monvelo_financing(pg_temp.k(127), pg_temp.o('O6'))$$,
-  'P0001', 'the shop owner has no verified phone', 'an owner with no verified phone');
+  'P0001', 'the shop owner has no verified email', 'an owner with no verified email (A6 §23.6)');
 select pg_temp.act_as(pg_temp.u(5), pg_temp.t1());
 select throws_ok($$select public.request_monvelo_financing(pg_temp.k(128), pg_temp.o('O5'))$$,
   '42501', 'the shop is not on your beat', 'the ASA of another area');

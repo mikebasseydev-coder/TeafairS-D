@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
-import { MessageDeliveryError, type OutboundMessage } from "../_shared/messaging/router.ts";
+import type { MonveloCodePurpose } from "../_shared/monvelo/code-email.ts";
 import { createMonveloConfirmRepaymentHandler } from "./handler.ts";
 
 const KEY = "b0000000-0000-0000-0000-000000000001";
@@ -13,7 +13,7 @@ function setup(
   opts: { replayed?: boolean; sendFails?: boolean; confirm?: Record<string, unknown>; activeTenant?: string } = {},
 ) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
-  const sent: Array<[string, OutboundMessage]> = [];
+  const sent: Array<[string, MonveloCodePurpose, string, string]> = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
     if (fn === "confirm_monvelo_repayment") {
@@ -23,7 +23,7 @@ function setup(
       repayment_id: REPAYMENT,
       challenge_id: CHALLENGE,
       expires_at: "2026-10-31T12:10:00+00:00",
-      destination_phone: "+2348031112222",
+      destination_email: "owner.one@example.com",
       replayed: opts.replayed ?? false,
       ...(opts.replayed ? {} : { code: "042917" }),
     } as T);
@@ -38,10 +38,10 @@ function setup(
       }),
     rpcFor: () => rpc,
     gatewaySecret: "gw-secret",
-    sendMessage: (to, message) => {
-      if (opts.sendFails) return Promise.reject(new MessageDeliveryError("down"));
-      sent.push([to, message]);
-      return Promise.resolve({ channel: "WHATSAPP", sent: true });
+    sendCode: (to, purpose, code, challengeId) => {
+      if (opts.sendFails) return Promise.reject(new Error("down"));
+      sent.push([to, purpose, code, challengeId]);
+      return Promise.resolve();
     },
   });
   return { handler, rpcCalls, sent };
@@ -53,18 +53,18 @@ const call = (handler: (r: Request) => Promise<Response>, body: unknown) =>
 const record = { idempotency_key: KEY, action: "record", financing_id: FINANCING, agent_id: AGENT, amount: 20000.5 };
 const confirm = { idempotency_key: KEY, action: "confirm", challenge_id: CHALLENGE, code: "042917" };
 
-Deno.test("record sends exactly one WhatsApp-only message with the code, and the reply has none", async () => {
+Deno.test("record emails exactly one code to the owner, and the reply has none", async () => {
   const { handler, rpcCalls, sent } = setup();
   const res = await call(handler, record);
   assertEquals(res.status, 200);
   const text = JSON.stringify(await res.clone().json());
   assertEquals(text.includes("042917"), false);
-  assertEquals(text.includes("8031112222"), false);
+  assertEquals(text.includes("owner.one"), false);
   assertEquals(await res.json(), {
     repayment_id: REPAYMENT,
     challenge_id: CHALLENGE,
     expires_at: "2026-10-31T12:10:00+00:00",
-    destination: "+234******2222",
+    destination: "o***@e***.com",
   });
   assertEquals(rpcCalls, [["record_monvelo_repayment", {
     p_idempotency_key: KEY,
@@ -74,22 +74,16 @@ Deno.test("record sends exactly one WhatsApp-only message with the code, and the
     p_amount: 20000.5,
   }]]);
   assertEquals(sent.length, 1);
-  assertEquals(sent[0][0], "+2348031112222");
-  assertEquals(sent[0][1].purpose, "MONVELO_REPAYMENT");
-  assertEquals(sent[0][1].whatsappOnly, true);
-  assertEquals(sent[0][1].template, { name: "teafair_otp", language: "en", params: ["042917"], kind: "authentication" });
-  assertEquals(sent[0][1].smsText.includes("042917"), false);
-  assertEquals(sent[0][1].relatedId, CHALLENGE);
-  // an agent member has no tenant: the log is platform-level
-  assertEquals(sent[0][1].tenantId, undefined);
+  // A6 §23.6: one email to the owner's verified address, with the code
+  assertEquals(sent[0], ["owner.one@example.com", "REPAYMENT", "042917", CHALLENGE]);
 });
 
-Deno.test("an agent member whose JWT names a tenant still logs no tenant", async () => {
+Deno.test("an agent member whose JWT names a tenant gets the same single email", async () => {
   const { handler, sent } = setup({ activeTenant: "e0000000-0000-0000-0000-000000000009" });
   const res = await call(handler, record);
   assertEquals(res.status, 200);
   assertEquals(sent.length, 1);
-  assertEquals(sent[0][1].tenantId, undefined);
+  assertEquals(sent[0][1], "REPAYMENT");
 });
 
 Deno.test("a replayed record sends nothing", async () => {

@@ -14,6 +14,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(28);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- A8 fix pass: this file's MOCK insurer counts as an underwriter (mock insurers allowed here)
 update public.monvelo_platform_settings set allow_mock_insurers = true;
 
@@ -43,6 +49,9 @@ do $$ begin perform vault.create_secret('test-gw-secret', 'gateway_secret'); end
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '234800000' || lpad(n::text, 4, '0'), now()
   from unnest(array[1, 3, 4, 6, 7, 8, 9, 10, 11, 18, 21, 22]) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 update public.profiles set platform_role = 'MONVELO_FINANCE'  where id = '20000000-0000-0000-0000-000000000006';
 update public.profiles set platform_role = 'MONVELO_OPERATOR' where id = '20000000-0000-0000-0000-000000000009';
 

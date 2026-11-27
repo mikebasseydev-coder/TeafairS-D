@@ -1,6 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { Rpc } from "../_shared/core/db.ts";
-import { MessageDeliveryError, type OutboundMessage } from "../_shared/messaging/router.ts";
+import type { MonveloCodePurpose } from "../_shared/monvelo/code-email.ts";
 import { createMonveloShopConsentHandler } from "./handler.ts";
 
 const KEY = "b0000000-0000-0000-0000-000000000001";
@@ -11,7 +11,7 @@ const TENANT = "e0000000-0000-0000-0000-000000000001";
 
 function setup(opts: { replayed?: boolean; sendFails?: boolean; enrol?: Record<string, unknown> } = {}) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
-  const sent: Array<[string, OutboundMessage]> = [];
+  const sent: Array<[string, MonveloCodePurpose, string, string]> = [];
   const auths: string[] = [];
   const rpc: Rpc = <T>(fn: string, args: Record<string, unknown>) => {
     rpcCalls.push([fn, args]);
@@ -24,7 +24,7 @@ function setup(opts: { replayed?: boolean; sendFails?: boolean; enrol?: Record<s
     return Promise.resolve({
       challenge_id: CHALLENGE,
       expires_at: "2026-10-28T12:10:00+00:00",
-      destination_phone: "+2348031112222",
+      destination_email: "owner.one@example.com",
       replayed: opts.replayed ?? false,
       ...(opts.replayed ? {} : { code: "042917" }),
     } as T);
@@ -36,10 +36,10 @@ function setup(opts: { replayed?: boolean; sendFails?: boolean; enrol?: Record<s
       return rpc;
     },
     gatewaySecret: "gw-secret",
-    sendMessage: (to, message) => {
-      if (opts.sendFails) return Promise.reject(new MessageDeliveryError("down"));
-      sent.push([to, message]);
-      return Promise.resolve({ channel: "WHATSAPP", sent: true });
+    sendCode: (to, purpose, code, challengeId) => {
+      if (opts.sendFails) return Promise.reject(new Error("down"));
+      sent.push([to, purpose, code, challengeId]);
+      return Promise.resolve();
     },
   });
   return { handler, rpcCalls, sent, auths };
@@ -50,28 +50,23 @@ const call = (handler: (r: Request) => Promise<Response>, body: unknown) =>
 
 const start = { idempotency_key: KEY, action: "start", shop_id: SHOP, area_id: AREA };
 
-Deno.test("start sends exactly one WhatsApp-only message with the code, and the reply has none", async () => {
+Deno.test("start emails exactly one code to the owner, and the reply has none", async () => {
   const { handler, rpcCalls, sent } = setup();
   const res = await call(handler, start);
   assertEquals(res.status, 200);
   const text = JSON.stringify(await res.clone().json());
   assertEquals(text.includes("042917"), false);
-  assertEquals(text.includes("8031112222"), false);
+  assertEquals(text.includes("owner.one"), false);
   assertEquals(await res.json(), {
     challenge_id: CHALLENGE,
     expires_at: "2026-10-28T12:10:00+00:00",
-    destination: "+234******2222",
+    destination: "o***@e***.com",
   });
   assertEquals(rpcCalls, [["start_monvelo_consent",
     { p_idempotency_key: KEY, p_gateway_proof: "gw-secret", p_shop_id: SHOP, p_area_id: AREA }]]);
   assertEquals(sent.length, 1);
-  assertEquals(sent[0][0], "+2348031112222");
-  assertEquals(sent[0][1].purpose, "MONVELO_CONSENT");
-  assertEquals(sent[0][1].whatsappOnly, true);
-  assertEquals(sent[0][1].template, { name: "teafair_otp", language: "en", params: ["042917"], kind: "authentication" });
-  assertEquals(sent[0][1].smsText.includes("042917"), false);
-  assertEquals(sent[0][1].relatedId, CHALLENGE);
-  assertEquals(sent[0][1].tenantId, TENANT);
+  // A6 §23.6: one email to the owner's verified address, with the code
+  assertEquals(sent[0], ["owner.one@example.com", "CONSENT", "042917", CHALLENGE]);
 });
 
 Deno.test("a replayed start sends nothing", async () => {
@@ -81,7 +76,7 @@ Deno.test("a replayed start sends nothing", async () => {
   assertEquals(sent, []);
 });
 
-Deno.test("a router failure is 502 MESSAGE_DELIVERY_FAILED", async () => {
+Deno.test("an email failure is 502 MESSAGE_DELIVERY_FAILED", async () => {
   const { handler } = setup({ sendFails: true });
   const res = await call(handler, start);
   assertEquals([res.status, (await res.json()).error.code], [502, "MESSAGE_DELIVERY_FAILED"]);
@@ -122,7 +117,7 @@ const policy = {
   document_path: `${SHOP}/cert.pdf`,
 };
 
-Deno.test("start_policy draws the code with the caller's JWT and sends it WhatsApp-only", async () => {
+Deno.test("start_policy draws the code with the caller's JWT and emails it", async () => {
   const { handler, rpcCalls, sent, auths } = setup();
   const res = await call(handler, { ...start, action: "start_policy" });
   assertEquals(res.status, 200);
@@ -131,7 +126,7 @@ Deno.test("start_policy draws the code with the caller's JWT and sends it WhatsA
   assertEquals(rpcCalls, [["start_monvelo_policy_consent",
     { p_idempotency_key: KEY, p_gateway_proof: "gw-secret", p_shop_id: SHOP, p_area_id: AREA }]]);
   assertEquals(sent.length, 1);
-  assertEquals(sent[0][1].whatsappOnly, true);
+  assertEquals(sent[0][1], "POLICY_CONSENT");
 });
 
 Deno.test("submit_policy spends the code and submits the policy", async () => {

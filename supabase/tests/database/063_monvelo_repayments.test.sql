@@ -9,6 +9,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(99);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- A6 Task 6b: placing an order reserves stock. Every ordered line finds ample
 -- stock in its order's fulfilment warehouse (one FIXTURE batch per SKU).
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
@@ -40,6 +46,9 @@ do $$ begin perform vault.create_secret('test-gw-secret', 'gateway_secret'); end
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '234800000' || lpad(n::text, 4, '0'), now()
   from unnest(array[1, 3, 4, 6, 7, 8, 10, 11, 18, 21, 22, 23]) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 update public.profiles set platform_role = 'MONVELO_OPERATOR' where id = '20000000-0000-0000-0000-000000000006';
 
 update public.operational_states set app_enabled = true, web_enabled = true;
@@ -285,8 +294,8 @@ reset role;
 -- ── record: 30000 pending, then 20000 is over what is left ──────────────
 select lives_ok($$select pg_temp.rec('R1', 21, 210, 'R', 30000)$$, 'P''s member records 30000 on R');
 select ok((pg_temp.r('R1') ->> 'code') ~ '^[0-9]{6}$' and (pg_temp.r('R1') ->> 'replayed')::boolean = false
-      and pg_temp.r('R1') ->> 'destination_phone' = (select phone_number from public.profiles where id = pg_temp.u(10)),
-  'the first call returns a 6-digit code for the owner''s verified phone');
+      and pg_temp.r('R1') ->> 'destination_email' = pg_temp.u(10)::text || '@fixture.test',
+  'the first call returns a 6-digit code for the owner''s verified email (A6 §23.6)');
 select is((select row(r.status, r.amount, r.recorded_by = pg_temp.u(21), r.tenant_id = pg_temp.t1(),
                       r.challenge_id = (pg_temp.r('R1') ->> 'challenge_id')::uuid, r.confirmed_at is null, r.ended_at is null)::text
              from public.monvelo_repayments r where r.id = pg_temp.rp('R1')),

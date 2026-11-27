@@ -1,7 +1,7 @@
 // Addendum A6 §4.1 — a street agent (ZSA/ASA) enrols a shop with the owner's
 // consent. "start" has the database draw a code (start_monvelo_consent; only
-// this gateway holds the proof) and sends it to the shop's phone over
-// WhatsApp only; "enrol" spends the code. The code is never returned and never
+// this gateway holds the proof) and emails it to the owner's verified sign-in
+// address (A6 §23.6; no WhatsApp or SMS); "enrol" spends the code. The code is never returned and never
 // logged. A wrong, expired or locked code comes back from the RPC as data, so
 // the attempt counter commits, and becomes a 422 here.
 //
@@ -16,11 +16,11 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { userGateway, type UserGatewayDeps } from "../_shared/core/gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
-import { type MessageSender, otpTemplate } from "../_shared/messaging/router.ts";
-import { maskPhone } from "../otp-issue/code.ts";
+import { maskEmail, type MonveloCodeSender } from "../_shared/monvelo/code-email.ts";
 
 export type MonveloShopConsentDeps = UserGatewayDeps & {
-  sendMessage: MessageSender;
+  /** Emails the owner's code (A6 §23.6). */
+  sendCode: MonveloCodeSender;
   /** Must equal the Vault secret `gateway_secret`. */
   gatewaySecret: string;
 };
@@ -68,7 +68,7 @@ type Submitted =
 type Started = {
   challenge_id: string;
   expires_at: string;
-  destination_phone: string;
+  destination_email: string;
   replayed?: boolean;
   /** First call only; never stored, never returned to the agent. */
   code?: string;
@@ -85,7 +85,7 @@ const REFUSALS: Record<string, [string, string]> = {
 };
 
 export function createMonveloShopConsentHandler(deps: MonveloShopConsentDeps): (req: Request) => Promise<Response> {
-  return userGateway(schema, async ({ caller, body, rpc }) => {
+  return userGateway(schema, async ({ body, rpc }) => {
     if (body.action === "enrol") {
       const r = await rpc<Enrolled>("enrol_monvelo_shop", {
         p_idempotency_key: body.idempotency_key,
@@ -129,15 +129,8 @@ export function createMonveloShopConsentHandler(deps: MonveloShopConsentDeps): (
     });
     if (!started.replayed && started.code) {
       try {
-        await deps.sendMessage(started.destination_phone, {
-          purpose: "MONVELO_CONSENT",
-          template: otpTemplate(started.code),
-          // never sent: whatsappOnly. Deliberately free of the code.
-          smsText: "Teafair WhatsApp consent code.",
-          relatedId: started.challenge_id,
-          tenantId: caller.activeTenantId ?? undefined,
-          whatsappOnly: true,
-        });
+        await deps.sendCode(started.destination_email, body.action === "start_policy" ? "POLICY_CONSENT" : "CONSENT",
+          started.code, started.challenge_id);
       } catch {
         // no error object is logged: it could echo the destination or the code
         throw new GatewayError(502, "MESSAGE_DELIVERY_FAILED", "The code could not be sent. Request a new one.");
@@ -146,7 +139,7 @@ export function createMonveloShopConsentHandler(deps: MonveloShopConsentDeps): (
     return {
       challenge_id: started.challenge_id,
       expires_at: started.expires_at,
-      destination: maskPhone(started.destination_phone),
+      destination: maskEmail(started.destination_email),
     };
   }, deps);
 }

@@ -5,6 +5,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(85);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
 update public.operational_states set app_enabled = true, web_enabled = true;
 set local session_replication_role = replica;
@@ -30,6 +36,9 @@ set local session_replication_role = origin;
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-0000000000' || lpad(n::text, 2, '0'))::uuid, '23480000000' || lpad(n::text, 2, '0'), now()
 from unnest(array[1,2,3,4,5,6,7,9,14,15,16,17]) as n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 -- 18: a shop owner whose phone Supabase Auth never confirmed
 insert into auth.users (id, phone) values ('20000000-0000-0000-0000-000000000018', '2348000000018');
 update public.profiles set platform_role = 'MONVELO_OPERATOR' where id = '20000000-0000-0000-0000-000000000009';
@@ -129,10 +138,11 @@ do $$ begin perform set_config('test.s1', public.start_monvelo_consent(
   'e1000000-0000-0000-0000-000000000001', 'test-gw-secret',
   '70000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001')::text, true); end $$;
 select ok(current_setting('test.s1')::jsonb ->> 'code' ~ '^[0-9]{6}$', 'start gives a 6-digit code');
-select is(current_setting('test.s1')::jsonb ->> 'destination_phone',
-  (select phone_number from public.profiles where id = '20000000-0000-0000-0000-000000000014'),
-  'the code goes to the owner''s profile phone');
-select isnt(current_setting('test.s1')::jsonb ->> 'destination_phone', '+234803111001', 'not to the shop''s contact number');
+-- A6 §23.6: the code goes to the owner's verified sign-in email
+select is(current_setting('test.s1')::jsonb ->> 'destination_email',
+  '20000000-0000-0000-0000-000000000014@fixture.test',
+  'the code goes to the owner''s verified email');
+select ok(current_setting('test.s1')::jsonb ->> 'destination_phone' is null, 'and to no phone, the shop''s contact number included');
 
 select is(public.start_monvelo_consent('e1000000-0000-0000-0000-000000000001', 'test-gw-secret',
   '70000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001') ? 'code', false,
@@ -172,7 +182,7 @@ select throws_ok($$select public.start_monvelo_consent('e1000000-0000-0000-0000-
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
 select throws_ok($$select public.start_monvelo_consent('e1000000-0000-0000-0000-000000000004', 'test-gw-secret',
   '70000000-0000-0000-0000-000000000006', '60000000-0000-0000-0000-000000000001')$$,
-  'P0001', 'the shop owner has no verified phone', 'an owner without a confirmed phone gets no code');
+  'P0001', 'the shop owner has no verified email', 'an owner without a confirmed email gets no code');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000016', '10000000-0000-0000-0000-000000000002');
 select throws_ok($$select public.start_monvelo_consent('e1000000-0000-0000-0000-000000000003', 'test-gw-secret',
   '70000000-0000-0000-0000-000000000005', '60000000-0000-0000-0000-000000000002')$$,

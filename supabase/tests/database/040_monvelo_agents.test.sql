@@ -5,6 +5,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(82);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
 update public.operational_states set app_enabled = true, web_enabled = true;
 set local session_replication_role = replica;
@@ -35,6 +41,9 @@ insert into auth.users (id, phone, phone_confirmed_at) values
   ('20000000-0000-0000-0000-000000000010', '2348000000010', now()),
   ('20000000-0000-0000-0000-000000000012', '2348000000012', now()),
   ('20000000-0000-0000-0000-000000000013', '2348000000013', now());
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 insert into auth.users (id, phone) values
   ('20000000-0000-0000-0000-000000000011', '2348000000011');
 
@@ -273,12 +282,14 @@ select is(has_column_privilege('authenticated', 'public.monvelo_agents', 'busine
   'but business_name is readable');
 select is(has_table_privilege('authenticated', 'public.monvelo_agents', 'insert'), false, 'no direct insert');
 
--- ── field agents: ruling 2 ──────────────────────────────────────────────
--- agent 1 (Moniepoint) is ACTIVE, agent 2 (OPay) is PENDING
+-- ── field agents: ruling 2, narrowed by A6 §23.1 ─────────────────────────
+-- agent 1 (Moniepoint) is ACTIVE, agent 2 (OPay) is PENDING and the ASA's own
+-- recruit. Under §23.1 a field agent reads only partners in its scope (none
+-- here: no shop is paired or pledged in its area) and its own recruits.
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
 select is((select count(*)::int from public.monvelo_agents), 1,
-  'an enabled tenant''s ASA reads the ACTIVE agent and not the PENDING one');
-select is((select pos_network::text from public.monvelo_agents), 'MONIEPOINT', 'the one it reads is the ACTIVE agent');
+  'an enabled tenant''s ASA reads its own recruit and no ACTIVE partner outside its scope');
+select is((select pos_network::text from public.monvelo_agents), 'OPAY', 'the one it reads is its own (PENDING) recruit');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000002');
 select is((select count(*)::int from public.monvelo_agents), 0, 'a disabled tenant''s ASA reads none');
 
@@ -313,10 +324,12 @@ select throws_ok(
       (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'),
       '{"settlement_account_number":"9876543210","settlement_bank_code":"044","settlement_account_name":"Mama Ngozi Ventures"}'::jsonb)$$,
   '42501', null, 'a settlement change needs the gateway proof');
+-- the agent's id is read first: under A6 §23.1 this ZSA cannot see the agent
+select set_config('test.moniepoint_agent', (select id::text from public.monvelo_agents where pos_network = 'MONIEPOINT'), true);
 select pg_temp.act_as('20000000-0000-0000-0000-000000000010', '10000000-0000-0000-0000-000000000001');
 select throws_ok(
   $$select public.request_monvelo_settlement_change('99999999-0000-0000-0000-000000000002', 'test-gw-secret',
-      (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'),
+      current_setting('test.moniepoint_agent')::uuid,
       '{"settlement_account_number":"9876543210","settlement_bank_code":"044","settlement_account_name":"Mama Ngozi Ventures"}'::jsonb)$$,
   '42501', null, 'a ZSA who did not recruit the agent cannot change its account');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000001');
@@ -364,7 +377,8 @@ select lives_ok(
       (select id from public.monvelo_agents where pos_network = 'MONIEPOINT'), 'chargeback dispute')$$,
   'the operator suspends an agent');
 select pg_temp.act_as('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000001');
-select is((select count(*)::int from public.monvelo_agents), 0, 'a suspended agent is no longer visible to field agents');
+select is((select count(*)::int from public.monvelo_agents where pos_network = 'MONIEPOINT'), 0,
+  'a suspended agent is no longer visible to field agents');
 
 -- ── no personal data in audit rows ──────────────────────────────────────
 reset role;

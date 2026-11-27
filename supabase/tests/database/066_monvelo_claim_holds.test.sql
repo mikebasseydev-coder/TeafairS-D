@@ -13,6 +13,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(134);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- The limits are ₦1,000,000 and ₦3,000,000 (20261031121100, user 2026-11-03);
 -- the next assertion proves the shipped values. The scenarios below are sized
 -- to the 1:3 ratio at the original ₦100,000 / ₦300,000, so this transaction
@@ -50,6 +56,9 @@ create trigger a6_stock_for_line after insert on public.order_items
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '234800000' || lpad(n::text, 4, '0'), now()
   from unnest(array[1, 3, 4, 7, 8, 10, 11, 18, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 
 update public.operational_states set app_enabled = true, web_enabled = true;
 set local session_replication_role = replica;
@@ -448,6 +457,9 @@ select throws_ok(format($$delete from public.monvelo_claim_holds where financing
 insert into auth.users (id, phone, phone_confirmed_at)
 select pg_temp.u(n), '234800000' || lpad(n::text, 4, '0'), now()
   from unnest(array[2, 5, 6, 41, 42, 43, 44, 45, 46, 47, 48, 49, 52, 53, 54, 55, 60]) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 update public.profiles set full_name = 'Zara Market' where id = pg_temp.u(11);
 insert into public.tenant_users (id, tenant_id, profile_id, role, zone_id, territory_id, area_id, reports_to_id, status, is_primary) values
   ('50000000-0000-0000-0000-000000000002', pg_temp.t1(), pg_temp.u(2), 'ZSM', null, null, null, null, 'ACTIVE', true);
@@ -795,6 +807,9 @@ select is(pg_temp.status('T1'), 'OFFERED', 'a HELD request left with no HELD hol
 -- ═════════════════════════════════════════════════════════════════════════
 insert into auth.users (id, phone, phone_confirmed_at)
 select pg_temp.u(n), '234800000' || lpad(n::text, 4, '0'), now() from unnest(array[56, 57]) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 insert into public.monvelo_agents (id, business_name, pos_network, network_agent_id, contact_phone, location, address_text,
   settlement_account_number, settlement_account_last4, settlement_bank_code, settlement_account_name, network_kyc_reference,
   recruited_by, status, daily_cap, per_financing_cap)

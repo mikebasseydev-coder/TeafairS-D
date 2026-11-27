@@ -1,7 +1,8 @@
 // Addendum A6 §4.4, §5 step 9 — a Monvelo repayment, confirmed by the shop owner.
 // "record" has the funder's member record an amount; the database draws the
 // owner's code (record_monvelo_repayment; only this gateway holds the proof)
-// and this gateway sends it to the owner's verified phone over WhatsApp only.
+// and this gateway emails it to the owner's verified sign-in address (A6 §23.6;
+// no WhatsApp or SMS).
 // "confirm" spends the code the recorder types in as the owner reads it out
 // (ruling R32: only the recorder confirms). The code is never returned and
 // never logged. A wrong, expired or locked code comes back from the RPC as
@@ -17,11 +18,11 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { userGateway, type UserGatewayDeps } from "../_shared/core/gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
-import { type MessageSender, otpTemplate } from "../_shared/messaging/router.ts";
-import { maskPhone } from "../otp-issue/code.ts";
+import { maskEmail, type MonveloCodeSender } from "../_shared/monvelo/code-email.ts";
 
 export type MonveloConfirmRepaymentDeps = UserGatewayDeps & {
-  sendMessage: MessageSender;
+  /** Emails the owner's code (A6 §23.6). */
+  sendCode: MonveloCodeSender;
   /** Must equal the Vault secret `gateway_secret`. */
   gatewaySecret: string;
 };
@@ -52,7 +53,7 @@ type Recorded = {
   repayment_id: string;
   challenge_id: string;
   expires_at: string;
-  destination_phone: string;
+  destination_email: string;
   replayed?: boolean;
   /** First call only; never stored, never returned to the recorder. */
   code?: string;
@@ -94,18 +95,7 @@ export function createMonveloConfirmRepaymentHandler(
     });
     if (!recorded.replayed && recorded.code) {
       try {
-        await deps.sendMessage(recorded.destination_phone, {
-          purpose: "MONVELO_REPAYMENT",
-          template: otpTemplate(recorded.code),
-          // never sent: whatsappOnly. Deliberately free of the code.
-          smsText: "Teafair WhatsApp repayment code.",
-          relatedId: recorded.challenge_id,
-          // Platform-level, always: the caller is an agent member, and the RPC
-          // proves nothing about any tenant the JWT may name. A tenant id here
-          // would let that tenant's ZSMs read a lender's log row (§16.2.2).
-          tenantId: undefined,
-          whatsappOnly: true,
-        });
+        await deps.sendCode(recorded.destination_email, "REPAYMENT", recorded.code, recorded.challenge_id);
       } catch {
         // no error object is logged: it could echo the destination or the code
         throw new GatewayError(502, "MESSAGE_DELIVERY_FAILED", "The code could not be sent. This repayment stays pending, holding its amount, until its code lapses in 10 minutes; then record it again.");
@@ -115,7 +105,7 @@ export function createMonveloConfirmRepaymentHandler(
       repayment_id: recorded.repayment_id,
       challenge_id: recorded.challenge_id,
       expires_at: recorded.expires_at,
-      destination: maskPhone(recorded.destination_phone),
+      destination: maskEmail(recorded.destination_email),
     };
   }, deps);
 }

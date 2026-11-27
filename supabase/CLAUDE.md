@@ -34,6 +34,7 @@ the authority; this file is the working summary.
 | A7. Tenant support tickets and ticket emails (outbox, `email-outbox-send`) | done (local) |
 | A8. Monvelo cover (GIT, stock cover, loss claims, declarations, insurer webhook, onboarding terms) | done (merged into local main) |
 | Admin provisioning and batch loads (`provision_tenant`, `upsert_tenant_skus`, `post_opening_stock`) | done (local) |
+| Monvelo (A6) §23: field scope and dashboard, TM oversight, partner codes and kinds, 200 m radius, pairing, 15:00 cutoff for next-day supply, owner codes by email | done (local) |
 | 4. Client offline queue | Spec B draft under review (`docs/spec-b-client.md`), not approved; slice B4 |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
@@ -645,9 +646,10 @@ only" and "magic links refused" lines of the auth hardening section above.**
   MONVELO, TRADE. Anyone else gets the hook's 403. Reauthentication is still
   refused. The Monvelo read sits in `is_monvelo_agent_member` (internal) so
   045's domain guard holds.
-- `send-auth-sms` is unchanged and parked. The shop owner's delivery,
-  repayment, consent and OTP codes still go to a verified phone (a business
-  rule, not sign-in) and fail closed without one.
+- `send-auth-sms` is unchanged and parked. The shop owner's OTP code still
+  goes to a verified phone and fails closed without one. **Superseded for
+  Monvelo by A6 §23.6:** the consent, policy, delivery and repayment codes go
+  to the owner's verified email.
 - **Deploy:** push the migration, then deploy `send-auth-email` straight
   after (the old hook refuses sign-in codes). The Send Email hook must be
   re-enabled in the dashboard with a correct `SEND_EMAIL_HOOK_SECRET`. Email
@@ -1305,6 +1307,48 @@ calls, as amended, and the material rulings are recorded in A6 §19.
   mismatch, dispatch, the delivery code, a part repayment, the late charge and
   REPAID_LATE, and the TENANT_ADMIN's reads. It moves time as postgres through
   `DB_URL`.
+
+### Monvelo (A6) §23: field activation, partners, pairing, cutoff, email codes (2026-11-27)
+
+Migrations `20261127130000`-`20261127130300`, pgTAP 085 and 086, local only.
+The rulings, invariants and calls are A6 §23; read it before touching any
+of these.
+
+- **Field scope:** `my_monvelo_field_area_ids()` (ZSA: the zone's areas; ASA:
+  its area) and `my_monvelo_field_agent_ids()`. Field agents read partners in
+  scope plus their own recruits (no longer every ACTIVE agent) and every
+  financing in scope. `my_monvelo_territory_ids()` is TM-only (ASM removed).
+- **Reads:** `get_monvelo_field_dashboard()` (ZSA/ASA),
+  `monvelo_field_partners_near(shop, radius)` (ZSA/ASA, liquidity partners),
+  `get_monvelo_tm_oversight(p_days)` (TM; counts only, never a partner). The
+  two jsonb reads are exempt in 004.
+- **Partners:** `monvelo_agents.partner_kind` (`LIQUIDITY_PARTNER` or
+  `RETAIL_INDEPENDENT_PARTNER`, via `p_agent.partner_kind` at registration)
+  and `partner_code` (`MP-` + 8 base32), both immutable. Table triggers keep
+  pledges and pairings for liquidity partners only.
+- **Radius:** `offer_radius_m` is 200 m.
+- **Pairing:** `pair_monvelo_shop_agent` and `unpair_monvelo_shop_agent`
+  (ZSA own zone, ASA own area; reason 10..500 to unpair; unpairing ends the
+  open offers' exclusive window), history in `monvelo_shop_pairings`;
+  a RECRUITED nomination records a `NOMINATION` pairing.
+- **Cutoff:** a request is for `monvelo_request_supply_date()` (today + 1)
+  and only before `monvelo_order_cutoff_at(supply_date)` (15:00 Lagos the
+  day before); the TM's approval closes at the same instant. A financed trade
+  order's reservations are held through the supply date (`stock_hold_order`;
+  a RESERVED row may now take a later expiry, nothing else).
+- **Email codes:** the four owner codes go to the verified sign-in email
+  (`destination_email`); the gateways send through Resend
+  (`_shared/monvelo/code-email.ts`; `RESEND_API_KEY` now required by
+  `monvelo-shop-consent`, `monvelo-confirm-delivery` and
+  `monvelo-confirm-repayment`; optional `MONVELO_EMAIL_FROM`). A request
+  needs the owner's verified email, not phone.
+- **Tests written before §23** pin same-day supply, a 23:59:59.999999
+  cutoff and 1,000 m in their own transaction, and give each verified-phone
+  fixture a verified email. So does the Step 2 integration flow (through
+  `DB_URL`; `db reset` afterwards).
+- **Deploy:** set `RESEND_API_KEY` (and `MONVELO_EMAIL_FROM`) for the three
+  gateways and deploy them straight after the push: the old gateways read
+  `destination_phone`, which the RPCs no longer return.
 
 ### Addendum A7 (tenant support tickets and ticket emails)
 

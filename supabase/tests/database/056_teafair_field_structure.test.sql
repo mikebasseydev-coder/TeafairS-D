@@ -7,6 +7,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(54);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- A6 §18.4: every state is switched on, and every tenant opted in, for this file's fixtures
 update public.operational_states set app_enabled = true, web_enabled = true;
 set local session_replication_role = replica;
@@ -32,6 +38,9 @@ set local session_replication_role = origin;
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-0000000000' || lpad(n::text, 2, '0'))::uuid, '23480000000' || lpad(n::text, 2, '0'), now()
 from generate_series(1, 14) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 
 insert into public.zones (id, tenant_id, zone_name, state_code) values
   ('30000000-0000-0000-0000-000000000031', '10000000-0000-0000-0000-000000000001', 'Lagos', 'LA'),

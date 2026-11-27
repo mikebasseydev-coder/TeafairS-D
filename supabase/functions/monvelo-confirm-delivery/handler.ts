@@ -1,7 +1,7 @@
 // Addendum A6 §4.4, §5 step 7 — the shop owner confirms a Monvelo delivery.
 // "start" has the database draw the owner's code (start_monvelo_delivery; only
-// this gateway holds the proof) and sends it to the owner's verified phone over
-// WhatsApp only; "confirm" spends the code the deliverer types in as the owner
+// this gateway holds the proof) and emails it to the owner's verified sign-in
+// address (A6 §23.6; no WhatsApp or SMS); "confirm" spends the code the deliverer types in as the owner
 // reads it out (ruling R20: the caller must be a deliverer of the order). The
 // code is never returned and never logged. A wrong, expired or locked code
 // comes back from the RPC as data, so the attempt counter commits, and becomes
@@ -13,11 +13,11 @@ import { z } from "../_shared/core/deps.ts";
 import { GatewayError } from "../_shared/core/errors.ts";
 import { userGateway, type UserGatewayDeps } from "../_shared/core/gateway.ts";
 import { idempotencyKey } from "../_shared/core/validate.ts";
-import { type MessageSender, otpTemplate } from "../_shared/messaging/router.ts";
-import { maskPhone } from "../otp-issue/code.ts";
+import { maskEmail, type MonveloCodeSender } from "../_shared/monvelo/code-email.ts";
 
 export type MonveloConfirmDeliveryDeps = UserGatewayDeps & {
-  sendMessage: MessageSender;
+  /** Emails the owner's code (A6 §23.6). */
+  sendCode: MonveloCodeSender;
   /** Must equal the Vault secret `gateway_secret`. */
   gatewaySecret: string;
 };
@@ -39,7 +39,7 @@ const schema = z.discriminatedUnion("action", [
 type Started = {
   challenge_id: string;
   expires_at: string;
-  destination_phone: string;
+  destination_email: string;
   replayed?: boolean;
   /** First call only; never stored, never returned to the deliverer. */
   code?: string;
@@ -58,7 +58,7 @@ const REFUSALS: Record<string, [string, string]> = {
 export function createMonveloConfirmDeliveryHandler(
   deps: MonveloConfirmDeliveryDeps,
 ): (req: Request) => Promise<Response> {
-  return userGateway(schema, async ({ caller, body, rpc }) => {
+  return userGateway(schema, async ({ body, rpc }) => {
     if (body.action === "confirm") {
       const r = await rpc<Confirmed>("confirm_monvelo_delivery", {
         p_idempotency_key: body.idempotency_key,
@@ -79,15 +79,7 @@ export function createMonveloConfirmDeliveryHandler(
     });
     if (!started.replayed && started.code) {
       try {
-        await deps.sendMessage(started.destination_phone, {
-          purpose: "MONVELO_DELIVERY",
-          template: otpTemplate(started.code),
-          // never sent: whatsappOnly. Deliberately free of the code.
-          smsText: "Teafair WhatsApp delivery code.",
-          relatedId: started.challenge_id,
-          tenantId: caller.activeTenantId ?? undefined,
-          whatsappOnly: true,
-        });
+        await deps.sendCode(started.destination_email, "DELIVERY", started.code, started.challenge_id);
       } catch {
         // no error object is logged: it could echo the destination or the code
         throw new GatewayError(502, "MESSAGE_DELIVERY_FAILED", "The code could not be sent. Request a new one.");
@@ -96,7 +88,7 @@ export function createMonveloConfirmDeliveryHandler(
     return {
       challenge_id: started.challenge_id,
       expires_at: started.expires_at,
-      destination: maskPhone(started.destination_phone),
+      destination: maskEmail(started.destination_email),
     };
   }, deps);
 }

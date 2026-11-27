@@ -378,12 +378,14 @@ insert into operational values
   ('stock_reserve_order', 'reserves an order''s lines at placement (place_web_order, place_trade_order)'),
   ('stock_consume_order', 'deducts an order''s reservations at dispatch (mark_order_dispatched)'),
   ('stock_release_order', 'releases an order''s reservations on cancel or refund (apply_paystack_refund, the sweep)'),
-  ('record_order_return', 'restores goods that came back after dispatch, citing the order');
--- the order transitions that may call the internal reserve / consume / release helpers
+  ('record_order_return', 'restores goods that came back after dispatch, citing the order'),
+  ('stock_hold_order', 'A6 §23.5: holds a financed trade order''s reservations through its supply date (a later expiry only)');
+-- the order transitions that may call the internal reserve / consume / release / hold helpers
 create temp table order_callers (proname text primary key, reason text not null);
 insert into order_callers values
   ('place_web_order', 'web placement reserves'),
   ('place_trade_order', 'trade placement reserves'),
+  ('request_monvelo_financing', 'A6 §23.5: a financed trade order is held through its supply date'),
   ('mark_order_dispatched', 'dispatch consumes'),
   ('dispatch_monvelo_financing', 'Monvelo dispatch of a FUNDED financing consumes, citing the order (A6 §5 step 7)'),
   ('apply_paystack_refund', 'a refund before dispatch releases'),
@@ -480,12 +482,12 @@ select is(pg_temp.op_report(), null,
 select is((select string_agg(proname, ', ') from operational where proname not in (select proname from writes)), null,
   'every operational entry still writes a guarded table (no stale entries)');
 select is((select string_agg(sch || '.' || proname, ', ' order by proname) from fns
-            where body ~ 'stock_(reserve|consume|release)_order\('
+            where body ~ 'stock_(reserve|consume|release|hold)_order\('
               and proname not in (select proname from order_callers)), null,
   'only the named order transitions call the reserve, consume and release helpers');
 select is((select string_agg(c.proname, ', ') from order_callers c
             where not exists (select 1 from fns f where f.proname = c.proname
-                                and f.body ~ 'stock_(reserve|consume|release)_order\(')), null,
+                                and f.body ~ 'stock_(reserve|consume|release|hold)_order\(')), null,
   'every named order transition still calls one (no stale entries)');
 select is((select string_agg(p.proname || ' ' || r, ', ')
              from pg_proc p cross join unnest(array['anon', 'authenticated', 'service_role']) r

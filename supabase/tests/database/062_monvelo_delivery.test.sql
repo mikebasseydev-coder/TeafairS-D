@@ -7,6 +7,12 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(86);
 
+-- A6 §23 (20261127130000-130300): this file predates the 2026-11-27 rulings, so
+-- it keeps same-day supply, no practical cutoff and the 1,000 m radius for this
+-- transaction only (085-088 test the shipped values)
+update public.monvelo_platform_settings
+   set supply_lead_days = 0, order_cutoff_local = time '23:59:59.999999', offer_radius_m = 1000;
+
 -- A6 Task 6b: placing an order reserves stock. Every ordered line finds ample
 -- stock in its order's fulfilment warehouse (one FIXTURE batch per SKU).
 create function pg_temp.a6_stock_for_line() returns trigger language plpgsql as $f$
@@ -38,6 +44,9 @@ do $$ begin perform vault.create_secret('test-gw-secret', 'gateway_secret'); end
 insert into auth.users (id, phone, phone_confirmed_at)
 select ('20000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid, '234800000' || lpad(n::text, 4, '0'), now()
   from unnest(array[1, 3, 4, 6, 7, 8, 9, 10, 18, 21, 22]) n;
+-- A6 §23.6: the owner's codes go by email; a fixture with a verified phone gets a verified email
+update auth.users set email = id::text || '@fixture.test', email_confirmed_at = now()
+ where phone_confirmed_at is not null and email is null;
 update public.profiles set platform_role = 'MONVELO_OPERATOR' where id = '20000000-0000-0000-0000-000000000006';
 
 update public.operational_states set app_enabled = true, web_enabled = true;
@@ -337,9 +346,9 @@ reset role;
 select lives_ok($$select pg_temp.start('S1', 3, 310, 'A')$$, 'the TM of the territory starts A''s delivery code');
 select ok((pg_temp.r('S1') ->> 'code') ~ '^[0-9]{6}$' and (pg_temp.r('S1') ->> 'replayed')::boolean = false,
   'the first call returns a 6-digit code');
-select is(pg_temp.r('S1') ->> 'destination_phone', (select phone_number from public.profiles where id = pg_temp.u(10)),
-  'the code goes to the owner''s verified profile phone');
-select isnt(pg_temp.r('S1') ->> 'destination_phone', '+234803111001', 'not the shop''s contact number');
+select is(pg_temp.r('S1') ->> 'destination_email', pg_temp.u(10)::text || '@fixture.test',
+  'the code goes to the owner''s verified email (A6 §23.6)');
+select ok(pg_temp.r('S1') ->> 'destination_phone' is null, 'and to no phone, the shop''s contact number included');
 select ok(abs(extract(epoch from (pg_temp.r('S1') ->> 'expires_at')::timestamptz - (now() + interval '10 minutes'))) < 1,
   'it expires in 10 minutes');
 select is((select row(c.purpose, c.financing_id = pg_temp.f('A'), c.issued_by = pg_temp.u(3), c.tenant_id = pg_temp.t1(),
