@@ -1,7 +1,8 @@
 # Spec B — The Client (Teafair RTM app shell)
 
-**Status:** approved by the user, 2026-11-27. `src/` is unfrozen for slices
-B1–B4 (§11). **Authority:** Spec A
+**Status:** draft under review, not approved. `src/` stays frozen; slices
+B1–B4 (§11) wait on approval, and Monvelo must be finished first.
+**Authority:** Spec A
 (`docs/superpowers/specs/2026-10-05-multi-tenant-rtm-foundation-design.md`)
 and its addenda A1–A8 still govern the backend. Where this spec and Spec A
 disagree about the client, this spec wins. It replaces Spec A §3.4 (gateway

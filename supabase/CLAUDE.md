@@ -34,7 +34,7 @@ the authority; this file is the working summary.
 | A7. Tenant support tickets and ticket emails (outbox, `email-outbox-send`) | done (local) |
 | A8. Monvelo cover (GIT, stock cover, loss claims, declarations, insurer webhook, onboarding terms) | done (merged into local main) |
 | Admin provisioning and batch loads (`provision_tenant`, `upsert_tenant_skus`, `post_opening_stock`) | done (local) |
-| 4. Client offline queue | Spec B approved (`docs/spec-b-client.md`); slice B4 |
+| 4. Client offline queue | Spec B draft under review (`docs/spec-b-client.md`), not approved; slice B4 |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
 (GitHub `main` at `42dd15b`), the remote has the 29 migrations up to
