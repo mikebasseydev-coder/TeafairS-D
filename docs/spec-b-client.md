@@ -163,8 +163,16 @@ critique), within these rules.
   - The cutoff (§6.2) is shown as a time, "Requests close 15:00 Lagos".
   - The owner's code entry follows §5 Tier 3.
 - **Brand moments are few.** The FIGMA.md gradients and the emblem appear
-  only on the sign-in screen, the splash and empty states. Never in a list,
-  a form or a workflow.
+  only on the sign-in screen, the splash and empty states; the emblem also
+  appears small in the shell header. Never in a list, a form or a workflow.
+- **The emblem is an asset, not a drawing.** `assets/branding/teafair-logo.png`
+  is canonical. Its marks are a scalloped green seal, a thin inner ring, a
+  white field, and a leaf rising from the black `TF` monogram. The
+  `Emblem` component in `shared/ui` renders that artwork (through its
+  transparent master, §4.6) at fixed sizes (24 dp tab bar, 32 dp or more
+  elsewhere) with clear space of one eighth of its diameter. It is never
+  recoloured, redrawn in code, stretched or cropped. The rules and the
+  sampled colours are in FIGMA.md §0.
 
 ### 4.2 Tokens: primitives, then semantics
 
@@ -372,6 +380,18 @@ built from those primitives and exported through the feature's `index.ts`.
 3. **Theme defaults:** `daylight` for ZSA, ASA, TM, RETAIL_SHOP_OWNER and
    POS_AGENT; `standard` for the operational and tenant roles; `dark` on
    request for analytical views. The user's preference always overrides.
+4. **The emblem asset** is `assets/branding/teafair-logo.png` (FIGMA.md §0).
+   Its greens (leaf `#70B123`, seal `#52801D`) stay in the artwork: the
+   leaf is 2.62:1 on white, so the UI keeps `teafair-leaf` `#629E28`.
+
+### 4.6 Open item before B1
+
+**A transparent emblem master.** The canonical PNG is 24-bit with opaque
+black outside the seal, so on any light background it shows as a black
+square. B1's `Emblem` component, the splash and the app icon need
+`assets/branding/teafair-logo.svg` (preferred) or a transparent PNG of 1024 px
+or more, cut from the same artwork. Until it exists, the gallery shows the
+emblem only on the `dark` theme.
 
 ## 5. State: feature stores and the three tiers
 
@@ -749,7 +769,7 @@ before it closes.
 
 | Slice | Builds | Playwright proves (phone and tablet) |
 |---|---|---|
-| **B1** Scaffold | the pnpm app package and Expo Router; `database.types.ts`; `tokens/` and the NativeWind preset; `secure.ts`, `mmkv.ts`, the reset registry; `rpc()`, `gateway()`, `errors.ts`; `decodeClaims`; `log`/`scrub`; `shared/ui/` primitives, skeletons (`pulse`, `shimmer`) and `BentoGrid` on a gallery route, in all three themes; the guards (`tokens.guard`, `contrast.test`, `rpc-map`, the import rules) | the primitives gallery renders at both sizes with no horizontal scroll and visible safe areas; screenshots match baselines in each theme; the gallery's colours are the §4.2 primitives through the semantic tokens (read from computed styles); a Bento tile in error leaves its neighbours rendered; a list skeleton has 4–6 rows and the same height as the loaded list |
+| **B1** Scaffold | the pnpm app package and Expo Router; `database.types.ts`; `tokens/` and the NativeWind preset; `secure.ts`, `mmkv.ts`, the reset registry; `rpc()`, `gateway()`, `errors.ts`; `decodeClaims`; `log`/`scrub`; `shared/ui/` primitives, skeletons (`pulse`, `shimmer`), `BentoGrid` and `Emblem` on a gallery route, in all three themes; the guards (`tokens.guard`, `contrast.test`, `rpc-map`, the import rules) | the primitives gallery renders at both sizes with no horizontal scroll and visible safe areas; screenshots match baselines in each theme; the gallery's colours are the §4.2 primitives through the semantic tokens (read from computed styles); a Bento tile in error leaves its neighbours rendered; a list skeleton has 4–6 rows and the same height as the loaded list |
 | **B2** Auth and onboarding | email OTP screens, invitation list (accept/decline), PIN set and change | an invited user signs in with a code, accepts, and lands on the PIN gate; a weak PIN (`7777`, `1234`, `6543`) is refused before sending; a wrong current PIN shows the attempts left; a decline leaves "No access yet"; an unknown email sees the access message |
 | **B3** Tenancy and shells | tenant switcher, every shell of §10, the header | a user with two memberships switches and the previous tenant's lists are gone; each role lands on its shell; tablet shows two columns where the shell has a list and a detail; the switch is refused while the queue holds entries |
 | **B4** Queue, A5 and realtime | the queue and Needs attention; the fulfilment wrappers (`order-dispatch`, `order-delivery-pin`, `order-delivery-photo`, `order-delivery-confirm`); the Monvelo funding wrapper (`monvelo-fund`, `MONVELO_CHECKOUT_LOST`); the realtime client | offline (context set offline) a chat post queues, then lands once with the same key when back online; a `P0001` lands in Needs attention with the database copy; a dependent entry waits for its parent; a wrong delivery code shows 422 copy and the next entry uses a new key; a chat message from a second user appears live; after a tenant switch no event from the old tenant arrives |

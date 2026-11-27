@@ -1,6 +1,7 @@
 # Teafair Official Design Specification
 
-Brand and interface tokens for Teafair, from the Teafair emblem. This file is
+Brand and interface tokens for Teafair, from the Teafair emblem
+(`assets/branding/teafair-logo.png`, §0). This file is
 the single source of the values. `docs/spec-b-client.md` §4 is the contract
 that uses them (layouts, components, skeletons), and
 `src/shared/tokens/` (Spec B) is the only code that holds them.
@@ -16,6 +17,59 @@ The app is styled with **NativeWind** in two layers:
 `slate-900`, …), and no `teafair-*` primitive class outside
 `src/shared/tokens/` and the emblem component. `tokens.guard.test.ts` and
 ESLint enforce it.
+
+## 0. The emblem
+
+**Canonical asset:** `assets/branding/teafair-logo.png` (381 × 381 px, 24-bit
+RGB). Every use of the logo (the app's emblem component, the splash, the app
+icon, TeafairWeb) derives from this file. No one redraws it in code, and
+nothing recolours it.
+
+**Its marks:**
+- a scalloped outer seal in green;
+- a thin green inner ring;
+- a white field;
+- a single leaf rising from a black `TF` monogram whose `T` sweeps into
+  the leaf's stem.
+
+**Its colours**, sampled from the file. They are artwork colours, not UI
+tokens:
+
+| Part | Colour | Note |
+|---|---|---|
+| outer seal | `#52801D` | 4.70:1 on white |
+| leaf and inner ring | `#70B123` (inner ring about `#74A83A`) | 2.62:1 on white: never UI text |
+| `TF` monogram | `#000000` | |
+| field | `#FFFFFF` | |
+| outside the seal | `#000000`, opaque | see "Background" below |
+
+The UI primitive `teafair-leaf` (`#629E28`, §1) sits between the logo's
+leaf and its seal. It is the emblem's green, darkened so it can carry ink
+text (5.48:1) and pass as a 3:1 mark. The logo's own greens stay in the
+artwork.
+
+**Usage:**
+- **Shape:** always the whole seal, square, never stretched, cropped,
+  rotated or outlined.
+- **Clear space:** at least one eighth of the seal's diameter on every side.
+- **Size:** at least 32 dp; 24 dp only in the tab bar.
+- **Background:** the seal sits on white, canvas, botanical or ink, never
+  on leaf, amber or a photograph.
+- **Where it appears:** only in brand moments (§4: sign-in, splash, empty
+  states, the app icon) and the shell header. Never inside a list, a form or
+  a workflow.
+
+**Background (open item).** The file has no transparency: the corners
+outside the scalloped seal are opaque black, and the scallop gaps are
+black. Placed on white or canvas it shows a black square, and a circular
+mask would still leave black between the scallops. Before the emblem is
+used in the app (Spec B slice B1), a transparent master is added beside it,
+ideally an SVG (`assets/branding/teafair-logo.svg`) with a transparent PNG
+export (`teafair-logo-transparent.png`, 1024 px or more). The PNG here
+stays the reference for the marks and colours. Until then, the file may be
+shown only on the `dark` theme's ink background, where the black corners
+are close to invisible (ink is `#0F172A`, not pure black, so they are still
+faintly visible).
 
 ## 1. Primitives: the emblem palette and the status colours
 
