@@ -1,10 +1,11 @@
 # Spec B — The Client (Teafair RTM app shell)
 
 **Status:** draft under review, not approved. `src/` stays frozen; slices
-B1–B4 (§11) wait on approval, and Monvelo must be finished first.
+B1–B4 (§11) wait on approval. The Monvelo rulings of 2026-11-27 are built
+(A6 §23, local) and §6 follows them.
 **Authority:** Spec A
 (`docs/superpowers/specs/2026-10-05-multi-tenant-rtm-foundation-design.md`)
-and its addenda A1–A8 still govern the backend. Where this spec and Spec A
+and its addenda A1–A8 (A6 through §23) still govern the backend. Where this spec and Spec A
 disagree about the client, this spec wins. It replaces Spec A §3.4 (gateway
 inventory), §7.1 (`src/store/`) and the flat `src/` of §12, and amends §2
 item 11 ("Android only") to iOS and Android.
@@ -205,13 +206,29 @@ imports every barrel and asserts that each store with state has registered.
 
 **Surfaces:** App = Teafair RTM; Web = TeafairWeb; GW = only through the
 named gateway (never call the RPC directly); Sys = cron, webhook or service
-role, never a client.
+role, never a client. The map follows the migrations to `20261127130300`
+(A6 §23, 2026-11-27).
+
+**Scope words used below** (the database checks each one live; the client
+only uses them to decide what to show):
+
+- **ZSA scope:** every area of the zone in the ZSA's own `tenant_users.zone_id`.
+- **ASA scope:** the ASA's own `tenant_users.area_id`.
+- **TM scope:** the TM's own territory.
+- **Agent member:** an ACTIVE row in `monvelo_agent_members`. It needs no
+  tenant.
+- **Platform roles:** `MONVELO_OPERATOR`, `MONVELO_FINANCE` and
+  `PLATFORM_SUPER_ADMIN`, read live from `profiles.platform_role`.
+- **Decision:** `p_decision_id`, a citable contact-report decision of the
+  named subject (A6 §16.4; pgTAP 049 fails any guarded writer without one).
+- **No Monvelo RPC accepts ASM** (A6 §23.1). The ASM reads no Monvelo
+  financing, and the client shows ASM no Monvelo screen.
 
 ### 6.1 User gateways (all 15), the app's or the admin portal's
 
 | Gateway | RPCs behind it | Feature | Surface | Notes |
 |---|---|---|---|---|
-| `otp-issue` | `issue_otp` | field | App | shop-owner OTP (pickup, POS settlement) |
+| `otp-issue` | `issue_otp` | field | App | shop-owner OTP (pickup, POS settlement), to the owner's verified phone |
 | `otp-verify` | `verify_otp` | field | App | |
 | `order-dispatch` | `mark_order_dispatched`, `mark_delivery_pin_sent` | fulfilment | App | LM or ZSM |
 | `order-delivery-pin` | `resend_delivery_pin`, `mark_delivery_pin_sent` | fulfilment | App | |
@@ -219,13 +236,29 @@ role, never a client.
 | `order-delivery-confirm` | `mark_order_delivered` | fulfilment | App | fresh key per code entry; 422 `WRONG_PIN`/`LOCKED` |
 | `order-dispute-evidence` | `get_order_dispute_evidence` | support | Web | ZSM; audited view |
 | `support-staff-attachment` | `request_staff_ticket_attachment` | support | App, Web | slot, upload, then `reply_ticket` |
-| `contact-report-upload` | `request_contact_report_hard_copy` | (admin) | Web | |
-| `monvelo-agent-register` | `monvelo_agent_register_preflight`, `register_monvelo_agent`, `request_monvelo_settlement_change` | monvelo | App | Paystack account check |
-| `monvelo-shop-consent` | `start_monvelo_consent`, `enrol_monvelo_shop`, `start_monvelo_policy_consent`, `submit_monvelo_shop_policy` | monvelo | App | owner's WhatsApp code |
-| `monvelo-fund` | `start_monvelo_funding`, `record_monvelo_checkout` | monvelo | App | 409 `MONVELO_CHECKOUT_LOST` → new key, start again |
-| `monvelo-confirm-delivery` | `start_monvelo_delivery`, `confirm_monvelo_delivery` | monvelo | App | owner's code; fresh key per entry |
-| `monvelo-confirm-repayment` | `record_monvelo_repayment`, `confirm_monvelo_repayment` | monvelo | App | owner's code; fresh key per entry |
-| `monvelo-cover-upload` | `can_upload_monvelo_cover` | monvelo | App, Web | policy and claim evidence uploads |
+| `contact-report-upload` | `request_contact_report_hard_copy` | (admin) | Web | CSM |
+| `monvelo-agent-register` | `monvelo_agent_register_preflight`, `register_monvelo_agent`, `request_monvelo_settlement_change` | monvelo | App | ZSA or ASA; Paystack account check. The body may carry `partner_kind` (`LIQUIDITY_PARTNER`, the default, or `RETAIL_INDEPENDENT_PARTNER`); the reply carries the platform `partner_code` |
+| `monvelo-shop-consent` | `start_monvelo_consent`, `enrol_monvelo_shop`, `start_monvelo_policy_consent`, `submit_monvelo_shop_policy` | monvelo | App | ZSA (scope) or ASA (scope); **the owner's code by email** |
+| `monvelo-fund` | `start_monvelo_funding`, `record_monvelo_checkout` | monvelo | App | the claimant's agent member; 409 `MONVELO_CHECKOUT_LOST` → new key, start again |
+| `monvelo-confirm-delivery` | `start_monvelo_delivery`, `confirm_monvelo_delivery` | monvelo | App | a delivery-path holder of the order (R20); **the owner's code by email**; fresh key per entry |
+| `monvelo-confirm-repayment` | `record_monvelo_repayment`, `confirm_monvelo_repayment` | monvelo | App | the funder's agent member who recorded it (R32); **the owner's code by email**; fresh key per entry |
+| `monvelo-cover-upload` | `can_upload_monvelo_cover` | monvelo | App, Web | ZSA/ASA, LM, CSM; policy and claim evidence uploads |
+
+**The owner's Monvelo codes go by email (A6 §23.6).** The four codes go to
+the owner's verified sign-in email (`auth.users.email`, confirmed): consent,
+policy consent, delivery and repayment. The gateway sends them through
+Resend (`RESEND_API_KEY` required; `MONVELO_EMAIL_FROM` optional, else
+`AUTH_EMAIL_FROM`, else the sandbox sender). They never go by WhatsApp or SMS, and never to the shop's contact details.
+
+- **The reply** carries `challenge_id`, `expires_at` and a masked
+  `destination` (`o***@e***.com`), never the code. The app shows "Ask the
+  owner to read the code from their email".
+- **A failed send** is 502 `MESSAGE_DELIVERY_FAILED`: start again with a new
+  key.
+- **A replayed start** sends nothing.
+- **An owner without a verified email** is refused before any code: P0001
+  "the shop owner has no verified email".
+- **Unchanged:** `otp-issue` and the A5 web delivery PIN.
 
 `_shared/auth/pin.ts` (`requirePin`) exists but no RPC calls
 `consume_pin_pass()` yet, so no gateway is PIN-gated today. The first one
@@ -244,23 +277,85 @@ System functions (never a client): `auth-verify-claims`, `send-auth-email`,
 
 ### 6.2 RPCs called directly (`supabase.rpc`, the caller's JWT)
 
-| Feature | RPCs | Surface |
-|---|---|---|
-| auth / tenant (B2–B3) | `list_my_invitations`, `accept_tenant_invitation`, `decline_tenant_invitation`, `set_active_tenant`, `get_my_pin_status`, `set_tenant_pin`, `change_tenant_pin`, `verify_pin` (guard, no key) | App, Web |
-| notifications | `register_device` | App |
-| platform admin | `provision_tenant`, `appoint_client_service_manager`, `appoint_zone_manager`, `create_zone`, `set_zone_zsm`, `set_state_operational` | Web |
-| tenant structure | `invite_tenant_user`, `upsert_zone`, `upsert_territory`, `upsert_area`, `set_territory_coverage`, `set_territory_web_warehouse`, `set_web_defaults`, `set_brand_approval_policy`, `set_tenant_operational_state` | Web |
-| contact reports | `file_contact_report`, `review_contact_report`, `attach_contact_report_hard_copy` | Web |
-| catalogue | `upsert_catalogue_product`, `upsert_tenant_skus` | Web |
-| stock | `post_opening_stock`, `record_stock_receipt`, `record_stock_transfer`, `record_stock_adjustment`, `record_order_return` | Web (LM may also use App for returns, Spec C) |
-| web referral (POS) | `upsert_web_referral_code`, `set_web_pos_venue`, `pos_order_lookup` | App (POS agent, ZSM) |
-| field (Spec C) | `place_trade_order` | App |
-| support (A3/A5) | `claim_ticket`, `reply_ticket`, `update_ticket_status`, `set_ticket_priority`, `assign_ticket`, `redact_ticket_customer_data` | App, Web |
-| tenant tickets (A7) | `open_tenant_ticket`, `reply_tenant_ticket`, `claim_tenant_ticket`, `release_tenant_ticket`, `assign_tenant_ticket`, `update_tenant_ticket_status` | Web |
-| chat (A4) | `list_my_chat_channels`, `get_or_create_direct_channel`, `post_chat_message`, `mark_chat_read`, `hide_chat_message` | App |
-| monvelo, field agents and agents | `upsert_area` (ZSA/ASA scope), `nominate_monvelo_agent`, `close_monvelo_nomination`, `withdraw_monvelo_shop_consent`, `withdraw_monvelo_shop_policy`, `set_monvelo_supply_day`, `pledge_monvelo_funds`, `monvelo_supply_days_near`, `monvelo_agents_near`, `monvelo_today`, `request_monvelo_financing`, `approve_monvelo_financing`, `cancel_monvelo_financing`, `claim_monvelo_financing`, `monvelo_open_offers`, `monvelo_order_financing_status`, `get_monvelo_offer_cover`, `get_monvelo_agent_exposure`, `get_lender_reconciliation_summary`, `list_monvelo_claim_holds`, `get_monvelo_claim_hold`, `decide_monvelo_claim_hold`, `dispatch_monvelo_financing`, `reject_monvelo_repayment`, `report_monvelo_loss`, `add_monvelo_member`, `accept_monvelo_agent_terms` | App |
-| monvelo, tenant side | `propose_monvelo_brand_terms`, `approve_monvelo_brand_terms`, `withdraw_monvelo_brand_terms`, `set_monvelo_tenant_settings`, `record_monvelo_fee_terms`, `accept_monvelo_tenant_terms` | Web |
-| monvelo, platform staff | `approve_monvelo_agent`, `suspend_monvelo_agent`, `set_monvelo_agent_caps`, `approve_monvelo_settlement_change`, `review_monvelo_flag`, `review_monvelo_shop_policy`, `register_monvelo_insurer`, `set_monvelo_insurer_status`, `propose_monvelo_insurance_product`, `approve_monvelo_insurance_product`, `withdraw_monvelo_insurance_product`, `file_monvelo_insurance_claim`, `set_monvelo_claim_status`, `record_monvelo_claim_settlement`, `close_monvelo_insurance_claim`, `record_monvelo_declaration_outcome`, `record_monvelo_premium_paid`, `record_monvelo_topup_paid` | Web |
+| Feature | RPCs | Who (checked live) | Surface |
+|---|---|---|---|
+| auth / tenant (B2–B3) | `list_my_invitations`, `accept_tenant_invitation`, `decline_tenant_invitation`, `set_active_tenant`, `get_my_pin_status`, `set_tenant_pin`, `change_tenant_pin`, `verify_pin` (guard, no key) | the signed-in person | App, Web |
+| notifications | `register_device` | the signed-in person | App |
+| platform admin | `provision_tenant`, `appoint_client_service_manager`, `appoint_zone_manager`, `create_zone`, `set_zone_zsm`, `set_state_operational` | `PLATFORM_SUPER_ADMIN` | Web |
+| tenant structure | `invite_tenant_user`, `upsert_zone`, `upsert_territory`, `upsert_area`, `set_territory_coverage`, `set_territory_web_warehouse`, `set_web_defaults`, `set_brand_approval_policy`, `set_tenant_operational_state` | ZSM in reach (§18.3); `upsert_area` also the TM of its territory; `set_tenant_operational_state` cites a DISTRIBUTION decision | Web |
+| contact reports | `file_contact_report`, `review_contact_report`, `attach_contact_report_hard_copy` | CSM files and attaches; a ZSM reviews (an operator while the tenant has no ZSM) | Web |
+| catalogue | `upsert_catalogue_product`, `upsert_tenant_skus` | CSM + CATALOGUE decision | Web |
+| stock | `post_opening_stock`, `record_stock_receipt`, `record_stock_transfer`, `record_stock_adjustment`, `record_order_return` | CSM or LM + STOCK decision (`record_order_return` cites the order) | Web (LM may also use App for returns, Spec C) |
+| web referral (POS) | `upsert_web_referral_code`, `set_web_pos_venue`, `pos_order_lookup` | POS agent, ZSM | App |
+| field (Spec C) | `place_trade_order` | ZSA, ASA or TM, on their beat | App |
+| support (A3/A5) | `claim_ticket`, `reply_ticket`, `update_ticket_status`, `set_ticket_priority`, `assign_ticket`, `redact_ticket_customer_data` | the ticket's handlers (A3) | App, Web |
+| tenant tickets (A7) | `open_tenant_ticket`, `reply_tenant_ticket`, `claim_tenant_ticket`, `release_tenant_ticket`, `assign_tenant_ticket`, `update_tenant_ticket_status` | TENANT_ADMIN, CSM, `MONVELO_OPERATOR` | Web |
+| chat (A4) | `list_my_chat_channels`, `get_or_create_direct_channel`, `post_chat_message`, `mark_chat_read`, `hide_chat_message` | staff; ZSM moderates | App |
+| monvelo, field activation (ZSA scope, ASA scope) | `get_monvelo_field_dashboard`, `monvelo_field_partners_near`, `pair_monvelo_shop_agent`, `unpair_monvelo_shop_agent`, `nominate_monvelo_agent`, `close_monvelo_nomination`, `request_monvelo_financing`, `cancel_monvelo_financing`, `list_monvelo_claim_holds`, `get_monvelo_claim_hold`, `decide_monvelo_claim_hold`, `get_lender_reconciliation_summary`, `report_monvelo_loss` | ZSA, ASA (see the notes below); `report_monvelo_loss` also the LM or CSM for GIT; never ASM | App |
+| monvelo, TM (TM scope) | `get_monvelo_tm_oversight`, `set_monvelo_supply_day`, `approve_monvelo_financing`, `request_monvelo_financing`, `cancel_monvelo_financing` | the territory's TM | App |
+| monvelo, agent members | `pledge_monvelo_funds`, `monvelo_supply_days_near`, `monvelo_open_offers`, `get_monvelo_offer_cover`, `claim_monvelo_financing`, `get_monvelo_agent_exposure`, `get_lender_reconciliation_summary`, `accept_monvelo_agent_terms` | ACTIVE members of the agent (liquidity partners for pledges, so for everything that follows) | App |
+| monvelo, shop owner | `nominate_monvelo_agent`, `withdraw_monvelo_shop_consent`, `reject_monvelo_repayment` | the shop's owner (RETAIL_SHOP_OWNER) | App |
+| monvelo, fulfilment | `dispatch_monvelo_financing` | whoever passes `fulfilment_can_dispatch` (LM and kin) | App |
+| monvelo, shared reads | `monvelo_today`, `monvelo_request_supply_date`, `monvelo_order_cutoff_at`; `monvelo_order_financing_status` (a tenant member; an owner sees only their shops' orders) | any signed-in person | App, Web |
+| monvelo, tenant side | `propose_monvelo_brand_terms`, `approve_monvelo_brand_terms`, `withdraw_monvelo_brand_terms`, `set_monvelo_tenant_settings`, `accept_monvelo_tenant_terms` | ZSM proposes; CSM (ZSM while no CSM) approves, withdraws and sets, + BRAND_TERMS or MONVELO_SETTINGS decision | Web |
+| monvelo, platform staff | `approve_monvelo_agent`, `suspend_monvelo_agent`, `set_monvelo_agent_caps`, `add_monvelo_member`, `approve_monvelo_settlement_change`, `review_monvelo_flag`, `review_monvelo_shop_policy`, `withdraw_monvelo_shop_policy`, `monvelo_agents_near`, `record_monvelo_fee_terms` (+ FEES decision), `register_monvelo_insurer`, `set_monvelo_insurer_status`, `propose_monvelo_insurance_product`, `approve_monvelo_insurance_product`, `withdraw_monvelo_insurance_product`, `file_monvelo_insurance_claim`, `set_monvelo_claim_status`, `record_monvelo_claim_settlement`, `close_monvelo_insurance_claim`, `record_monvelo_declaration_outcome`, `report_monvelo_loss` | `MONVELO_OPERATOR`; `record_monvelo_premium_paid` and `record_monvelo_topup_paid` are `MONVELO_FINANCE` | Web |
+
+**What §23 adds for the field (A6 §23.1, §23.4):**
+
+- **The dashboard.** `get_monvelo_field_dashboard()` is a read, so it takes
+  no key. It covers the caller's scope in the active tenant: enrolled, paired
+  and unpaired shops; open nominations; the pipeline by status; pledged funds
+  through the next supply date with its cutoff; holds awaiting the caller;
+  their own recruits with code, kind and status; and their pairing activity.
+- **Partners.** Under RLS a ZSA or ASA now reads only the partners in their
+  scope (paired with a shop enrolled there, or pledged to it) and their own
+  recruits, not every agent on the platform. They read every financing in
+  their scope, not only those they raised.
+- **Pairing.** `monvelo_field_partners_near(shop, radius_m)` lists the ACTIVE
+  liquidity partners near a shop in scope (default 1,000 m, at most
+  5,000 m). `pair_monvelo_shop_agent(key, shop, agent)` refuses:
+  - a shop outside the caller's scope (42501);
+  - a partner the caller belongs to (42501);
+  - a retail independent partner (42501);
+  - a shop already paired (P0001: unpair it first).
+
+  `unpair_monvelo_shop_agent(key, shop, reason)` needs a reason of 10 to 500
+  characters and opens the shop's live offers to every partner at once. A
+  RECRUITED nomination also pairs the shop.
+- **TM oversight.** `get_monvelo_tm_oversight(p_days 1..366)` is the TM's
+  read over the territory's ASAs and the zone's ZSAs. Per field agent it
+  counts shops enrolled, partners recruited, pairings made and undone, holds
+  allowed and declined, and financings raised. It names no partner, and the
+  TM reads no pairing row.
+- **Partner kinds (A6 §23.2).** Every agent has an immutable `partner_code`
+  (`MP-` plus 8 base32 characters, platform-wide, not a `web_referral_codes`
+  row) and a `partner_kind`. Only a `LIQUIDITY_PARTNER` pledges, claims,
+  funds and is paired. A `RETAIL_INDEPENDENT_PARTNER` has no action yet
+  beyond registration and its code. The client shows it, but offers it no
+  lending screen.
+
+**The financing flow the client follows (A6 §23.3, §23.5):**
+
+1. **Raise before the cutoff.** A request raised on Lagos day D is for supply
+   date D + 1 (`monvelo_request_supply_date()`), and only before 15:00
+   Africa/Lagos on D (`monvelo_order_cutoff_at(supply_date)`). After that:
+   P0001 "today's Monvelo order cutoff (15:00 Lagos) has passed; raise the
+   request tomorrow before the cutoff". The cutoff and the one-day lead are
+   platform-wide. The supply date must be a supply day for the area.
+2. **The owner must have a verified email.** Without one the request is
+   refused (P0001 "the shop owner has no verified email").
+3. **The TM approves above the limit, before the same cutoff.** After it:
+   P0001 "the Monvelo order cutoff for this supply date has passed". A
+   request left AWAITING_APPROVAL stays until the end-of-supply-day sweep
+   expires it. The app shows it as waiting, not failed.
+4. **The paired partner gets 10 minutes.** If it has pledged room for the
+   supply date, the offer is exclusive to it (`preferred_window_ends_at`).
+   After that, any liquidity partner within **200 m** of the shop may claim.
+   The paired partner is exempt from the distance.
+5. **Claim, fund, deliver, repay** run against the supply date's pledges
+   until that day ends. Funding is settled by the Paystack webhook with the
+   payer binding; the client never records a receipt. The financed order's
+   stock is held through its supply date.
 
 **Gateway-only, never called directly**, even though `authenticated` holds
 EXECUTE. The rule is that an RPC behind a gateway goes through the gateway.
@@ -277,9 +372,11 @@ closed:
 `confirm_monvelo_delivery`, `record_monvelo_repayment`,
 `confirm_monvelo_repayment`, `can_upload_monvelo_cover`.
 
-**RLS helpers, not features:** the `my_*` functions, `is_*`, `jwt_tenant_id`,
-`tenant_role`, `sees_shared_network` and the `state_*` and `tenant_state_*`
-checks. The database uses them in policies. The client never calls them.
+**RLS helpers, not features:** the `my_*` functions (including
+`my_monvelo_field_area_ids` and `my_monvelo_field_agent_ids`), `is_*`,
+`jwt_tenant_id`, `tenant_role`, `sees_shared_network` and the `state_*` and
+`tenant_state_*` checks. The database uses them in policies. The client never
+calls them.
 
 A unit test in B1 (`rpc-map.test.ts`) reads the generated
 `database.types.ts` and fails if a function exists that this section does not
@@ -395,10 +492,10 @@ type QueuedMutation = {
 
 | Shell | Roles | Home |
 |---|---|---|
-| Field manager | `ZSM`, `ASM`, `TM`, `DSM` | team, territories, approvals, chat |
-| Field agent | `DSA`, `ZSA`, `ASA` | today's route, shops, orders; ZSA/ASA also Monvelo holds and nominations |
+| Field manager | `ZSM`, `ASM`, `TM`, `DSM` | team, territories, approvals, chat; the TM also Monvelo approvals, supply days and the oversight read (§6.2); ASM has no Monvelo screen |
+| Field agent | `DSA`, `ZSA`, `ASA` | today's route, shops, orders; ZSA/ASA also the Monvelo field dashboard, pairing, nominations, requests and holds |
 | Logistics | `LOGISTICS_MANAGER` | dispatch queue, deliveries |
-| Shop | `RETAIL_SHOP_OWNER` | my shops, pickups to confirm, Monvelo consent |
+| Shop | `RETAIL_SHOP_OWNER` | my shops, pickups to confirm, Monvelo consent (codes arrive by email) |
 | POS | `POS_AGENT` | referral codes, order lookup |
 | Monvelo agent | agent members (no tenant needed) | offers, pledges, fundings, repayments, exposure meter |
 | Read-only | `CLIENT_SERVICE_MANAGER`, `TENANT_ADMIN` | a summary and a link to TeafairWeb, where their work is |
