@@ -33,7 +33,8 @@ the authority; this file is the working summary.
 | Monvelo deferred minors: live supply-day end, zone-scoped ZSM nomination reads | done (local) |
 | A7. Tenant support tickets and ticket emails (outbox, `email-outbox-send`) | done (local) |
 | A8. Monvelo cover (GIT, stock cover, loss claims, declarations, insurer webhook, onboarding terms) | done (merged into local main) |
-| 4. Client offline queue | needs Spec B |
+| Admin provisioning and batch loads (`provision_tenant`, `upsert_tenant_skus`, `post_opening_stock`) | done (local) |
+| 4. Client offline queue | Spec B approved (`docs/spec-b-client.md`); slice B4 |
 
 Linked to remote project `vwmjyfjdwrohfizljxrq`. Per the 2026-10-15 push
 (GitHub `main` at `42dd15b`), the remote has the 29 migrations up to
@@ -678,6 +679,37 @@ All six are `authenticated`; none takes a tenant id.
   internal), bcrypt cost 10 (what `verify_pin` reads). A PIN never enters the
   idempotency request, a reply, an error or an audit row. Each membership has
   its own PIN. A forgotten PIN has no reset path yet.
+
+### Admin provisioning and batch loads (2026-11-27)
+
+Migration `20261127120000_admin_provisioning_batches`, pgTAP 084, local only.
+These are the TeafairWeb admin contracts in `docs/spec-b-client.md` §2. All
+three are `authenticated`, none takes a tenant id, and each holds the 049
+citation guard.
+
+- `provision_tenant(key, name, preferred_code default null)`: for a
+  PLATFORM_SUPER_ADMIN. The code is normalised to the tenants CHECK
+  `^[A-Z0-9_]{2,16}$`: upper case, every other run of characters one `_`, at
+  most 13 characters. A collision appends `_02` … `_99`, under an advisory
+  lock. It creates the default `tenant_settings`; the insert triggers add the
+  chat channel and the FOOD and COSMETICS categories. Audited on the new
+  tenant.
+- `upsert_tenant_skus(key, decision_id, items)`: the CSM, citing a CATALOGUE
+  decision; the batch form of `upsert_catalogue_product`. It takes 1 to 500
+  items, each `sku_code` `^[A-Z0-9_-]{3,40}$` and unique in the batch, with
+  positive whole pack factors. The whole batch is validated before the first
+  write, so a refusal writes nothing. An unchanged item is `skipped` and gets
+  no audit row. Replies `{created, updated, skipped}`.
+- `post_opening_stock(key, decision_id, warehouse_id, items, reference default null)`:
+  the CSM or the LM, citing a STOCK decision. It works only on a warehouse
+  with no movement yet, and later stock is `record_stock_receipt`. Each line
+  is a RECEIPT movement plus a batch increment, never an overwrite.
+  `reason` is `opening stock: <reference>`. The reference is a GRN-style
+  token (`^[A-Za-z0-9][A-Za-z0-9 _./-]{0,79}$`), so it cannot carry an email
+  or a `+` phone number.
+- Deviation from the request that prompted it: the request gave the
+  catalogue and stock loads to ZSM/ASM without a decision. A6 §16.4 and 049
+  keep them with the CSM (and the LM for stock), always citing a decision.
 
 ### Domain separation (A6 §15)
 
