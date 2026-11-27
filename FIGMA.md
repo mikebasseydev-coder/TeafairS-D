@@ -20,10 +20,15 @@ ESLint enforce it.
 
 ## 0. The emblem
 
-**Canonical asset:** `assets/branding/teafair-logo.png` (381 × 381 px, 24-bit
-RGB). Every use of the logo (the app's emblem component, the splash, the app
-icon, TeafairWeb) derives from this file. No one redraws it in code, and
-nothing recolours it.
+**Canonical asset:** `assets/branding/teafair-logo.png` (381 × 381 px,
+32-bit RGBA, transparent outside the seal). Every use of the logo (the app's
+emblem component, the splash, the app icon, TeafairWeb) derives from this
+file. No one redraws it in code, and nothing recolours it.
+
+**Vector draft:** `assets/branding/teafair-logo.svg` (382 × 383, `viewBox`
+set, transparent outside the seal). It is a VTracer auto-trace, recoloured
+to the emblem colours below. It is not the master yet: see "The two files"
+at the end of this section.
 
 **Its marks:**
 - a scalloped outer seal in green;
@@ -32,16 +37,16 @@ nothing recolours it.
 - a single leaf rising from a black `TF` monogram whose `T` sweeps into
   the leaf's stem.
 
-**Its colours**, sampled from the file. They are artwork colours, not UI
-tokens:
+**Its colours.** They are artwork colours, not UI tokens:
 
-| Part | Colour | Note |
-|---|---|---|
-| outer seal | `#52801D` | 4.70:1 on white |
-| leaf and inner ring | `#70B123` (inner ring about `#74A83A`) | 2.62:1 on white: never UI text |
-| `TF` monogram | `#000000` | |
-| field | `#FFFFFF` | |
-| outside the seal | `#000000`, opaque | see "Background" below |
+| Part | PNG (sampled) | SVG (set) | Note |
+|---|---|---|---|
+| outer scalloped seal | `#52801D` | `#52801D` | 4.70:1 on white |
+| inner ring | about `#74A83A`, 3 px at radius 156 | `#70B123`, a 3 px circle at radius 156 | |
+| leaf | `#70B123` | `#70B123` | 2.62:1 on white: never UI text |
+| `TF` monogram | `#000000` | `#0C0C0C` | |
+| field | `#FFFFFF` | `#FFFFFF` | |
+| outside the seal | transparent | transparent | the scallop gaps too |
 
 The UI primitive `teafair-leaf` (`#629E28`, §1) sits between the logo's
 leaf and its seal. It is the emblem's green, darkened so it can carry ink
@@ -59,17 +64,42 @@ artwork.
   states, the app icon) and the shell header. Never inside a list, a form or
   a workflow.
 
-**Background (open item).** The file has no transparency: the corners
-outside the scalloped seal are opaque black, and the scallop gaps are
-black. Placed on white or canvas it shows a black square, and a circular
-mask would still leave black between the scallops. Before the emblem is
-used in the app (Spec B slice B1), a transparent master is added beside it,
-ideally an SVG (`assets/branding/teafair-logo.svg`) with a transparent PNG
-export (`teafair-logo-transparent.png`, 1024 px or more). The PNG here
-stays the reference for the marks and colours. Until then, the file may be
-shown only on the `dark` theme's ink background, where the black corners
-are close to invisible (ink is `#0F172A`, not pure black, so they are still
-faintly visible).
+**The two files (2026-11-27).**
+
+- **The PNG is transparent now.** The opaque black corners and scallop gaps
+  are gone, so the emblem sits on white, canvas, botanical or ink. Two
+  limits remain:
+  - **A dark fringe:** a few edge pixels keep the old black background,
+    most visibly at the top centre of the seal (about 100 px). They show as
+    a faint dark fleck on white and canvas. A clean re-export removes them.
+  - **Its size:** at 381 px it is sharp up to about 125 dp at 3× density.
+    That covers every in-app size, but not the splash or the 1024 px app
+    icon.
+- **The SVG has the right colours but not yet the right drawing.** These
+  changes were made:
+  - the seal went from `#211F1F` to `#52801D`;
+  - the field went from `#FDFDFD` to `#FFFFFF`;
+  - the leaf went from `#71B029` to `#70B123`;
+  - the monogram went from `#030303` to `#0C0C0C`;
+  - a grey `#E5E5E5` bevel inside the seal became white;
+  - the missing inner ring was added as one circle matching the PNG;
+  - a `viewBox` and a title were added.
+
+  The leaf and the monogram need vector cleanup. They were traced from a
+  different version of the artwork than the PNG:
+  - the leaf is larger, and its tip comes within 5 px of the inner ring;
+  - a flat green bar stands left of the `T` in place of the PNG's stem
+    swoosh;
+  - the `TF` sits lower;
+  - the traced curves are stepped, and the artboard is 382 × 383, not
+    square.
+
+  It becomes the master once those two marks are redrawn from the source
+  artwork to match the PNG on a square artboard. Its monogram colour is
+  then settled as either `#000000` or `#0C0C0C`. Recolouring alone cannot
+  fix them.
+- **Until then,** the PNG is the reference for the marks and the file the app
+  renders. The SVG is not used anywhere.
 
 ## 1. Primitives: the emblem palette and the status colours
 
