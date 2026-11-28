@@ -104,23 +104,26 @@ src/
     ├── fulfilment/           dispatch, delivery code, delivery photo (A5)
     ├── support/  chat/       staff tickets (A3/A5), staff messaging (A4)
     ├── notifications/        notifications, register_device
+    ├── pos/                  web referral codes, POS venues, till lookup (web domain, §5.2.9)
     └── monvelo/              everything A6/A8, alone
 ```
 
-Each feature has `components/ screens/ hooks/ services/ store/ index.ts`. The
-barrel `index.ts` is its only public surface.
+Each feature has `components/ screens/ hooks/ services/ store/ index.ts`, and
+may add `types.ts`. The barrel `index.ts` is its only public surface. §5.1 says
+what each folder may hold.
 
 **Dependency graph (acyclic, enforced by ESLint `import/no-restricted-paths`
 and `import/no-cycle`):**
 
 ```
-shared  ←  auth  ←  tenant  ←  shell  ←  { catalogue, stock, field, fulfilment, support, chat, notifications, monvelo }
+shared  ←  auth  ←  tenant  ←  shell  ←  { catalogue, stock, field, fulfilment, pos, support, chat, notifications, monvelo }
 ```
 
 `shared` imports no feature. A domain feature may import the barrels of
 `auth`, `tenant` and `shell`, never another domain feature. `monvelo` shares
 no store or service with anything outside `shared`, `auth` and `tenant`
-(A6 §15).
+(A6 §15). `pos` is the web domain's only feature, and it and `monvelo` never
+import each other.
 
 ## 4. Design system and security
 
@@ -471,11 +474,398 @@ imports every barrel and asserts that each store with state has registered.
 | `useOtpStore` | auth | 3 | email, code buffer, resend cooldown |
 | `useTenantStore` | tenant | 2 (user-level) | memberships from `tenant_ids` and reads, last active tenant |
 | `useInvitationStore` | tenant | memory | `list_my_invitations()` result |
-| `usePinStore` | tenant | 3 + memory | `pin_set`, `locked_until`, entry buffers |
+| `usePinStatusStore` | tenant | memory | `pin_set`, `locked_until`, `attempts_remaining` |
+| `usePinEntryStore` | tenant | 3 | the PIN entry, confirm and current-PIN buffers |
 | `useQueueStore` | shared/network | 2 | entries, drain state |
 | `useAttentionStore` | shared/network | 2 | terminal entries with their error |
 | `usePrefsStore` | shell | 2 (user level) | theme (`standard`, `daylight`, `dark`; the role default until chosen, §4.2), list density, tabs |
 | `useMonveloCheckoutStore` | monvelo | 3 | the funding checkout of the open financing |
+
+The inventory above is B1–B4. §5.1–§5.4 extend it to every feature, from an
+inspection of the 134 migrations, the 98 `public` tables, the 177 functions
+`authenticated` may execute and the 36 Edge Functions (2026-11-28). Stores
+for Spec C and D are the plan those specs build to; a change to one is made
+here first.
+
+### 5.1 Feature conventions and separation of concerns
+
+```
+src/features/<feature>/
+├── index.ts        the only public surface (screens, hooks, adapters, skeletons)
+├── types.ts        optional: Zod schemas and the types derived from them
+├── services/       rpc()/gateway() calls and queue schemas; no React, no state
+├── store/          Zustand stores; no network calls, no JSX
+├── hooks/          joins services and store; returns { status, isLoading, isRefreshing, isHydrated, items, error }
+├── components/     presentational; props only; status→tone adapters; skeletons
+└── screens/        composes hooks and components; rendered by src/app routes
+```
+
+**Separation of concerns (one job per layer, checked in review):**
+
+- `services/` never imports from `store/`, `hooks/` or `components/`.
+- `store/` never calls `rpc()` or `gateway()`. Only hooks do, then write the
+  result into the store.
+- `components/` never import a store or a service.
+- Routes in `src/app/` hand ids to screens through params. A route is where
+  two domain features meet (§5.4, gap G6).
+
+**Store rules:**
+
+- **One store, one concern:** a server read cache, a draft, or a Tier 3 secret
+  buffer. Never two of these in one store.
+- **Tier 1:** only the supabase-js session, through `secure.ts`. No store
+  holds a token.
+- **Tier 2:** `persist` over `mmkvStateStorage(openTenantStore(u, t))`, or
+  `openUserStore(u)` for state above tenants. The persist `name` is
+  `<feature>.<store>`.
+- **Tier 3:** no `persist`. Wiped on submit, on background, on tenant switch
+  and on sign-out (§5 of Spec B).
+- **Memory:** no `persist`, refetched on mount. Every financial figure lives
+  here (§5: never cached).
+- **Registration:** every store registers at module load. Tenant-scoped
+  stores use `"tenant"`; user-level stores use `"session"`.
+- **Persisted stores reset by detaching, not deleting.** On a tenant switch,
+  the reset clears memory and re-binds to the new namespace. The old tenant's
+  MMKV file stays (§5).
+
+### 5.2 The feature and store blueprint (Teafair RTM)
+
+Theme defaults are from §4.2: **daylight** for ZSA, ASA, TM,
+RETAIL_SHOP_OWNER and POS_AGENT; **standard** for ZSM, ASM, DSM, DSA,
+LOGISTICS_MANAGER, CLIENT_SERVICE_MANAGER, TENANT_ADMIN and Monvelo agent
+members. The theme follows the user's role, not the feature.
+
+#### 5.2.1 `auth`: B2 (`decodeClaims` exists from B1)
+
+- **Backed by:**
+  - migrations `20261007120000` (claims hook), `20261024170000` (hooks) and
+    `20261125120000` (email first);
+  - the `send-auth-email` hook (system, never called);
+  - supabase-js `signInWithOtp`, `verifyOtp`, `refreshSession` and `signOut`;
+  - table `profiles` (self row).
+- **Roles:** everyone.
+- **Stores:**
+
+| File | Store | State · actions · selectors | Tier · reset |
+|---|---|---|---|
+| `session-store.ts` | `useSessionStore` | `status: "booting" \| "signedOut" \| "signedIn"`, `userId`, `claims: DecodedClaims \| null` · `setSession(session)`, `clear()` · `selectRouteHint` (§9.3: tenant, invitations, agent, platform-only, none) | memory (the tokens stay in Tier 1 via supabase-js) · `session` |
+| `otp-store.ts` | `useOtpStore` | `email`, `code`, `resendAvailableAt` · `setEmail`, `setCode`, `startCooldown(60s)`, `wipe()` · `selectCanResend` | **Tier 3** · `session`, plus a wipe on background and on submit |
+
+#### 5.2.2 `tenant`: B2 (invitations, PIN) and B3 (switcher)
+
+- **Backed by:**
+  - migrations `20261125130000` (invitations and PIN), `20261007120100`
+    (`verify_pin`), `20261006120300` and `20261006120400`;
+  - RPCs `list_my_invitations`, `accept_tenant_invitation`,
+    `decline_tenant_invitation`, `set_active_tenant`, `get_my_pin_status`,
+    `set_tenant_pin`, `change_tenant_pin` and `verify_pin`;
+  - tables `tenants`, `tenant_users` (own rows, a column grant),
+    `tenant_settings`, `operational_states` and `tenant_operational_states`
+    (the "not operational here" banner).
+- **Roles:** every tenant role. The platform-only route goes to "Use
+  TeafairWeb".
+- **Stores:**
+
+| File | Store | State · actions · selectors | Tier · reset |
+|---|---|---|---|
+| `tenant-store.ts` | `useTenantStore` | `memberships: {tenantUserId, tenantId, code, name, role}[]`, `activeTenantId`, `lastActiveTenantId` (hint) · `setMemberships`, `setActive` · `selectActiveMembership`, `selectActiveRole` (feeds the theme default) | Tier 2 **user level**, only `lastActiveTenantId` persisted · `session` |
+| `invitation-store.ts` | `useInvitationStore` | `items`, `status`, `error` · `setItems`, `remove(tenantUserId)` | memory · `session` |
+| `pin-status-store.ts` | `usePinStatusStore` | `pinSet`, `lockedUntil`, `attemptsRemaining` · `setStatus` · `selectIsLocked(now)` | memory · `tenant` (each membership has its own PIN) |
+| `pin-entry-store.ts` | `usePinEntryStore` | `current`, `next`, `confirm`, `step` · `press(d)`, `back()`, `wipe()` · `selectPolicyRefusal` (no repeated digit, no run, as `pin_policy_refusal`) | **Tier 3** · `tenant` and `session`, plus a wipe on background and on submit |
+
+§5 names a single `usePinStore` (Tier 3 + memory). It is split here so
+that no store holds both a secret buffer and server state.
+
+#### 5.2.3 `shell`: B1 (prefs) and B3 (navigation)
+
+- **Backed by:** no RPC or table of its own. It reads the barrels of `auth`
+  and `tenant`.
+- **Roles:** all. The shells are §10: field manager, field agent,
+  logistics, shop, POS, Monvelo agent and read-only.
+- **Stores:**
+
+| File | Store | State | Tier · reset |
+|---|---|---|---|
+| `prefs-store.ts` (exists) | `usePrefsStore` | `theme \| null`, `density`, plus `setTheme`, `clearTheme`; `selectEffectiveTheme(role)` | B2 moves it from memory to Tier 2 **user level** · `session` (exists) |
+| `nav-store.ts` | `useNavStore` | the last tab per shell | Tier 2 tenant · `tenant` |
+
+Header data (sync status, the Needs attention count) comes from the
+`shared/network` stores, not from a shell copy.
+
+#### 5.2.4 `shared/network` (not a feature): B4
+
+`useQueueStore` (`queue-store.ts`) and `useAttentionStore`
+(`attention-store.ts`) are Tier 2 tenant stores and register under `tenant`
+(they detach and rebind). The realtime client, `realtime.ts`, registers under
+`tenant` and unsubscribes every channel. §5 and §8 are unchanged.
+
+#### 5.2.5 `catalogue`: Spec C (reads only)
+
+- **Backed by:**
+  - migrations `20261006120500`, `20261024120000`, `20261024130000/-130100`
+    and `20261127120000` (batch loads, Web);
+  - tables `central_products` (NAFDAC, packs, `wholesale_price`),
+    `tenant_allowed_categories` and `brand_approval_policies`;
+  - no app RPC: every write is Web.
+- **Roles:** ZSM, ASM, DSM, TM, DSA, ZSA, ASA, LM and POS_AGENT. TENANT_ADMIN
+  and the CSM read the summary.
+- **Stores:** `products-store.ts` (Tier 2 tenant read cache with
+  `fetchedAt`), `catalogue-filter-store.ts` (Tier 2 tenant: search, category,
+  brand). Both register under `tenant`.
+
+#### 5.2.6 `stock`: Spec C (reads; LM returns later)
+
+- **Backed by:**
+  - migrations `20261029120400`, `20261029130150` and `20261127130200`
+    (`stock_hold_order`);
+  - tables `warehouses`, `inventory_batches` (`quantity_reserved`),
+    `stock_movements` and `stock_reservations`;
+  - RPCs: none in the app yet. `record_order_return` is Web until Spec C
+    decides (§11.1 of Spec B).
+- **Roles:** LM, ZSM, TM and the CSM (read).
+- **Stores:** `balances-store.ts` (Tier 2 tenant cache; quantities are not
+  financial figures), `movements-store.ts` (memory, paginated). Both register
+  under `tenant`.
+
+#### 5.2.7 `field`: Spec C
+
+- **Backed by:**
+  - migrations `20261006120400`, `20261006120600`, `20261028120100` (areas),
+    `20261029125000/-125100` (zones are states), `20261029130110` (trade
+    orders), `20261015130000` (contacts, never in the app's cache) and
+    `20261007120200` (OTP);
+  - RPC `place_trade_order(key, shop, lines, territory?)`;
+  - gateways `otp-issue` and `otp-verify`;
+  - tables `retail_shops`, `tenant_shop_coverage`, `zones`, `territories`,
+    `areas`, `orders`, `order_items`, `stock_reservations` (the order's
+    hold), `ng_states` and `ng_lgas`;
+  - schema only, no writer yet: `routes`, `route_waypoints`,
+    `field_check_ins`, `requisitions(_items)` and
+    `retail_stock_pickups(_items)`.
+- **Roles:**
+  - `place_trade_order`: ZSA, ASA and TM;
+  - reads: ZSM, ASM, DSM and DSA;
+  - RETAIL_SHOP_OWNER: their own shops and orders.
+- **Stores:**
+
+| File | Store | Tier · reset |
+|---|---|---|
+| `shops-store.ts` | shops in scope, territory and area names | Tier 2 tenant cache · `tenant` |
+| `orders-store.ts` | order headers and lines (no contacts, no payment state) | Tier 2 tenant cache · `tenant` |
+| `trade-order-draft-store.ts` | `{shopId, lines[{skuId, packs}]}` keyed by shop; whole-pack check from `break_bulk_units` | Tier 2 tenant draft · `tenant` |
+| `shop-otp-store.ts` | the shop owner's OTP entry and `challenge` | **Tier 3** · `tenant` |
+
+#### 5.2.8 `fulfilment`: B4 (wrappers), Spec C (screens)
+
+- **Backed by:**
+  - migration `20261023120400` (A5) and `fulfilment_can_dispatch`
+    (`LOGISTICS_MANAGER`, `ZSM`, `TM`, `DSM`);
+  - gateways `order-dispatch`, `order-delivery-pin`, `order-delivery-photo`
+    and `order-delivery-confirm`;
+  - tables `order_fulfilments`, `orders`, `order_items` and `upload_slots`
+    (own rows).
+- **Roles:** LM (dispatch), ZSM, TM and DSM per the database helper. Web
+  orders only.
+- **Stores:** `dispatch-queue-store.ts` (Tier 2 tenant cache),
+  `delivery-code-store.ts` (**Tier 3**: the code, with a fresh key per entry)
+  and `photo-upload-store.ts` (memory: slot, progress, signed URL; never
+  persisted). All three register under `tenant`.
+
+#### 5.2.9 `pos` (**new feature, web domain**): Spec C
+
+- **Backed by:**
+  - migrations `20261015120200/-120300`, `20261015130200` (till lookup),
+    `20261028130200` (renames) and `20261028130600`;
+  - RPCs `upsert_web_referral_code`, `set_web_pos_venue` and
+    `pos_order_lookup`;
+  - tables `web_referral_codes`, `web_pos_venues`, `web_pos_partners` and
+    `web_commissions` (financial, never cached).
+- **Roles:** POS_AGENT and ZSM.
+- **Stores:**
+  - `referral-codes-store.ts`: Tier 2 tenant cache;
+  - `venue-draft-store.ts`: Tier 2 tenant draft;
+  - `order-lookup-store.ts`: memory, the last lookup only;
+  - commissions: memory, network only.
+
+  All four register under `tenant`.
+- **Separation:** web domain. It never imports `monvelo`, and `monvelo` never
+  imports it (A6 §15).
+
+#### 5.2.10 `support`: Spec C (B4 realtime)
+
+- **Backed by:**
+  - migrations `20261021120000`–`20261021120300` (A3) and `20261023120300`
+    and `20261023120500` (A5 photos);
+  - RPCs `claim_ticket`, `reply_ticket`, `update_ticket_status`,
+    `set_ticket_priority`, `assign_ticket` (ZSM) and
+    `redact_ticket_customer_data` (ZSM);
+  - gateway `support-staff-attachment`;
+  - tables `support_tickets` (realtime), `support_messages` (realtime) and
+    `support_ticket_contacts` (buyer contact).
+- **Roles:** ZSM and the territory's TM. The accountable or assigned person on
+  PRE_PURCHASE and SYSTEM tickets.
+- **Stores:**
+
+| File | Store | Tier · reset |
+|---|---|---|
+| `ticket-list-store.ts` | headers (no personal data) | Tier 2 tenant cache · `tenant` |
+| `ticket-thread-store.ts` | messages and **contacts of the open ticket** | **memory only**: buyer contacts never reach MMKV (§5) · `tenant` |
+| `reply-draft-store.ts` | reply text and attachment ids | memory (it may quote buyer details) · `tenant` |
+
+#### 5.2.11 `chat`: B4
+
+- **Backed by:**
+  - migrations `20261022120000`–`20261022120300` (A4);
+  - RPCs `list_my_chat_channels`, `get_or_create_direct_channel`,
+    `post_chat_message` (queueable), `mark_chat_read` (queueable) and
+    `hide_chat_message` (ZSM);
+  - tables `chat_channels` (realtime, `tenant_id=eq.`), `chat_messages`
+    (realtime, `channel_id=eq.`) and `chat_read_state`.
+- **Roles:** all tenant staff. ZSM moderates.
+- **Stores:** `channels-store.ts` (Tier 2 tenant), `messages-store.ts`
+  (Tier 2 tenant, the last N per channel) and `composer-store.ts` (Tier 2
+  tenant drafts per channel). The queue holds sends, not this store. All three
+  register under `tenant`.
+
+#### 5.2.12 `notifications`: B3 (device), Spec C (list)
+
+- **Backed by:**
+  - migrations `20261006120300` (`devices`) and `20261006120700`
+    (`notifications`);
+  - RPC `register_device`;
+  - tables `notifications` (recipient) and `devices` (owner).
+- **Roles:** all.
+- **Stores:** `inbox-store.ts` (Tier 2 tenant; ids and fixed copy only),
+  `device-store.ts` (memory: the push token, re-registered after sign-in).
+  Both register under `tenant`. **Gap G7:** nothing marks a notification
+  read.
+
+#### 5.2.13 `monvelo`: Spec C/D screens, B4 the `monvelo-fund` wrapper
+
+**One feature, sub-folders by actor**, so it is not a God folder. Internal
+imports between the sub-folders are allowed. Only `index.ts` is public.
+
+```
+monvelo/
+├── index.ts
+├── common/     services: monvelo_today, monvelo_request_supply_date, monvelo_order_cutoff_at, monvelo_order_financing_status;
+│               components: financing-tone.ts (exists), CutoffNotice; types (FinancingStatus, PartnerKind)
+├── field/      ZSA/ASA: dashboard, pairing, enrolment, nominations, requests, holds, loss, cover uploads
+├── tm/         TM: oversight, supply days, approvals
+├── agent/      agent members: registration, pledges, offers, claim, funding, delivery, repayment, exposure, terms
+├── owner/      RETAIL_SHOP_OWNER: consent, withdraw, reject repayment, nominate
+└── dispatch/   dispatch_monvelo_financing (LM and kin)
+```
+
+**Backed by:**
+
+- **Migrations:** `20261028120000`–`20261028120600`, `20261028130400`,
+  `20261029120300`, `20261029130000`–`20261029130600`, `20261031120000`–
+  `20261031121400`, `20261031121700`–`20261031122900`, `20261123120000` and
+  `20261127130000`–`20261127130300`.
+- **Tables the app reads under RLS:**
+  - `monvelo_agents` (in scope; `partner_kind`, `partner_code`),
+    `monvelo_agent_members`, `monvelo_shop_enrolments`,
+    `monvelo_agent_nominations`, `monvelo_shop_pairings` (not the TM);
+  - `monvelo_supply_days`, `monvelo_pledges`, `monvelo_financings` (the
+    tenant column grant excludes the lender), `monvelo_financing_lines`,
+    `monvelo_financing_claims` (members only);
+  - `monvelo_shop_limits(_events)`, `monvelo_repayments`,
+    `monvelo_rebate_payables(_lines)`, `monvelo_rebate_topups`;
+  - `monvelo_shop_policies`, `monvelo_financing_cover(_line_cover)`,
+    `monvelo_order_git_cover`, `monvelo_insurance_claims`;
+  - `monvelo_terms_versions`, `monvelo_terms_acceptances`,
+    `monvelo_brand_terms`, `monvelo_tenant_settings`,
+    `monvelo_platform_settings`.
+- **No reader:** `monvelo_claim_holds` (read through the hold RPCs),
+  `monvelo_consent_challenges`, `monvelo_owner_challenges`,
+  `monvelo_insurance_declarations`, `monvelo_insurer_events` and
+  `monvelo_flags` (staff).
+- **RPCs:** the eight Monvelo rows of §6.2 with the App surface.
+- **Gateways:** `monvelo-agent-register`, `monvelo-shop-consent`,
+  `monvelo-fund`, `monvelo-confirm-delivery`, `monvelo-confirm-repayment` and
+  `monvelo-cover-upload`.
+
+**Roles:** ZSA and ASA (field), TM (tm), ACTIVE `monvelo_agent_members`
+(agent, no tenant needed), RETAIL_SHOP_OWNER (owner), LM, ZSM, TM and DSM
+(dispatch). **Never ASM** (A6 §23.1). A `RETAIL_INDEPENDENT_PARTNER` sees its
+code, but no lending screen.
+
+**Stores** (all register under `tenant`; agent-member data is cross-tenant
+but is still dropped on a switch and on sign-out):
+
+| File | Store | Holds | Tier |
+|---|---|---|---|
+| `field/store/dashboard-store.ts` | `useMonveloFieldDashboardStore` | the `get_monvelo_field_dashboard` reply, per tile | memory (pledged funds are financial) |
+| `field/store/pairing-store.ts` | `useMonveloPairingStore` | partners near a shop, and the pair/unpair reason draft | memory |
+| `field/store/request-draft-store.ts` | `useMonveloRequestDraftStore` | `{orderId, shopId}` for the request; the cutoff is read live | memory (online only, raised before 15:00) |
+| `field/store/holds-store.ts` | `useMonveloHoldsStore` | the hold list and the open hold (`can_decide`) | memory (decide is online only) |
+| `field/store/enrolment-store.ts` | `useMonveloEnrolmentStore` | the consent/policy step, `challenge_id`, masked destination, `expires_at` | memory |
+| `tm/store/oversight-store.ts` | `useMonveloTmOversightStore` | the oversight read and its `p_days` | memory |
+| `tm/store/supply-days-store.ts` | `useMonveloSupplyDaysStore` | the area's weekdays | Tier 2 tenant cache (not financial) |
+| `agent/store/offers-store.ts` | `useMonveloOffersStore` | open offers, `preferred_window_ends_at`, offer cover (net yield) | memory; poll, because no realtime (G14) |
+| `agent/store/exposure-store.ts` | `useMonveloExposureStore` | `get_monvelo_agent_exposure`, the reconciliation summary | memory ("Unavailable offline") |
+| `agent/store/pledge-draft-store.ts` | `useMonveloPledgeDraftStore` | area, supply date, amount being typed | memory |
+| `agent/store/registration-store.ts` | `useMonveloRegistrationStore` | the register form (it holds a bank account number) | memory, wiped on submit |
+| `agent/store/checkout-store.ts` | `useMonveloCheckoutStore` (§5) | `authorization_url`, `access_code` | **Tier 3**, wiped on `MONVELO_CHECKOUT_LOST` |
+| `common/store/owner-code-store.ts` | `useMonveloOwnerCodeStore` | the owner's code as typed (consent, policy, delivery, repayment) and the `challenge_id` | **Tier 3**, a fresh key per entry |
+| `owner/store/owner-shops-store.ts` | `useMonveloOwnerShopsStore` | enrolment status per shop, pending repayments to confirm or reject | memory |
+
+### 5.3 Excluded from `src/features/`: TeafairWeb (its own repository; never in `src/features/`)
+
+- **Platform admin:** `provision_tenant`, `appoint_client_service_manager`,
+  `appoint_zone_manager`, `create_zone`, `set_zone_zsm` and
+  `set_state_operational`.
+- **Tenant structure:** `invite_tenant_user`, `upsert_zone`,
+  `upsert_territory`, `upsert_area`, `set_territory_coverage`,
+  `set_territory_web_warehouse`, `set_web_defaults`,
+  `set_brand_approval_policy` and `set_tenant_operational_state`.
+- **Contact reports:** `file_contact_report`, `review_contact_report`,
+  `attach_contact_report_hard_copy` and the `contact-report-upload` gateway.
+  Tables `contact_report_*` and `contact_reports`.
+- **Catalogue and stock writes:** `upsert_catalogue_product`,
+  `upsert_tenant_skus`, `post_opening_stock`, `record_stock_receipt`,
+  `record_stock_transfer`, `record_stock_adjustment` and (for now)
+  `record_order_return`.
+- **Tenant tickets (A7):** `open_tenant_ticket`, `reply_tenant_ticket`,
+  `claim_tenant_ticket`, `release_tenant_ticket`, `assign_tenant_ticket` and
+  `update_tenant_ticket_status`; tables `tenant_support_ticket(s|_messages)`.
+- **Dispute evidence:** the `order-dispute-evidence` gateway.
+- **Monvelo tenant side:** brand terms, `set_monvelo_tenant_settings` and
+  `accept_monvelo_tenant_terms`.
+- **Monvelo platform staff:** every `MONVELO_OPERATOR` and `MONVELO_FINANCE`
+  RPC of §6.2 (agents, caps, members, settlement changes, flags,
+  policies, insurers, products, claims, declarations, fees, premiums,
+  top-ups).
+- **Storefront (public gateways):** `storefront-*`, `checkout-phone-verify-*`,
+  `web-checkout`, `web-order-status` and `support-ticket-*`. Tables
+  `refund_policies`, `web_phone_verifications` and `order_contacts` (A2).
+- **Never a client:** the 10 system functions; tables `audit_logs` and
+  `notification_logs` (ZSM/TM reads, TeafairWeb), `idempotency_logs`,
+  `email_outbox`, `storage_purge_queue`, `support_ticket_secrets`,
+  `otp_challenges`, `payments` (Paystack-driven; the app reads payment state
+  only through `monvelo_order_financing_status`), `cash_audit_batches`
+  (no writer) and `user_secure_profiles` (no app screen).
+
+**Coverage check:** 36 functions = 15 user + 11 public + 10 system, all
+placed. The 177 callable functions are all in §6 (`rpc-map.test.ts`).
+All 98 tables are placed above, in a feature, in TeafairWeb, or in
+"never a client".
+
+### 5.4 Known gaps (2026-11-28)
+
+| # | Gap | Where | Blocks |
+|---|---|---|---|
+| **G1** | **`monvelo-agent-register` loses `partner_kind` both ways.** The gateway's Zod `register` object has no `partner_kind`, so Zod strips it and every agent registers as `LIQUIDITY_PARTNER`. The reply `shape()` returns only `agent_id, status, name_matches, settlement_account_last4`, so `partner_code` and `partner_kind` never reach the client. The RPC handles both (`20261127130100`, lines 146–238). `src/shared/network/gateways.ts` mirrors the gap. §6.1 says the body "may carry" it and the reply "carries" the code: both are untrue today. | `supabase/functions/monvelo-agent-register/handler.ts:33-46, 99-100` | Monvelo registration (Spec C/D), not B2 |
+| G2 | Ruled 2026-11-28: the POS / web-referral RPCs get their own `pos` feature (web domain, §5.2.9), and `pos` is in the ESLint `DOMAIN` list, so `pos` and `monvelo` never import each other. | — | done |
+| G3 | Field-visit, route, requisition and pickup tables have RLS but **no writer RPC**. `otp-issue`'s `PICKUP_CONFIRM` has no pickup to confirm. | migrations `20261006120400/-120600` | Spec C (backend first) |
+| G4 | `operational_states` / `tenant_operational_states` are readable but no feature owns the "not operational here" banner. Proposed: `tenant`. | §6 | B3 |
+| G5 | The Spec C/D stores in §5.2 are the plan those specs build to, not yet built. | §5.2 | none now |
+| G6 | `request_monvelo_financing(key, order_id)` needs the trade order from `field`'s `place_trade_order`, but `monvelo` may not import `field`. Proposed: the route composes the two (field screen → `orderId` param → Monvelo request screen). No feature imports the other. | §3 | Spec C |
+| G7 | No RPC marks a notification read. | backend | the Spec C inbox |
+| G8 | Ruled 2026-11-28: `usePinStore` is split into `usePinStatusStore` (memory) and `usePinEntryStore` (Tier 3), §5.2.2. | — | done in B2 |
+| G9 | No PIN reset; no gateway calls `consume_pin_pass` yet (known, §9 and §6.1). | backend | none now |
+| G14 | Realtime covers only `support_*` and `chat_*`. Monvelo offers (10-minute window) and holds (15 minutes) must poll. | migrations | Spec C/D |
 
 ## 6. RPC and gateway map
 
@@ -512,7 +902,7 @@ only uses them to decide what to show):
 | `order-dispute-evidence` | `get_order_dispute_evidence` | support | Web | ZSM; audited view |
 | `support-staff-attachment` | `request_staff_ticket_attachment` | support | App, Web | slot, upload, then `reply_ticket` |
 | `contact-report-upload` | `request_contact_report_hard_copy` | (admin) | Web | CSM |
-| `monvelo-agent-register` | `monvelo_agent_register_preflight`, `register_monvelo_agent`, `request_monvelo_settlement_change` | monvelo | App | ZSA or ASA; Paystack account check. The body may carry `partner_kind` (`LIQUIDITY_PARTNER`, the default, or `RETAIL_INDEPENDENT_PARTNER`); the reply carries the platform `partner_code` |
+| `monvelo-agent-register` | `monvelo_agent_register_preflight`, `register_monvelo_agent`, `request_monvelo_settlement_change` | monvelo | App | ZSA or ASA; Paystack account check. **Gap G1 (§5.4):** the RPC takes `p_agent.partner_kind` (`LIQUIDITY_PARTNER`, the default, or `RETAIL_INDEPENDENT_PARTNER`) and replies with `partner_code` and `partner_kind`, but the gateway's schema drops `partner_kind` and its reply drops both, so today every agent registers as a liquidity partner and the client never sees the code |
 | `monvelo-shop-consent` | `start_monvelo_consent`, `enrol_monvelo_shop`, `start_monvelo_policy_consent`, `submit_monvelo_shop_policy` | monvelo | App | ZSA (scope) or ASA (scope); **the owner's code by email** |
 | `monvelo-fund` | `start_monvelo_funding`, `record_monvelo_checkout` | monvelo | App | the claimant's agent member; 409 `MONVELO_CHECKOUT_LOST` → new key, start again |
 | `monvelo-confirm-delivery` | `start_monvelo_delivery`, `confirm_monvelo_delivery` | monvelo | App | a delivery-path holder of the order (R20); **the owner's code by email**; fresh key per entry |

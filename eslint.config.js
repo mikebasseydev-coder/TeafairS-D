@@ -5,7 +5,7 @@
 const { defineConfig } = require("eslint/config");
 const expoConfig = require("eslint-config-expo/flat");
 
-const DOMAIN = ["catalogue", "stock", "field", "fulfilment", "support", "chat", "notifications", "monvelo", "gallery"];
+const DOMAIN = ["catalogue", "stock", "field", "fulfilment", "pos", "support", "chat", "notifications", "monvelo", "gallery"];
 const barrel = (f) => `./${f}/index.ts`;
 
 const zones = [
