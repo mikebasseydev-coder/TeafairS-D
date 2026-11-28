@@ -9,3 +9,9 @@ export { fromGateway, fromPostgrest, networkError, type AppError, type Result } 
 export { queueTone, queueLabel, type QueueStatus } from "./network/queue/queue-tone";
 export { registerReset, runResets, type ResetScope } from "./storage/reset-registry";
 export { log, setLogSink } from "./observability/log";
+export { supabase } from "./network/supabase";
+export { newIdempotencyKey, UUID_V4 } from "./network/idempotency";
+export { openUserStore, openTenantStore, namespaceId, forgetOpenStores } from "./storage/mmkv";
+export { createBindableStorage, type BindableStorage } from "./storage/bindable-storage";
+export { registerTier3 } from "./storage/tier3";
+export { claimDevice } from "./storage/device";

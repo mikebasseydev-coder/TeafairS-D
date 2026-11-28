@@ -2,13 +2,17 @@ import "../../global.css";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { usePrefsStore } from "@/features/shell";
-import { effectiveTheme } from "@/shared/tokens";
+import { useAuthBootstrap } from "@/features/auth";
+import { usePrefsBinding, useThemeChoice } from "@/features/shell";
+import { useTenantBinding } from "@/features/tenant";
 import { ThemeProvider } from "@/shared/ui";
 
 export default function RootLayout() {
-  // No membership is known before sign-in (B2), so the role default is standard.
-  const theme = effectiveTheme(usePrefsStore((s) => s.theme), null);
+  useAuthBootstrap();
+  useTenantBinding();
+  usePrefsBinding();
+  // the saved choice, else the active role's default (Spec B §4.2)
+  const { theme } = useThemeChoice();
   return (
     <SafeAreaProvider>
       <ThemeProvider theme={theme}>

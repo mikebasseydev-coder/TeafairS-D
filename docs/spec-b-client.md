@@ -435,7 +435,12 @@ through the feature barrel. There is no global store.
 | **3** | Zustand without `persist` | the email OTP input; the 4-digit PIN entry and confirm buffers; the current PIN for a change; the shop owner's delivery and repayment code entry; the Monvelo funding checkout (`authorization_url`, `access_code`) | any storage |
 
 Tier 3 is wiped on submit (success or failure), on `MONVELO_CHECKOUT_LOST`,
-on tenant switch, on sign-out and when the app goes to the background.
+on tenant switch, on sign-out and when the app goes to the background
+(`shared/storage/tier3.ts`, `registerTier3`). **One narrower background wipe
+(B2):** the sign-in code store drops the code typed so far but keeps the step
+and the address, because the person leaves the app to read the email. Only a
+real `background` wipes; `inactive` also fires for iOS system sheets such as
+code autofill.
 
 **Financial figures are never cached.** Exposure, pledges, ledger,
 repayments, payment states and reconciliation summaries are network-only. If
@@ -1239,6 +1244,94 @@ before it closes.
 **Not yet done:**
 - The §11 device check on one iOS and one Android phone. Secure storage,
   MMKV and the shimmer are proven only by type and on web.
+
+### 11.2 Slice B2 as built (2026-11-28)
+
+**Built:**
+- **`features/auth`:** email-first sign-in (`signInWithOtp` with
+  `shouldCreateUser: false`, `verifyOtp` type `email`), the session
+  mirror, sign-out (`runResets("session")`, then `auth.signOut`), and
+  `useSessionStore` (memory) and `useOtpStore` (Tier 3).
+- **Auth errors are classified, not shown raw:**
+  - an unknown email is Auth's own 422 `otp_disabled`, and a known person
+    without access is the hook's 403: both show "This email has no Teafair
+    access.";
+  - a hook timeout (`hook_timeout`) shows "Sign-in is busy", never "no
+    access";
+  - a wrong code is 403 `otp_expired`.
+- **`features/tenant`:**
+  - invitations (list, accept then `refreshSession`, decline);
+  - the §9.3 routing as a pure `decideAccess`;
+  - the PIN gate: set twice with the client pre-check, or unlock with
+    `verify_pin`; and the PIN change, with a fresh key per attempt;
+  - `set_active_tenant` and `useSwitchTenant` (its UI is B3);
+  - the stores `useTenantStore` (user-level, only `lastActiveTenantId`
+    persisted), `useInvitationStore`, `usePinStatusStore` and
+    `usePinEntryStore` (G8).
+- **`features/shell`:**
+  - `usePrefsStore` persisted in the user-level MMKV instance;
+  - `useThemeChoice` (the saved choice, else the role default);
+  - the B2 landing `HomeScreen` and `AgentHomeScreen`. B3 replaces both
+    with the §10 shells.
+- **`shared`:**
+  - `newIdempotencyKey` (`expo-crypto` UUID v4);
+  - `createBindableStorage`: persist storage bound to a namespace once the
+    user is known; unbinding detaches without deleting;
+  - `registerTier3`;
+  - `claimDevice`: another user's namespaces are crypto-shredded by
+    forgetting their MMKV key;
+  - `rpc()` lets `set_active_tenant` carry `p_tenant_id`, the Spec A §9
+    exception.
+- **Routes** (`src/app/`):
+  - `index` (redirect only), `sign-in`, `onboarding`, `pin`, `home`,
+    `pin-change`, `agent`, `no-access` and `use-web`;
+  - each is a guard plus a screen, and navigation is passed in as callbacks.
+
+**Verified (2026-11-28):**
+- `pnpm typecheck` and `pnpm lint` pass.
+- `pnpm test:unit`: 279 Jest tests pass, including the store registry, the
+  PIN rule against the database copy, `decideAccess`, Tier 3 wipes and prefs
+  persistence across sign-out.
+- `pnpm test:app`: 38 Playwright checks pass (the 32 of B1 plus 6 of B2 on
+  phone and tablet). They run against the real local Auth hooks:
+  - an invited person signs in with an emailed code, accepts, and lands on
+    the PIN gate;
+  - `7777`, `1234` and `6543` are refused with no request sent;
+  - the PIN is set, and a wrong current PIN shows "4 attempts left";
+  - a decline leaves "No access yet";
+  - an unknown email sees the access message.
+- The Deno unit tests and the Ruling 46 guards: 471 pass.
+
+**How the B2 checks run:**
+1. `supabase start`.
+2. `pnpm functions:serve:app`: the functions env with Resend pointed at
+   `scripts/fake-resend.mjs` (port 8097, started by the Playwright config).
+3. `pnpm export:web:local`: the build gets only the stack's URL and
+   publishable key.
+4. `pnpm test:app`.
+
+The test process makes its own people with the Admin API and SQL
+(`tests/app/support/stack.ts`), never in `src/`.
+
+**Choices made while building:**
+- **A B1 bug fixed:** `mmkv.ts` passed an encryption key on web, and MMKV
+  refuses one there. Web (the test target only) now opens unencrypted
+  instances; native keeps the Tier 1 key.
+- **Jest stand-ins** for `react-native-mmkv`, `react-native-reanimated`
+  and `moti/skeleton` (`jest/`), so a unit test can import a feature
+  barrel.
+- **Sign-out keeps the MMKV key** (only the session leaves Tier 1), so a
+  person's theme choice returns at their next sign-in. A different user's
+  sign-in forgets the previous user's key instead (`claimDevice`).
+- **The auth specs run in their own projects** (`phone-auth`, then
+  `tablet-auth`). Locally, Auth waits 5 s for a hook, and two projects
+  booting edge-runtime workers at once overran it. A global setup also warms
+  the hooks.
+
+**Not yet done:**
+- The §11 device check on one iOS and one Android phone.
+- The queue check before sign-out and tenant switch (it arrives with the
+  queue in B4).
 
 **Realtime:** subscribe to `chat_messages` with `channel_id=eq.<id>` and to
 `chat_channels` with `tenant_id=eq.<active tenant>` (every post updates

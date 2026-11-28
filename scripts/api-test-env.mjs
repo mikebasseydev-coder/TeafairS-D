@@ -7,6 +7,10 @@
 // .env holds the real key; the email functions still boot (they require
 // RESEND_API_KEY) and every send fails locally. It prints key names only,
 // never values.
+//
+// With --app it writes .env.app.local for the Playwright app run instead: the
+// same, except that Resend points at scripts/fake-resend.mjs, so the sign-in
+// hook really sends and the tests read the code (Spec B §11).
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -29,13 +33,18 @@ if (!smsLine || !/=\s*log\s*$/.test(smsLine)) {
   throw new Error("supabase/functions/.env must set SMS_PROVIDER=log for local API tests");
 }
 
+const app = process.argv.includes("--app");
+const fakePort = Number(process.env.FAKE_RESEND_PORT ?? 8097);
 kept.push(
   "",
   "# api tests: Sentry off (empty DSN disables it in _shared/core/observability.ts)",
   "SENTRY_DSN=",
-  "# api tests: Resend isolated (inert key; port 9 inside the edge runtime refuses at once)",
+  app
+    ? "# app tests: Resend is scripts/fake-resend.mjs on the host (inert key)"
+    : "# api tests: Resend isolated (inert key; port 9 inside the edge runtime refuses at once)",
   "RESEND_API_KEY=re_api_test_inert",
-  "RESEND_API_URL=http://127.0.0.1:9",
+  app ? `RESEND_API_URL=http://host.docker.internal:${fakePort}` : "RESEND_API_URL=http://127.0.0.1:9",
 );
-writeFileSync(path.join(dir, ".env.api.local"), kept.join("\n") + "\n", { mode: 0o600 });
-console.log(`wrote supabase/functions/.env.api.local (removed: ${[...new Set(dropped)].join(", ") || "none"}; SENTRY_DSN empty; RESEND_* inert)`);
+const out = app ? ".env.app.local" : ".env.api.local";
+writeFileSync(path.join(dir, out), kept.join("\n") + "\n", { mode: 0o600 });
+console.log(`wrote supabase/functions/${out} (removed: ${[...new Set(dropped)].join(", ") || "none"}; SENTRY_DSN empty; RESEND_* inert)`);

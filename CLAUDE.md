@@ -46,7 +46,7 @@ Commands below.
 | `docs/superpowers/specs/2026-11-05-addendum-a7-…` | Addendum A7 to Spec A — tenant support tickets and ticket emails (built locally, not pushed); plan at `docs/superpowers/plans/2026-11-05-addendum-a7-tenant-support-and-ticket-emails.md` |
 | `docs/superpowers/specs/2026-11-07-addendum-a8-…` | Addendum A8 to Spec A — Monvelo cover (merged into local `main` 2026-11-08, not pushed; §15 pre-underwriter policy and onboarding terms); plan at `docs/superpowers/plans/2026-11-07-addendum-a8-monvelo-cover.md` |
 | `docs/spec-b-client.md` | **Spec B — the client, approved 2026-11-27**: the TeafairWeb / Teafair RTM boundary, store tiers, the RPC and gateway map, write path, offline queue, auth and PIN, slices B1–B4 with Playwright checks |
-| client app | **slice B1 (scaffold, tokens, shared UI, gallery) on `feat/auth-email-first`**; B2–B4 each wait on their own go-ahead. A feature-based `src/` (see "Frontend standards" below). `frontend/`, `apps/` and `docs/features/` were removed (§13) |
+| client app | **slices B1 (scaffold, tokens, shared UI, gallery) and B2 (email sign-in, invitations, the PIN, the persisted theme) on `feat/auth-email-first`**; B3 and B4 each wait on their own go-ahead. A feature-based `src/` (see "Frontend standards" below). `frontend/`, `apps/` and `docs/features/` were removed (§13) |
 
 Phase 4 (client offline queue) needs the Spec B app shell.
 

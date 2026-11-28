@@ -9,6 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "export:web": "expo export -p web --output-dir dist-web",
+    "export:web:local": "node scripts/app-web-build.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test:unit": "jest",
@@ -19,6 +20,7 @@
     "db:seed": "tsx supabase/seed.ts",
     "db:fresh": "supabase db reset && pnpm db:seed",
     "functions:serve:api": "node scripts/api-test-env.mjs && supabase functions serve --env-file supabase/functions/.env.api.local",
+    "functions:serve:app": "node scripts/api-test-env.mjs --app && supabase functions serve --env-file supabase/functions/.env.app.local",
     "test:api": "playwright test",
     "test:backend": "pnpm db:fresh && pnpm test:api"
   },
@@ -73,7 +75,10 @@
       "<rootDir>/src/**/*.test.ts?(x)"
     ],
     "moduleNameMapper": {
-      "^@/(.*)$": "<rootDir>/src/$1"
+      "^@/(.*)$": "<rootDir>/src/$1",
+      "^react-native-mmkv$": "<rootDir>/jest/react-native-mmkv.js",
+      "^react-native-reanimated$": "<rootDir>/jest/react-native-reanimated.js",
+      "^moti/skeleton$": "<rootDir>/jest/moti-skeleton.js"
     }
   }
 }

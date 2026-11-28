@@ -77,3 +77,8 @@ export async function mmkvKeyFor(userId: string): Promise<string> {
   await secureSet(name, key);
   return key;
 }
+
+/** Crypto-shreds one user's MMKV namespaces: without the key they cannot be read again. */
+export async function forgetMmkvKey(userId: string): Promise<void> {
+  await secureRemove(`mmkv-key.${sanitise(userId)}`);
+}

@@ -1,18 +1,25 @@
-// B1 has no sign-in yet (B2): the start screen is a brand moment that leads
-// to the primitives gallery.
-import { Link } from "expo-router";
+// The entry: Spec B §9.3 decides the destination; this route only redirects.
+import { Redirect } from "expo-router";
 import { View } from "react-native";
-import { Emblem, Screen, Text } from "@/shared/ui";
+import { useAccess, type AccessRoute } from "@/features/tenant";
+import { Emblem, Screen } from "@/shared/ui";
+
+const HREF: Record<AccessRoute, string> = {
+  "sign-in": "/sign-in",
+  pin: "/pin",
+  onboarding: "/onboarding",
+  agent: "/agent",
+  "use-web": "/use-web",
+  "no-access": "/no-access",
+};
 
 export default function Index() {
+  const { ready, route } = useAccess();
+  if (ready) return <Redirect href={HREF[route]} />;
   return (
-    <Screen scroll={false}>
-      <View className="flex-1 items-center justify-center" style={{ gap: 16 }}>
+    <Screen scroll={false} testID="splash">
+      <View className="flex-1 items-center justify-center">
         <Emblem size={96} />
-        <Text variant="title">Teafair RTM</Text>
-        <Link href="/gallery" className="text-base font-semibold text-ink underline">
-          Open the primitives gallery
-        </Link>
       </View>
     </Screen>
   );

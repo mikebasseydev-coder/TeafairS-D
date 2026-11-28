@@ -1,6 +1,7 @@
 // Tier 2 (Spec B §5): one encrypted MMKV instance per `${userId}:${tenantId}`
 // and a user-level instance `${userId}`, the key held in Tier 1. Never for
 // tokens, PINs, OTPs, codes, checkout URLs, buyer contacts or balances.
+import { Platform } from "react-native";
 import { createMMKV } from "react-native-mmkv";
 import type { StateStorage } from "zustand/middleware";
 import { mmkvKeyFor } from "./secure";
@@ -17,7 +18,9 @@ export function namespaceId(userId: string, tenantId?: string | null): string {
 async function openNamespace(id: string, userId: string): Promise<Store> {
   const cached = open.get(id);
   if (cached) return cached;
-  const store = createMMKV({ id, encryptionKey: await mmkvKeyFor(userId) });
+  // MMKV refuses an encryption key on web, which is only the Playwright target
+  // (Spec B §11): there it is localStorage, and native storage is proven on a device.
+  const store = Platform.OS === "web" ? createMMKV({ id }) : createMMKV({ id, encryptionKey: await mmkvKeyFor(userId) });
   open.set(id, store);
   return store;
 }
